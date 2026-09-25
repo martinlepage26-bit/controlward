@@ -11,12 +11,25 @@ final class AppStore: ObservableObject {
     @Published private(set) var workspace: PersistentWorkspace
     @Published var notice: String?
 
+    /// Connectors whose API key is in the secret store. The key itself is never held here.
+    @Published private(set) var savedKeys: Set<SyncTarget> = []
+    @Published private(set) var busyTargets: Set<SyncTarget> = []
+    /// Dry-run result that must exist before a Twenty push is allowed.
+    @Published private(set) var twentyPreview: TwentyPlan?
+
     let storageURL: URL
+    let secrets: SecretStore
+    let transport: HTTPTransport
+    var twentyPacing: Duration = .milliseconds(700)
+    var twentyMaxBackoffSeconds: Double = 30
     private var noticeTask: Task<Void, Never>?
 
-    init(storageURL: URL = StorageLocation.workspaceFile) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore = KeychainSecretStore(), transport: HTTPTransport = URLSessionTransport()) {
         self.storageURL = storageURL
+        self.secrets = secrets
+        self.transport = transport
         self.workspace = Self.load(from: storageURL)
+        self.savedKeys = Set(SyncTarget.keyed.filter { secrets.exists($0) })
         if FileManager.default.fileExists(atPath: storageURL.path) {
             try? SecureFiles.ensurePrivateDirectory(storageURL.deletingLastPathComponent())
             try? SecureFiles.restrict(storageURL)
@@ -58,6 +71,7 @@ final class AppStore: ObservableObject {
         let value = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty {
             workspace.connectorEndpoints.removeValue(forKey: target.rawValue)
+            invalidateConnector(target)
             persist(message: "\(target.label) endpoint cleared.")
             return
         }
@@ -65,6 +79,7 @@ final class AppStore: ObservableObject {
             showNotice("\(target.label) endpoint must be an http or https URL. Nothing was saved.")
             return
         }
+        if workspace.connectorEndpoints[target.rawValue] != result.url { invalidateConnector(target) }
         workspace.connectorEndpoints[target.rawValue] = result.url
         persist(message: result.removedSecrets
             ? "\(target.label) endpoint saved without its credentials. Keep secrets in the adapter, not in the URL."
@@ -90,6 +105,187 @@ final class AppStore: ObservableObject {
                 showNotice("\(target.label) preflight returned HTTP \(http.statusCode). No data was sent.")
             } else { showNotice("\(target.label) responded without an HTTP status.") }
         } catch { showNotice("\(target.label) preflight failed: \(error.localizedDescription)") }
+    }
+
+    // MARK: - Connectors (API keys, status, PHAROS push, Twenty push)
+
+    private static let syncLog = Logger(subsystem: "com.pharos.contextward", category: "sync")
+
+    func hasKey(_ target: SyncTarget) -> Bool { savedKeys.contains(target) }
+
+    func connectorStatus(_ target: SyncTarget) -> ConnectorStatus {
+        ConnectorStatus.resolve(endpoint: endpoint(for: target), hasKey: hasKey(target), health: workspace.connectorHealth[target.rawValue])
+    }
+
+    /// Saves or replaces a key in the Keychain. The key never enters workspace data, activity, or logs.
+    func setAPIKey(_ key: String, for target: SyncTarget) {
+        let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { showNotice("\(target.label) key is empty. Nothing was saved."); return }
+        do {
+            try secrets.write(value, for: target)
+            savedKeys.insert(target)
+            invalidateConnector(target)
+            workspace.activity.insert(ActivityEvent(kind: "credential", message: "Saved the \(target.label) API key to the Keychain."), at: 0)
+            persist(message: "\(target.label) key saved to the Keychain. Run Verify to activate it.")
+        } catch {
+            showNotice("Could not save the \(target.label) key: \(error.localizedDescription)")
+        }
+    }
+
+    func removeAPIKey(for target: SyncTarget) {
+        do {
+            try secrets.delete(target)
+            savedKeys.remove(target)
+            invalidateConnector(target)
+            workspace.activity.insert(ActivityEvent(kind: "credential", message: "Removed the \(target.label) API key from the Keychain."), at: 0)
+            persist(message: "\(target.label) key removed from the Keychain.")
+        } catch {
+            showNotice("Could not remove the \(target.label) key: \(error.localizedDescription)")
+        }
+    }
+
+    private func invalidateConnector(_ target: SyncTarget) {
+        workspace.connectorHealth.removeValue(forKey: target.rawValue)
+        if target == .twenty { twentyPreview = nil }
+    }
+
+    private func recordHealth(_ target: SyncTarget, ok: Bool, detail: String) {
+        workspace.connectorHealth[target.rawValue] = ConnectorHealth(ok: ok, detail: detail)
+    }
+
+    private func apiKey(for target: SyncTarget) throws -> String {
+        guard let key = try secrets.read(target), !key.isEmpty else { throw IntegrationError.missingKey }
+        return key
+    }
+
+    private func pharosClient() throws -> PharosClient {
+        try PharosClient(endpoint: endpoint(for: .pharos), apiKey: try apiKey(for: .pharos), transport: transport)
+    }
+
+    private func twentyClient() throws -> TwentyClient {
+        try TwentyClient(endpoint: endpoint(for: .twenty), apiKey: try apiKey(for: .twenty), transport: transport,
+                         interval: twentyPacing, maxBackoffSeconds: twentyMaxBackoffSeconds)
+    }
+
+    private func message(for error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    }
+
+    /// Authenticated check. PHAROS: health plus key check. Twenty: authenticated GET.
+    /// Status becomes Active only when this (or a real push) succeeds.
+    @discardableResult
+    func verifyConnector(_ target: SyncTarget) async -> Bool {
+        guard SyncTarget.keyed.contains(target) else { await probeEndpoint(target); return false }
+        busyTargets.insert(target); defer { busyTargets.remove(target) }
+        do {
+            switch target {
+            case .pharos: try await pharosClient().verify()
+            case .twenty: try await twentyClient().verify()
+            case .leadgen: break
+            }
+            recordHealth(target, ok: true, detail: "Verified \(Date.now.formatted(date: .abbreviated, time: .shortened)): endpoint reachable and key accepted.")
+            Self.syncLog.notice("verify target=\(target.rawValue, privacy: .public) ok")
+            persist(message: "\(target.label) verified. The key is accepted.")
+            return true
+        } catch {
+            let reason = message(for: error)
+            recordHealth(target, ok: false, detail: reason)
+            Self.syncLog.error("verify target=\(target.rawValue, privacy: .public) failed")
+            persist(message: "\(target.label) check failed: \(reason)")
+            return false
+        }
+    }
+
+    /// Pushes the current exchange snapshot to the PHAROS backend. The Idempotency-Key
+    /// is derived from record content, so re-sending unchanged data is deduplicated server-side.
+    @discardableResult
+    func syncToPharos() async -> SyncJob {
+        let snapshot = exchange
+        let key = ExchangeFingerprint.idempotencyKey(for: snapshot)
+        var job = SyncJob(target: .pharos, status: "sending", idempotencyKey: key)
+        workspace.syncJobs.insert(job, at: 0)
+        busyTargets.insert(.pharos); defer { busyTargets.remove(.pharos) }
+        do {
+            let client = try pharosClient()
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let receipt = try await client.push(try encoder.encode(snapshot), idempotencyKey: key)
+            job.status = "synced"
+            job.detail = receipt.duplicate == true
+                ? "Already stored (same Idempotency-Key); receipt \(receipt.receipt ?? "n/a")."
+                : "Stored; receipt \(receipt.receipt ?? "n/a")."
+            recordHealth(.pharos, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)) stored by the backend.")
+            Self.syncLog.notice("pharos push ok duplicate=\(receipt.duplicate == true, privacy: .public)")
+        } catch {
+            job.status = "failed"
+            job.error = message(for: error)
+            recordHealth(.pharos, ok: false, detail: job.error ?? "Push failed.")
+            Self.syncLog.error("pharos push failed")
+        }
+        job.completedAt = Date.now.ISO8601Format()
+        replace(&workspace.syncJobs, with: job)
+        workspace.activity.insert(ActivityEvent(kind: "sync", message: job.status == "synced"
+            ? "Pushed the exchange snapshot to the PHAROS backend. \(job.detail ?? "")"
+            : "PHAROS push failed: \(job.error ?? "unknown error")", sourceID: job.id), at: 0)
+        persist(message: job.status == "synced" ? "Synced to PHAROS. \(job.detail ?? "")" : "PHAROS sync failed: \(job.error ?? "")")
+        return job
+    }
+
+    /// Dry run: counts what a Twenty push would create, update, or skip. No network call.
+    @discardableResult
+    func previewTwentyPush() -> TwentyPlan {
+        let plan = TwentyMapper.plan(workspace, links: workspace.twentyLinks)
+        twentyPreview = plan
+        showNotice("Twenty preview: \(plan.creates) to create, \(plan.updates) to update, \(plan.unchangedTotal) unchanged.")
+        return plan
+    }
+
+    /// Pushes companies, people, opportunities, then tasks. Requires a preview first.
+    /// Creates store the returned Twenty id immediately so a retry never duplicates.
+    /// Never deletes anything in Twenty.
+    @discardableResult
+    func pushToTwenty() async -> SyncJob {
+        var job = SyncJob(target: .twenty, status: "sending")
+        guard twentyPreview != nil else {
+            job.status = "failed"; job.error = "Run the preview before pushing."
+            showNotice("Preview the Twenty push first.")
+            return job
+        }
+        workspace.syncJobs.insert(job, at: 0)
+        busyTargets.insert(.twenty); defer { busyTargets.remove(.twenty) }
+        var created = 0, updated = 0
+        do {
+            let client = try twentyClient()
+            for object in TwentyObject.allCases {
+                for operation in TwentyMapper.plan(workspace, links: workspace.twentyLinks, only: object).operations {
+                    var id = operation.twentyID
+                    if let existing = id, try await client.update(object, id: existing, operation.payload) {
+                        updated += 1
+                    } else {
+                        // New record, or the linked record no longer exists in Twenty.
+                        id = try await client.create(object, operation.payload)
+                        created += 1
+                    }
+                    workspace.twentyLinks[operation.localKey] = TwentyLink(twentyID: id ?? "", object: object, payloadHash: operation.payloadHash)
+                    persist()
+                }
+            }
+            job.status = "synced"
+            job.detail = "\(created) created, \(updated) updated."
+            recordHealth(.twenty, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            Self.syncLog.notice("twenty push ok created=\(created, privacy: .public) updated=\(updated, privacy: .public)")
+        } catch {
+            job.status = "failed"
+            job.error = "\(message(for: error)) Progress kept: \(created) created, \(updated) updated."
+            recordHealth(.twenty, ok: false, detail: message(for: error))
+            Self.syncLog.error("twenty push failed created=\(created, privacy: .public) updated=\(updated, privacy: .public)")
+        }
+        twentyPreview = nil
+        job.completedAt = Date.now.ISO8601Format()
+        replace(&workspace.syncJobs, with: job)
+        workspace.activity.insert(ActivityEvent(kind: "sync", message: job.status == "synced"
+            ? "Pushed to Twenty: \(job.detail ?? "")" : "Twenty push failed: \(job.error ?? "")", sourceID: job.id), at: 0)
+        persist(message: job.status == "synced" ? "Twenty push complete: \(job.detail ?? "")" : "Twenty push failed: \(job.error ?? "")")
+        return job
     }
 
     var qualifiedSignals: [Signal] { signals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }

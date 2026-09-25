@@ -12,9 +12,20 @@ struct IntegrationCenterView: View {
             IntegrationCheck(name: "LeadGen OS", detail: "JSON event import, scoring fields, routing and automation", state: store.signals.isEmpty ? .ready : .connected, symbol: "dot.radiowaves.left.and.right"),
             IntegrationCheck(name: "Lantern", detail: "FR/EN score imports, weighted gap and remediation", state: store.audits.isEmpty ? .ready : .connected, symbol: "checkmark.seal"),
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
-            IntegrationCheck(name: "Live Twenty API", detail: "Endpoint profile saved; credentials still required for writes", state: store.endpoint(for: .twenty).isEmpty ? .needsSetup : .connected, symbol: "network"),
-            IntegrationCheck(name: "External Pharos scans", detail: "Endpoint profile saved; no scan is invoked automatically", state: store.endpoint(for: .pharos).isEmpty ? .notConnected : .connected, symbol: "lock.shield"),
+            connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),
+            connectorCheck(.pharos, name: "PHAROS backend", purpose: "Pushes the exchange snapshot to the PHAROS backend on your action.", symbol: "lock.shield"),
         ]
+    }
+
+    private func connectorCheck(_ target: SyncTarget, name: String, purpose: String, symbol: String) -> IntegrationCheck {
+        let status = store.connectorStatus(target)
+        let state: IntegrationState = switch status {
+        case .needsSetup: .needsSetup
+        case .notVerified: .ready
+        case .active: .connected
+        case .error: .error
+        }
+        return IntegrationCheck(name: name, detail: "\(purpose) \(status.detail)", state: state, symbol: symbol, labelOverride: status.label)
     }
 
     var body: some View {
@@ -28,11 +39,11 @@ struct IntegrationCenterView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionLabel(text: "Adapter endpoints")
-                    Text("Endpoints are saved as non-secret configuration. Credentials in a URL (user:pass@ or token parameters) are removed before saving. Authentication and external writes remain explicit adapter operations.")
+                    Text("Endpoints are saved as non-secret configuration. Credentials in a URL (user:pass@ or token parameters) are removed before saving. API keys live in the macOS Keychain and are set in Settings. Every external write is an explicit action.")
                         .font(.caption).foregroundStyle(.secondary)
-                    endpointField("Twenty API", text: $twentyEndpoint, target: .twenty)
+                    endpointField("Twenty API (e.g. http://localhost:2020)", text: $twentyEndpoint, target: .twenty)
                     endpointField("LeadGen OS", text: $leadgenEndpoint, target: .leadgen)
-                    endpointField("Pharos scans", text: $pharosEndpoint, target: .pharos)
+                    endpointField("PHAROS backend (e.g. https://pharos-contextward-api.ml-c38.workers.dev)", text: $pharosEndpoint, target: .pharos)
                 }
                 .crmCard()
                 .padding(.horizontal, 28)
@@ -47,7 +58,7 @@ struct IntegrationCenterView: View {
                                 Text(check.detail).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(check.state.label).font(.caption.weight(.semibold)).foregroundStyle(check.state.color)
+                            Text(check.labelOverride ?? check.state.label).font(.caption.weight(.semibold)).foregroundStyle(check.state.color)
                         }
                         .padding(.vertical, 13)
                         if check.id != checks.last?.id { Divider() }
@@ -56,6 +67,51 @@ struct IntegrationCenterView: View {
                 .padding(.horizontal, 16)
                 .background(.background, in: RoundedRectangle(cornerRadius: 10))
                 .overlay { RoundedRectangle(cornerRadius: 10).stroke(CRMTheme.border) }
+                .padding(.horizontal, 28)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionLabel(text: "PHAROS backend")
+                    Text("Sends the current exchange snapshot (records, activity, sync history; never API keys) to the PHAROS backend. Unchanged data reuses the same Idempotency-Key, so the backend stores it once.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Verify") { Task { await store.verifyConnector(.pharos) } }
+                            .buttonStyle(.bordered)
+                        Button("Sync to Pharos", systemImage: "arrow.up.circle") { Task { await store.syncToPharos() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isNeedsSetup(.pharos))
+                        if store.busyTargets.contains(.pharos) { ProgressView().controlSize(.small) }
+                        Spacer()
+                        lastJobText(.pharos)
+                    }
+                    .disabled(store.busyTargets.contains(.pharos))
+                }
+                .crmCard()
+                .padding(.horizontal, 28)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionLabel(text: "Twenty push")
+                    Text("Preview first, then push. Records are matched by a saved local-to-Twenty id map, so pushing again updates instead of duplicating. Nothing is deleted in Twenty. Requests are paced to respect rate limits.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Verify") { Task { await store.verifyConnector(.twenty) } }
+                            .buttonStyle(.bordered)
+                        Button("Preview push") { store.previewTwentyPush() }
+                            .buttonStyle(.bordered)
+                        Button("Push to Twenty", systemImage: "arrow.up.circle") { Task { await store.pushToTwenty() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(store.twentyPreview == nil || isNeedsSetup(.twenty))
+                        if store.busyTargets.contains(.twenty) { ProgressView().controlSize(.small) }
+                        Spacer()
+                        lastJobText(.twenty)
+                    }
+                    .disabled(store.busyTargets.contains(.twenty))
+                    if let preview = store.twentyPreview {
+                        Text("Preview: \(preview.creates) to create, \(preview.updates) to update, \(preview.unchangedTotal) unchanged")
+                            .font(.callout.weight(.semibold))
+                        Text(preview.summary).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .crmCard()
                 .padding(.horizontal, 28)
 
                 VStack(alignment: .leading, spacing: 9) {
@@ -124,7 +180,21 @@ struct IntegrationCenterView: View {
                 store.setEndpoint(text.wrappedValue, for: target)
                 text.wrappedValue = store.endpoint(for: target)
             }.buttonStyle(.bordered)
-            Button("Test") { Task { await store.probeEndpoint(target) } }.buttonStyle(.bordered)
+            Button(SyncTarget.keyed.contains(target) ? "Verify" : "Test") { Task { await store.verifyConnector(target) } }.buttonStyle(.bordered)
+        }
+    }
+
+    private func isNeedsSetup(_ target: SyncTarget) -> Bool {
+        if case .needsSetup = store.connectorStatus(target) { return true }
+        return false
+    }
+
+    @ViewBuilder private func lastJobText(_ target: SyncTarget) -> some View {
+        if let job = store.syncJobs.first(where: { $0.target == target && $0.status != "queued" && $0.status != "staged" }) {
+            Text(job.status == "failed" ? "Last: failed. \(job.error ?? "")" : "Last: \(job.status). \(job.detail ?? "")")
+                .font(.caption).foregroundStyle(job.status == "failed" ? CRMTheme.rust : .secondary)
+                .lineLimit(2)
+                .frame(maxWidth: 360, alignment: .trailing)
         }
     }
 }
@@ -135,14 +205,15 @@ private struct IntegrationCheck: Identifiable {
     let detail: String
     let state: IntegrationState
     let symbol: String
+    var labelOverride: String? = nil
 }
 
 private enum IntegrationState {
-    case ready, connected, needsSetup, notConnected
+    case ready, connected, needsSetup, notConnected, error
     var label: String {
-        switch self { case .ready: "Ready"; case .connected: "Active"; case .needsSetup: "Needs setup"; case .notConnected: "Not connected" }
+        switch self { case .ready: "Ready"; case .connected: "Active"; case .needsSetup: "Needs setup"; case .notConnected: "Not connected"; case .error: "Error" }
     }
     var color: Color {
-        switch self { case .ready: CRMTheme.steel; case .connected: .green; case .needsSetup: CRMTheme.amberDark; case .notConnected: .secondary }
+        switch self { case .ready: CRMTheme.steel; case .connected: .green; case .needsSetup: CRMTheme.amberDark; case .notConnected: .secondary; case .error: CRMTheme.rust }
     }
 }

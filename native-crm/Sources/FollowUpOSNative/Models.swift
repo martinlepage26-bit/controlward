@@ -85,6 +85,10 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     var syncJobs: [SyncJob] = []
     var exposureFindings: [ExposureFinding] = []
     var connectorEndpoints: [String: String] = [:]
+    /// Last verification or sync result per connector. Never contains keys.
+    var connectorHealth: [String: ConnectorHealth] = [:]
+    /// Local record key (e.g. "company:<uuid>") to Twenty record id, for idempotent upserts.
+    var twentyLinks: [String: TwentyLink] = [:]
     var savedViews: [SavedView] = SavedView.defaults
     var lastSecurityReview: String?
 
@@ -106,12 +110,14 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
         syncJobs = try container.decodeIfPresent([SyncJob].self, forKey: .syncJobs) ?? []
         exposureFindings = try container.decodeIfPresent([ExposureFinding].self, forKey: .exposureFindings) ?? []
         connectorEndpoints = try container.decodeIfPresent([String: String].self, forKey: .connectorEndpoints) ?? [:]
+        connectorHealth = try container.decodeIfPresent([String: ConnectorHealth].self, forKey: .connectorHealth) ?? [:]
+        twentyLinks = try container.decodeIfPresent([String: TwentyLink].self, forKey: .twentyLinks) ?? [:]
         savedViews = try container.decodeIfPresent([SavedView].self, forKey: .savedViews) ?? SavedView.defaults
         lastSecurityReview = try container.decodeIfPresent(String.self, forKey: .lastSecurityReview)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, savedViews, lastSecurityReview
+        case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview
     }
 }
 
@@ -138,7 +144,9 @@ struct WorkspaceExchange: Codable, Equatable, Sendable {
 enum SyncTarget: String, Codable, CaseIterable, Identifiable, Sendable {
     case twenty, leadgen, pharos
     var id: String { rawValue }
-    var label: String { rawValue == "twenty" ? "Twenty" : rawValue == "leadgen" ? "LeadGen OS" : "Pharos" }
+    var label: String { rawValue == "twenty" ? "Twenty" : rawValue == "leadgen" ? "LeadGen OS" : "PHAROS backend" }
+    /// Targets whose API key is stored in the Keychain.
+    static let keyed: [SyncTarget] = [.twenty, .pharos]
 }
 
 struct SyncJob: Codable, Identifiable, Equatable, Sendable {
@@ -149,6 +157,9 @@ struct SyncJob: Codable, Identifiable, Equatable, Sendable {
     var createdAt = Date.now.ISO8601Format()
     var completedAt: String?
     var error: String?
+    var idempotencyKey: String?
+    /// Non-PII outcome summary, such as counts or a receipt id.
+    var detail: String?
 }
 
 struct SyncManifest: Codable, Equatable, Sendable {

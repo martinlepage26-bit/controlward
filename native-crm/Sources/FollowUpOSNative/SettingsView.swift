@@ -6,6 +6,11 @@ struct SettingsView: View {
     @State private var name = ""
     @State private var industry = Industries.all[0]
     @State private var confirmReset = false
+    @State private var keyDrafts: [SyncTarget: String] = [:]
+
+    private func keyBinding(_ target: SyncTarget) -> Binding<String> {
+        Binding(get: { keyDrafts[target] ?? "" }, set: { keyDrafts[target] = $0 })
+    }
 
     var body: some View {
         ScrollView {
@@ -44,6 +49,33 @@ struct SettingsView: View {
                             ))
                         }
                         .buttonStyle(.borderedProminent)
+                    }
+                }
+                .crmCard()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("API keys").font(.headline)
+                    Text("Keys are stored in the macOS login Keychain, never in workspace data or exports. They are write-only here: paste to save or replace.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(SyncTarget.keyed) { target in
+                        HStack {
+                            Text(target.label).frame(width: 130, alignment: .leading)
+                            SecureField(store.hasKey(target) ? "Paste a new key to replace" : "Paste API key", text: keyBinding(target))
+                                .textFieldStyle(.roundedBorder)
+                            Button(store.hasKey(target) ? "Replace" : "Save") {
+                                store.setAPIKey(keyDrafts[target] ?? "", for: target)
+                                keyDrafts[target] = ""
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled((keyDrafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            Text(store.hasKey(target) ? "Saved" : "Not set")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(store.hasKey(target) ? .green : .secondary)
+                                .frame(width: 52)
+                            Button("Remove", role: .destructive) { store.removeAPIKey(for: target) }
+                                .buttonStyle(.borderless)
+                                .disabled(!store.hasKey(target))
+                        }
                     }
                 }
                 .crmCard()

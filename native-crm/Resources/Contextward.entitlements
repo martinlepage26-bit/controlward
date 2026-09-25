@@ -8,7 +8,7 @@
     <!-- CSV, JSON, XLSX import, exchange export, and legacy workspace import via open/save panels -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
-    <!-- Integration Center endpoint preflight (HTTP HEAD, no workspace data) -->
+    <!-- Integration Center: endpoint preflight, and user-initiated pushes to the PHAROS backend and Twenty -->
     <key>com.apple.security.network.client</key>
     <true/>
 </dict>
