@@ -1,6 +1,9 @@
 export interface Env {
   ENVIRONMENT?: string;
+  /** Contextward key: exchange push, auth check, lead pull and ack. */
   PHAROS_API_KEY?: string;
+  /** LeadGen OS exporter key: lead push only. */
+  LEADGEN_PUSH_KEY?: string;
   DB?: D1Database;
 }
 
@@ -26,10 +29,13 @@ export async function timingSafeEqualString(provided: string, expected: string):
   return difference === 0;
 }
 
-async function authorized(request: Request, env: Env): Promise<boolean> {
-  if (!env.PHAROS_API_KEY) return false;
-  return timingSafeEqualString(request.headers.get("authorization") ?? "", `Bearer ${env.PHAROS_API_KEY}`);
+/** Each route accepts exactly one key. A missing or empty configured key fails closed. */
+async function hasKey(request: Request, key: string | undefined): Promise<boolean> {
+  if (!key) return false;
+  return timingSafeEqualString(request.headers.get("authorization") ?? "", `Bearer ${key}`);
 }
+
+const authorized = (request: Request, env: Env) => hasKey(request, env.PHAROS_API_KEY);
 
 function validExchange(value: unknown): value is Exchange {
   return !!value && typeof value === "object" && (value as Exchange).schemaVersion === "contextward.exchange.v1";
@@ -38,6 +44,8 @@ function validExchange(value: unknown): value is Exchange {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const leads = await handleLeadInbox(request, env, url);
+    if (leads) return leads;
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/v1/health") {
       return json({ ok: true, service: "pharos-contextward-api", environment: env.ENVIRONMENT ?? "unknown", storage: env.DB ? "d1" : "adapter-required" });
     }
@@ -66,5 +74,190 @@ export default {
       return json({ accepted: true, persisted: true, idempotencyKey, schemaVersion: body.schemaVersion, receipt }, 202);
     }
     return json({ error: "not_found" }, 404);
+  },
+
+  /** Daily retention for the lead inbox. */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await purgeLeadInbox(env);
   }
+} satisfies ExportedHandler<Env>;
+
+// MARK: - Lead inbox
+
+const LEAD_EVENT_SCHEMA = "leadgen.event.v1";
+const MAX_PUSH_LEADS = 100;
+const MAX_PUSH_BYTES = 256 * 1024;
+const MAX_ACKS = 500;
+const DEFAULT_PULL_LIMIT = 100;
+const MAX_PULL_LIMIT = 200;
+const SOURCE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+const noStore = { "cache-control": "no-store" };
+
+/** The only lead fields stored or served. Everything else in a push is dropped. */
+export type InboxEvent = {
+  schema_version: typeof LEAD_EVENT_SCHEMA;
+  event_id: string;
+  captured_at: string | null;
+  raw_identity: { email: string | null; first_name: string | null; last_name: string | null; phone_raw: string | null; company_name_raw: string | null };
+  fit_score: number | null;
+  intent_score: number | null;
+  composite_score: number | null;
 };
+
+function text(value: unknown, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, max) : null;
+}
+
+function score(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
+}
+
+/** Builds the stored event in a fixed key order, so JSON.stringify is canonical for hashing. */
+export function minimiseLead(sourceId: string, event: unknown): InboxEvent | null {
+  if (!event || typeof event !== "object") return null;
+  const input = event as Record<string, unknown>;
+  if ((input.schema_version ?? LEAD_EVENT_SCHEMA) !== LEAD_EVENT_SCHEMA) return null;
+  const identity = (input.raw_identity && typeof input.raw_identity === "object" ? input.raw_identity : {}) as Record<string, unknown>;
+  const minimised: InboxEvent = {
+    schema_version: LEAD_EVENT_SCHEMA,
+    event_id: sourceId,
+    captured_at: text(input.captured_at, 40),
+    raw_identity: {
+      email: text(identity.email, 254),
+      first_name: text(identity.first_name, 120),
+      last_name: text(identity.last_name, 120),
+      phone_raw: text(identity.phone_raw, 40),
+      company_name_raw: text(identity.company_name_raw, 200),
+    },
+    fit_score: score(input.fit_score),
+    intent_score: score(input.intent_score),
+    composite_score: score(input.composite_score),
+  };
+  const { email, first_name, last_name } = minimised.raw_identity;
+  return email || first_name || last_name ? minimised : null;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  return [...(await digest(value))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function handleLeadInbox(request: Request, env: Env, url: URL): Promise<Response | null> {
+  const route = `${request.method} ${url.pathname}`;
+  if (route === "POST /v1/leads/push") {
+    if (!(await hasKey(request, env.LEADGEN_PUSH_KEY))) return json({ error: "unauthorized" }, 401);
+    return pushLeads(request, env);
+  }
+  if (route === "GET /v1/leads") {
+    if (!(await hasKey(request, env.PHAROS_API_KEY))) return json({ error: "unauthorized" }, 401);
+    return pullLeads(env, url);
+  }
+  if (route === "POST /v1/leads/ack") {
+    if (!(await hasKey(request, env.PHAROS_API_KEY))) return json({ error: "unauthorized" }, 401);
+    return ackLeads(request, env);
+  }
+  return null;
+}
+
+async function readBody(request: Request, maxBytes: number): Promise<{ body?: unknown; error?: Response }> {
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).byteLength > maxBytes) return { error: json({ error: "payload_too_large" }, 413) };
+  try { return { body: JSON.parse(raw) }; } catch { return { error: json({ error: "invalid_json" }, 400) }; }
+}
+
+async function pushLeads(request: Request, env: Env): Promise<Response> {
+  if (!env.DB) return json({ error: "storage_unavailable" }, 503);
+  const { body, error } = await readBody(request, MAX_PUSH_BYTES);
+  if (error) return error;
+  const packet = body as { schema_version?: unknown; leads?: unknown };
+  if (!packet || packet.schema_version !== "leadgen.push.v1" || !Array.isArray(packet.leads)) {
+    return json({ error: "invalid_push_schema", expected: "leadgen.push.v1" }, 422);
+  }
+  if (packet.leads.length > MAX_PUSH_LEADS) return json({ error: "too_many_leads", max: MAX_PUSH_LEADS }, 413);
+
+  const incoming = new Map<string, { payload: string; hash: string }>();
+  for (const [index, item] of packet.leads.entries()) {
+    const sourceId = (item as { source_id?: unknown })?.source_id;
+    if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId)) return json({ error: "invalid_source_id", index }, 422);
+    const event = minimiseLead(sourceId, (item as { event?: unknown }).event);
+    if (!event) return json({ error: "invalid_lead_event", index }, 422);
+    const payload = JSON.stringify(event);
+    incoming.set(sourceId, { payload, hash: await sha256Hex(payload) });
+  }
+  if (incoming.size === 0) return json({ accepted: 0, created: 0, updated: 0, unchanged: 0 });
+
+  const ids = [...incoming.keys()];
+  const existing = await env.DB.prepare(`SELECT source_id, content_hash FROM lead_inbox WHERE source_id IN (${ids.map(() => "?").join(",")})`)
+    .bind(...ids).all<{ source_id: string; content_hash: string }>();
+  const known = new Map((existing.results ?? []).map((row) => [row.source_id, row.content_hash]));
+
+  let created = 0, updated = 0, unchanged = 0;
+  const statements: D1PreparedStatement[] = [];
+  for (const [sourceId, { payload, hash }] of incoming) {
+    const previous = known.get(sourceId);
+    if (previous === hash) { unchanged += 1; continue; }
+    if (previous === undefined) created += 1; else updated += 1;
+    statements.push(env.DB.prepare("UPDATE lead_inbox_counter SET value = value + 1 WHERE id = 1"));
+    statements.push(env.DB.prepare(
+      `INSERT INTO lead_inbox (source_id, content_hash, seq, payload_json, updated_at, acked_at)
+       VALUES (?, ?, (SELECT value FROM lead_inbox_counter WHERE id = 1), ?, datetime('now'), NULL)
+       ON CONFLICT(source_id) DO UPDATE SET content_hash = excluded.content_hash, seq = excluded.seq,
+         payload_json = excluded.payload_json, updated_at = excluded.updated_at, acked_at = NULL
+       WHERE lead_inbox.content_hash <> excluded.content_hash`
+    ).bind(sourceId, hash, payload));
+  }
+  try {
+    if (statements.length) await env.DB.batch(statements);
+  } catch {
+    return json({ error: "storage_failure" }, 503);
+  }
+  return json({ accepted: incoming.size, created, updated, unchanged });
+}
+
+async function pullLeads(env: Env, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: "storage_unavailable" }, 503);
+  const sinceRaw = url.searchParams.get("since") ?? "0";
+  const limitRaw = url.searchParams.get("limit") ?? String(DEFAULT_PULL_LIMIT);
+  if (!/^\d{1,15}$/.test(sinceRaw)) return json({ error: "invalid_cursor" }, 400);
+  if (!/^\d{1,4}$/.test(limitRaw)) return json({ error: "invalid_limit" }, 400);
+  const since = Number(sinceRaw);
+  const limit = Math.min(Math.max(Number(limitRaw), 1), MAX_PULL_LIMIT);
+  const { results } = await env.DB.prepare(
+    "SELECT source_id, seq, content_hash, payload_json FROM lead_inbox WHERE acked_at IS NULL AND seq > ? ORDER BY seq LIMIT ?"
+  ).bind(since, limit + 1).all<{ source_id: string; seq: number; content_hash: string; payload_json: string }>();
+  const page = (results ?? []).slice(0, limit);
+  const leads = page.map((row) => ({ source_id: row.source_id, seq: row.seq, content_hash: row.content_hash, event: JSON.parse(row.payload_json) }));
+  const cursor = page.length ? page[page.length - 1].seq : since;
+  return json({ schema_version: "contextward.lead-inbox.v1", leads, cursor, has_more: (results ?? []).length > limit }, 200, noStore);
+}
+
+async function ackLeads(request: Request, env: Env): Promise<Response> {
+  if (!env.DB) return json({ error: "storage_unavailable" }, 503);
+  const { body, error } = await readBody(request, 64 * 1024);
+  if (error) return error;
+  const acks = (body as { acks?: unknown })?.acks;
+  if (!Array.isArray(acks)) return json({ error: "invalid_ack_schema" }, 422);
+  if (acks.length > MAX_ACKS) return json({ error: "too_many_acks", max: MAX_ACKS }, 413);
+  const statements: D1PreparedStatement[] = [];
+  for (const [index, item] of acks.entries()) {
+    const { source_id: sourceId, seq } = (item ?? {}) as { source_id?: unknown; seq?: unknown };
+    if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId) || !Number.isSafeInteger(seq)) return json({ error: "invalid_ack", index }, 422);
+    // Only the exact version pulled is acked; a newer push (new seq) stays pending. Re-acks are no-ops that still count.
+    statements.push(env.DB.prepare(
+      "UPDATE lead_inbox SET acked_at = COALESCE(acked_at, datetime('now')), payload_json = NULL WHERE source_id = ? AND seq = ?"
+    ).bind(sourceId, seq as number));
+  }
+  if (!statements.length) return json({ acked: 0, stale: 0 });
+  let results: D1Result[];
+  try { results = await env.DB.batch(statements); } catch { return json({ error: "storage_failure" }, 503); }
+  const acked = results.filter((result) => (result.meta?.changes ?? 0) > 0).length;
+  return json({ acked, stale: statements.length - acked });
+}
+
+export async function purgeLeadInbox(env: Env): Promise<void> {
+  if (!env.DB) return;
+  await env.DB.prepare(
+    "DELETE FROM lead_inbox WHERE (acked_at IS NOT NULL AND acked_at < datetime('now', '-30 days')) OR updated_at < datetime('now', '-90 days')"
+  ).run();
+}

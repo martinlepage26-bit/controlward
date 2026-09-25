@@ -1,0 +1,21 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "pharos-contextward-api",
+  "account_id": "c384d639b3515a824b1c245d79245e76",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-30",
+  "vars": {
+    "ENVIRONMENT": "development"
+  },
+  "observability": { "enabled": true },
+  // Daily lead-inbox retention (see migrations/0002_lead_inbox.sql).
+  "triggers": { "crons": ["17 3 * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pharos-contextward",
+      "database_id": "f12329f5-1cf8-4dfd-8d2d-c4b5f0c21c19",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
