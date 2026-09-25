@@ -13,8 +13,9 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @main
 @MainActor
 struct NativeSmokeTests {
-    static func main() throws {
+    static func main() async throws {
         let securityPassed = SecurityTests.run()
+        let integrationPassed = await IntegrationTests.run()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("followupos-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -197,6 +198,7 @@ struct NativeSmokeTests {
 
         print("PASS: persistence, metrics, cadence, CSV import, operations integration, and UUID v4")
         try expect(securityPassed, "security tests failed")
+        try expect(integrationPassed, "integration tests failed")
     }
 
     private static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
