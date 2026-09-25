@@ -1,0 +1,36 @@
+#!/bin/zsh
+# One-time move of the pre-sandbox workspace into the sandboxed app's private data folder.
+# Copies, verifies by SHA-256, sets the legacy file to 600, and never deletes or overwrites.
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+LEGACY="${PROJECT_ROOT}/native-crm/data/workspace.json"
+CONTAINER="${HOME}/Library/Containers/com.pharos.contextward/Data"
+DEST_DIR="${CONTAINER}/Library/Application Support/Contextward"
+DEST="${DEST_DIR}/workspace.json"
+
+[[ -f "${LEGACY}" ]] || { print -u2 "No legacy workspace at native-crm/data/workspace.json; nothing to migrate."; exit 0; }
+[[ -d "${CONTAINER}" ]] || { print -u2 "The sandbox container does not exist yet. Open Contextward once, quit it, then rerun."; exit 1; }
+if /usr/bin/pgrep -x FollowUpOSNative >/dev/null; then print -u2 "Quit Contextward before migrating."; exit 1; fi
+[[ ! -e "${DEST}" ]] || { print -u2 "A workspace already exists in the container. Migration runs once and never overwrites."; exit 1; }
+
+mkdir -p "${DEST_DIR}"
+chmod 700 "${DEST_DIR}"
+TMP="$(mktemp "${DEST_DIR}/.workspace.migrating.XXXXXX")"
+cp "${LEGACY}" "${TMP}"
+chmod 600 "${TMP}"
+SRC_HASH="$(shasum -a 256 "${LEGACY}" | cut -d' ' -f1)"
+TMP_HASH="$(shasum -a 256 "${TMP}" | cut -d' ' -f1)"
+if [[ "${SRC_HASH}" != "${TMP_HASH}" ]]; then
+  rm -f "${TMP}"
+  print -u2 "Hash mismatch; the copy was removed and nothing changed."
+  exit 1
+fi
+mv -n "${TMP}" "${DEST}"
+[[ ! -e "${TMP}" ]] || { rm -f "${TMP}"; print -u2 "Destination appeared during migration; nothing overwritten."; exit 1; }
+chmod 600 "${DEST}"
+chmod 600 "${LEGACY}"
+chmod 700 "${LEGACY:h}"
+print "Migrated and verified (sha256 ${SRC_HASH[1,12]}…). Legacy file kept as a 600 backup."

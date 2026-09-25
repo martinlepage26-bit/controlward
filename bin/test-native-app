@@ -1,0 +1,19 @@
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
+BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/native-smoke-tests"
+TEST_BINARY="${BUILD_ROOT}/FollowUpOSNativeSmokeTests"
+
+mkdir -p "${BUILD_ROOT}"
+swiftc -parse-as-library \
+  "${SOURCE_ROOT}/Models.swift" \
+  "${SOURCE_ROOT}/AppStore.swift" \
+  "${SOURCE_ROOT}/Security.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/SecurityTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
+  -o "${TEST_BINARY}"
+
+"${TEST_BINARY}"
