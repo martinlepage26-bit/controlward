@@ -22,6 +22,8 @@ final class AppStore: ObservableObject {
     let transport: HTTPTransport
     var twentyPacing: Duration = .milliseconds(700)
     var twentyMaxBackoffSeconds: Double = 30
+    /// Receives every sync log line (tests assert these carry no keys or PII).
+    var syncLogSink: ((String) -> Void)?
     private var noticeTask: Task<Void, Never>?
 
     init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore = KeychainSecretStore(), transport: HTTPTransport = URLSessionTransport()) {
@@ -286,6 +288,133 @@ final class AppStore: ObservableObject {
             ? "Pushed to Twenty: \(job.detail ?? "")" : "Twenty push failed: \(job.error ?? "")", sourceID: job.id), at: 0)
         persist(message: job.status == "synced" ? "Twenty push complete: \(job.detail ?? "")" : "Twenty push failed: \(job.error ?? "")")
         return job
+    }
+
+    // MARK: - PHAROS lead inbox
+
+    static let maxInboxPages = 20
+
+    /// Writes a sync log line. Callers pass counts, statuses, and target names only.
+    private func logSync(_ line: String, error: Bool = false) {
+        if error { Self.syncLog.error("\(line, privacy: .public)") } else { Self.syncLog.notice("\(line, privacy: .public)") }
+        syncLogSink?(line)
+    }
+
+    /// Pulls qualified leads that LeadGen OS pushed to the PHAROS Worker, dedupes them
+    /// into the workspace, then acks each page. The cursor is saved only after its page
+    /// is acked, so a failed ack re-delivers the page and dedupe makes that harmless.
+    /// Activity, the job, and logs record counts only.
+    @discardableResult
+    func pullLeads() async -> SyncJob {
+        var job = SyncJob(target: .leadgen, status: "sending", snapshotSchema: LeadInboxPage.schema)
+        guard !busyTargets.contains(.leadgen) else {
+            job.status = "failed"; job.error = "A lead pull is already running."
+            return job
+        }
+        workspace.syncJobs.insert(job, at: 0)
+        busyTargets.insert(.leadgen); defer { busyTargets.remove(.leadgen) }
+        var counts = LeadPullCounts()
+        do {
+            let client = try pharosClient()
+            var cursor = workspace.leadInboxCursor ?? 0
+            for _ in 0..<Self.maxInboxPages {
+                let page = try await client.pullLeads(since: cursor)
+                for item in page.leads { counts.add(applyInboxLead(item)) }
+                if page.leads.isEmpty { break }
+                persist()
+                counts.acked += try await client.ackLeads(page.leads).acked
+                cursor = page.cursor
+                workspace.leadInboxCursor = cursor
+                persist()
+                if !page.hasMore { break }
+            }
+            job.status = "synced"
+            job.detail = counts.summary
+            logSync("lead pull ok created=\(counts.created) updated=\(counts.updated) unchanged=\(counts.unchanged) skipped=\(counts.skipped) acked=\(counts.acked)")
+        } catch {
+            job.status = "failed"
+            job.error = "\(message(for: error)) Progress kept: \(counts.summary)"
+            logSync("lead pull failed created=\(counts.created) updated=\(counts.updated) acked=\(counts.acked)", error: true)
+        }
+        job.completedAt = Date.now.ISO8601Format()
+        replace(&workspace.syncJobs, with: job)
+        if job.status == "failed" || counts.total > 0 {
+            workspace.activity.insert(ActivityEvent(kind: "lead_pull", message: job.status == "synced"
+                ? "Pulled leads from the PHAROS inbox: \(counts.summary)"
+                : "Lead pull failed: \(job.error ?? "unknown error")", sourceID: job.id), at: 0)
+        }
+        persist(message: job.status == "synced"
+            ? (counts.total == 0 ? "No new leads in the PHAROS inbox." : "Pulled leads: \(counts.summary)")
+            : "Lead pull failed: \(job.error ?? "")")
+        return job
+    }
+
+    /// Runs when the app opens, only if enabled and the PHAROS endpoint and key are saved.
+    func pullLeadsOnLaunch() async {
+        guard workspace.autoPullLeads, !endpoint(for: .pharos).isEmpty, hasKey(.pharos) else { return }
+        await pullLeads()
+    }
+
+    func setAutoPullLeads(_ enabled: Bool) {
+        workspace.autoPullLeads = enabled
+        persist(message: enabled ? "Leads will be pulled when Contextward opens." : "Automatic lead pull turned off.")
+    }
+
+    /// Matches by source id, then (for unlinked leads) by email, then by phone.
+    /// Existing leads keep local edits: only empty fields are filled. Scores refresh on the lead's LeadGen signal.
+    private func applyInboxLead(_ item: LeadInboxItem) -> LeadPullCounts.Outcome {
+        let identity = item.event.identity
+        func clean(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        let name = [clean(identity.firstName), clean(identity.lastName)].filter { !$0.isEmpty }.joined(separator: " ")
+        let email = clean(identity.email ?? item.event.email)
+        let phone = clean(identity.phoneRaw)
+        let company = clean(identity.companyNameRaw)
+        guard !name.isEmpty || !email.isEmpty else { return .skipped }
+        let sourceID = "leadgen:\(item.sourceID)"
+        let phoneKey = LeadMatching.phoneKey(phone)
+
+        let index = workspace.leads.firstIndex { $0.sourceID == sourceID }
+            ?? (email.isEmpty ? nil : workspace.leads.firstIndex { $0.sourceID == nil && $0.email.caseInsensitiveCompare(email) == .orderedSame })
+            ?? (phoneKey == nil ? nil : workspace.leads.firstIndex { $0.sourceID == nil && LeadMatching.phoneKey($0.phone) == phoneKey })
+
+        var lead: Lead
+        let created = index == nil
+        if let index {
+            lead = workspace.leads[index]
+        } else {
+            lead = Lead.blank()
+            lead.createdAt = item.event.capturedAt ?? lead.createdAt
+        }
+        let before = lead
+        lead.sourceID = sourceID
+        if lead.name.isEmpty { lead.name = name.isEmpty ? email : name }
+        if lead.email.isEmpty { lead.email = email }
+        if lead.phone.isEmpty { lead.phone = phone }
+        if lead.company.isEmpty { lead.company = company }
+        if let index { workspace.leads[index] = lead } else { workspace.leads.insert(lead, at: 0) }
+
+        let fit = min(max(item.event.fitScore ?? 0, 0), 100)
+        let intent = min(max(item.event.intentScore ?? 0, 0), 100)
+        let priority = min(max(item.event.compositeScore ?? ((fit + intent) / 2), 0), 100)
+        let signalIndex = workspace.signals.firstIndex { $0.leadID == lead.id && $0.source == .imported }
+        var signal = signalIndex.map { workspace.signals[$0] } ?? Signal()
+        let signalBefore = signal
+        if signalIndex == nil {
+            signal.title = "LeadGen: \(lead.name)"
+            signal.source = .imported
+            signal.status = .qualified
+            signal.leadID = lead.id
+            signal.nextAction = "Review the qualified lead and make first contact."
+            signal.capturedAt = item.event.capturedAt ?? signal.capturedAt
+        }
+        signal.evidence = "Pulled from the PHAROS lead inbox. LeadGen id: \(item.sourceID)."
+        signal.fitScore = fit
+        signal.intentScore = intent
+        signal.priority = priority
+        if let signalIndex { workspace.signals[signalIndex] = signal } else { workspace.signals.insert(signal, at: 0) }
+
+        if created { return .created }
+        return lead == before && signal == signalBefore ? .unchanged : .updated
     }
 
     var qualifiedSignals: [Signal] { signals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }

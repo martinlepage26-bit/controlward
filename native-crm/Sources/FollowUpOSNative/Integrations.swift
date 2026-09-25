@@ -205,7 +205,7 @@ struct PharosClient: Sendable {
     let transport: HTTPTransport
 
     init(endpoint: String, apiKey: String, transport: HTTPTransport) throws {
-        baseURL = try EndpointBase.url(from: endpoint, strippingSuffixes: ["/v1/exchange/push", "/v1/health", "/v1/auth/check", "/v1"])
+        baseURL = try EndpointBase.url(from: endpoint, strippingSuffixes: ["/v1/exchange/push", "/v1/health", "/v1/auth/check", "/v1/leads", "/v1"])
         guard !apiKey.isEmpty else { throw IntegrationError.missingKey }
         self.apiKey = apiKey
         self.transport = transport
@@ -248,6 +248,92 @@ struct PharosClient: Sendable {
         }
         guard receipt.accepted, receipt.persisted else { throw IntegrationError.unexpected("PHAROS accepted the push but did not persist it") }
         return receipt
+    }
+
+    static let inboxPageSize = 100
+
+    /// GET /v1/leads?since=<cursor>: qualified leads pushed by LeadGen OS and not yet acked.
+    func pullLeads(since: Int, limit: Int = PharosClient.inboxPageSize) async throws -> LeadInboxPage {
+        var pull = request("v1/leads", authenticated: true)
+        var components = URLComponents(url: baseURL.appendingPathComponent("v1/leads"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "since", value: String(since)), URLQueryItem(name: "limit", value: String(limit))]
+        guard let url = components?.url else { throw IntegrationError.invalidEndpoint }
+        pull.url = url
+        let response = try await send(pull)
+        guard response.status == 200 else { throw IntegrationError.from(response, context: "PHAROS lead pull") }
+        guard let page = try? JSONDecoder().decode(LeadInboxPage.self, from: response.body),
+              page.schemaVersion == LeadInboxPage.schema else {
+            throw IntegrationError.unexpected("PHAROS lead inbox page could not be read")
+        }
+        for item in page.leads where !LeadGenEvent.supportedVersions.contains(item.event.schemaVersion ?? "leadgen.event.v1") {
+            throw IntegrationError.unexpected("PHAROS lead inbox sent an unsupported lead schema")
+        }
+        return page
+    }
+
+    /// POST /v1/leads/ack: marks the exact pulled versions as received.
+    func ackLeads(_ items: [LeadInboxItem]) async throws -> LeadAckResult {
+        var ack = request("v1/leads/ack", method: "POST", authenticated: true)
+        ack.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        ack.httpBody = try JSONSerialization.data(withJSONObject: ["acks": items.map { ["source_id": $0.sourceID, "seq": $0.seq] }])
+        let response = try await send(ack)
+        guard response.status == 200 else { throw IntegrationError.from(response, context: "PHAROS lead ack") }
+        guard let result = try? JSONDecoder().decode(LeadAckResult.self, from: response.body) else {
+            throw IntegrationError.unexpected("PHAROS lead ack could not be read")
+        }
+        return result
+    }
+}
+
+// MARK: - PHAROS lead inbox
+
+struct LeadInboxItem: Decodable, Sendable {
+    var sourceID: String
+    var seq: Int
+    var event: LeadGenEvent
+    enum CodingKeys: String, CodingKey { case sourceID = "source_id", seq, event }
+}
+
+struct LeadInboxPage: Decodable, Sendable {
+    static let schema = "contextward.lead-inbox.v1"
+    var schemaVersion: String
+    var leads: [LeadInboxItem]
+    var cursor: Int
+    var hasMore: Bool
+    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", leads, cursor, hasMore = "has_more" }
+}
+
+struct LeadAckResult: Decodable, Sendable {
+    var acked: Int
+    var stale: Int
+}
+
+/// Counts only. This is all a lead pull ever writes to activity, jobs, or logs.
+struct LeadPullCounts: Equatable, Sendable {
+    enum Outcome { case created, updated, unchanged, skipped }
+    var created = 0, updated = 0, unchanged = 0, skipped = 0, acked = 0
+
+    mutating func add(_ outcome: Outcome) {
+        switch outcome {
+        case .created: created += 1
+        case .updated: updated += 1
+        case .unchanged: unchanged += 1
+        case .skipped: skipped += 1
+        }
+    }
+
+    var total: Int { created + updated + unchanged + skipped }
+    var summary: String {
+        "\(created) new, \(updated) updated, \(unchanged) unchanged\(skipped > 0 ? ", \(skipped) skipped" : ""); \(acked) acked."
+    }
+}
+
+enum LeadMatching {
+    /// Digits only; for numbers with 10+ digits, the last 10 (so +1 and national formats match).
+    static func phoneKey(_ phone: String) -> String? {
+        let digits = phone.filter(\.isNumber)
+        guard digits.count >= 7 else { return nil }
+        return digits.count >= 10 ? String(digits.suffix(10)) : digits
     }
 }
 

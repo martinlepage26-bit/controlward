@@ -9,7 +9,7 @@ struct IntegrationCenterView: View {
     private var checks: [IntegrationCheck] {
         [
             IntegrationCheck(name: "Native workspace", detail: "SwiftUI app and atomic local JSON persistence", state: .ready, symbol: "checkmark.circle.fill"),
-            IntegrationCheck(name: "LeadGen OS", detail: "JSON event import, scoring fields, routing and automation", state: store.signals.isEmpty ? .ready : .connected, symbol: "dot.radiowaves.left.and.right"),
+            IntegrationCheck(name: "LeadGen OS", detail: "Qualified leads arrive through the PHAROS lead inbox (Pull leads below), or by JSON event import.", state: store.signals.isEmpty ? .ready : .connected, symbol: "dot.radiowaves.left.and.right"),
             IntegrationCheck(name: "Lantern", detail: "FR/EN score imports, weighted gap and remediation", state: store.audits.isEmpty ? .ready : .connected, symbol: "checkmark.seal"),
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
             connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),
@@ -84,6 +84,25 @@ struct IntegrationCenterView: View {
                         lastJobText(.pharos)
                     }
                     .disabled(store.busyTargets.contains(.pharos))
+                }
+                .crmCard()
+                .padding(.horizontal, 28)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionLabel(text: "LeadGen OS lead inbox")
+                    Text("Pulls qualified leads that LeadGen OS sent to the PHAROS backend, using the PHAROS key. Leads are matched by LeadGen id, then email, then phone, so existing leads are updated instead of duplicated. Activity records counts only.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Pull leads", systemImage: "arrow.down.circle") { Task { await store.pullLeads() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isNeedsSetup(.pharos))
+                        Toggle("Pull when Contextward opens", isOn: Binding(get: { store.workspace.autoPullLeads }, set: { store.setAutoPullLeads($0) }))
+                            .toggleStyle(.checkbox)
+                        if store.busyTargets.contains(.leadgen) { ProgressView().controlSize(.small) }
+                        Spacer()
+                        lastJobText(.leadgen)
+                    }
+                    .disabled(store.busyTargets.contains(.leadgen))
                 }
                 .crmCard()
                 .padding(.horizontal, 28)

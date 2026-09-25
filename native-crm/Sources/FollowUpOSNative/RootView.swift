@@ -208,5 +208,6 @@ struct MainWorkspaceView: View {
             }
             .background(CRMTheme.paper)
         }
+        .task { await store.pullLeadsOnLaunch() }
     }
 }

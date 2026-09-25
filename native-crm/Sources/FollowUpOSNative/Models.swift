@@ -62,6 +62,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var createdAt = Date.now.ISO8601Format()
     var wonAt: String?
     var lostAt: String?
+    /// Stable upstream id, e.g. "leadgen:<identity id>", used to dedupe pulled leads. Not PII.
+    var sourceID: String?
 
     static func blank(today: Date = .now) -> Lead {
         var lead = Lead()
@@ -91,6 +93,10 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     var twentyLinks: [String: TwentyLink] = [:]
     var savedViews: [SavedView] = SavedView.defaults
     var lastSecurityReview: String?
+    /// Last PHAROS lead-inbox sequence number that was applied and acked.
+    var leadInboxCursor: Int?
+    /// Pull leads from the PHAROS lead inbox when the app opens (needs the PHAROS endpoint and key).
+    var autoPullLeads = true
 
     init() {}
 
@@ -114,10 +120,12 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
         twentyLinks = try container.decodeIfPresent([String: TwentyLink].self, forKey: .twentyLinks) ?? [:]
         savedViews = try container.decodeIfPresent([SavedView].self, forKey: .savedViews) ?? SavedView.defaults
         lastSecurityReview = try container.decodeIfPresent(String.self, forKey: .lastSecurityReview)
+        leadInboxCursor = try container.decodeIfPresent(Int.self, forKey: .leadInboxCursor)
+        autoPullLeads = try container.decodeIfPresent(Bool.self, forKey: .autoPullLeads) ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
-        case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview
+        case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview, leadInboxCursor, autoPullLeads
     }
 }
 

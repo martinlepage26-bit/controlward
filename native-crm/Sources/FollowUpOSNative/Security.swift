@@ -178,10 +178,10 @@ private extension String {
 
 // MARK: - LeadGen Codable schema (F5)
 
-struct LeadGenEvent: Decodable {
+struct LeadGenEvent: Decodable, Sendable {
     static let supportedVersions: Set<String> = ["leadgen.event.v1"]
 
-    struct Identity: Decodable {
+    struct Identity: Decodable, Sendable {
         var email: String?
         var firstName: String?
         var lastName: String?
