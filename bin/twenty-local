@@ -1,0 +1,147 @@
+#!/bin/sh
+set -eu
+
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+node_version=$(tr -d '[:space:]' < "$project_root/.nvmrc")
+node_bin="$project_root/.twenty/runtime/node-v${node_version}-darwin-arm64/bin"
+lima_bin="$project_root/.twenty/runtime/lima-2.1.1/bin"
+local_bin="$project_root/.twenty/runtime/bin"
+
+export LIMA_HOME="$project_root/.twenty/lima"
+export PATH="$local_bin:$node_bin:$lima_bin:$PATH"
+
+require_runtime() {
+  if [ ! -x "$node_bin/node" ] || [ ! -x "$lima_bin/limactl" ] || [ ! -x "$local_bin/docker" ]; then
+    echo "The workspace-local Twenty runtime is incomplete." >&2
+    echo "Expected runtime files under $project_root/.twenty/runtime" >&2
+    exit 1
+  fi
+}
+
+engine_status() {
+  limactl list docker --format '{{.Status}}' 2>/dev/null || true
+}
+
+start_engine() {
+  if [ "$(engine_status)" != "Running" ]; then
+    limactl start --tty=false docker
+  fi
+}
+
+wait_for_crm() {
+  attempts=0
+  while [ "$attempts" -lt 180 ]; do
+    if curl -fsS http://127.0.0.1:2020/healthz >/dev/null 2>&1; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+
+  echo "Twenty did not become healthy within 180 seconds." >&2
+  return 1
+}
+
+start_crm() {
+  start_engine
+
+  mkdir -p "$project_root/.twenty/logs"
+  yarn twenty docker:start >"$project_root/.twenty/logs/docker-start.log" 2>&1 &
+  start_pid=$!
+
+  if wait_for_crm; then
+    kill "$start_pid" 2>/dev/null || true
+    wait "$start_pid" 2>/dev/null || true
+    echo "Twenty is healthy at http://localhost:2020"
+    return 0
+  fi
+
+  wait "$start_pid" 2>/dev/null || true
+  tail -80 "$project_root/.twenty/logs/docker-start.log" >&2 || true
+  return 1
+}
+
+stop_crm() {
+  if [ "$(engine_status)" = "Running" ]; then
+    yarn twenty docker:stop || true
+    limactl stop docker
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./bin/twenty-local COMMAND [arguments]
+
+Commands:
+  start       Start the workspace VM and local Twenty CRM
+  status      Show VM, container, and CRM health
+  open        Start Twenty and open it in the default browser
+  stop        Stop Twenty and its VM while preserving data
+  restart     Stop and start the persistent local installation
+  plan        Preview this app's metadata changes
+  apply       Build and sync this app once
+  dev         Run live app synchronization
+  test        Run lint, typecheck, and unit tests
+  twenty ...  Pass remaining arguments to the Twenty CLI
+EOF
+}
+
+require_runtime
+cd "$project_root"
+
+command_name=${1:-status}
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$command_name" in
+  start)
+    start_crm
+    ;;
+  status)
+    limactl list
+    if [ "$(engine_status)" = "Running" ]; then
+      yarn twenty docker:status
+      curl -fsS http://127.0.0.1:2020/healthz || true
+      echo
+    fi
+    ;;
+  open)
+    start_crm
+    open http://localhost:2020
+    ;;
+  stop)
+    stop_crm
+    ;;
+  restart)
+    stop_crm
+    start_crm
+    ;;
+  plan)
+    start_engine
+    yarn twenty plan "$@"
+    ;;
+  apply)
+    start_crm
+    yarn twenty apply "$@"
+    ;;
+  dev)
+    start_crm
+    exec yarn twenty dev "$@"
+    ;;
+  test)
+    yarn lint
+    yarn typecheck
+    yarn test:unit
+    ;;
+  twenty)
+    exec yarn twenty "$@"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

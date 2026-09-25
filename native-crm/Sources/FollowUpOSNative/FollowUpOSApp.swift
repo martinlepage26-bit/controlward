@@ -1,0 +1,18 @@
+import SwiftUI
+
+@main
+struct FollowUpOSApp: App {
+    @StateObject private var store = AppStore()
+
+    var body: some Scene {
+        WindowGroup("Contextward") {
+            RootView()
+                .environmentObject(store)
+                .frame(minWidth: 940, minHeight: 680)
+        }
+        .defaultSize(width: 1120, height: 760)
+        .commands {
+            CommandGroup(replacing: .newItem) { }
+        }
+    }
+}
