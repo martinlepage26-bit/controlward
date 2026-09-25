@@ -53,10 +53,17 @@ fi
 cp -R "${RESOURCE_BUNDLE}" "${RESOURCES_DIR}/"
 chmod 755 "${MACOS_DIR}/FollowUpOSNative"
 
-# Ad-hoc signature with hardened runtime and App Sandbox (F2). Developer ID
-# signing and notarization need an Apple identity this Mac does not have.
+# Hardened runtime and App Sandbox (F2). Signs with the Developer ID identity
+# when it is in the keychain (override with CONTEXTWARD_SIGN_IDENTITY),
+# otherwise falls back to an ad-hoc signature for local builds.
 ENTITLEMENTS="${PACKAGE_ROOT}/Resources/Contextward.entitlements"
-codesign --force --options runtime --entitlements "${ENTITLEMENTS}" --timestamp=none --sign - "${APP_BUNDLE}"
+SIGN_IDENTITY="${CONTEXTWARD_SIGN_IDENTITY:-Developer ID Application: Martin Lepage (MN5D79D862)}"
+if security find-identity -v -p codesigning | grep -qF "\"${SIGN_IDENTITY}\""; then
+  codesign --force --options runtime --entitlements "${ENTITLEMENTS}" --timestamp --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"
+else
+  print "Signing identity not found; using ad-hoc signature."
+  codesign --force --options runtime --entitlements "${ENTITLEMENTS}" --timestamp=none --sign - "${APP_BUNDLE}"
+fi
 codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
 
 print "Built native app: ${APP_BUNDLE}"
