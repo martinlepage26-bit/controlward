@@ -15,7 +15,7 @@ function validateEnv(): { apiUrl: string; apiKey: string } {
     throw new Error(
       'TWENTY_API_URL and TWENTY_API_KEY must be set.\n' +
         'Start a local server: yarn twenty docker:start\n' +
-        'Or set them in vitest env config.',
+        'Then export TWENTY_API_KEY with a key from your local workspace.',
     );
   }
 
@@ -51,8 +51,12 @@ function writeConfig(apiUrl: string, apiKey: string) {
     2,
   );
 
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(path.join(CONFIG_DIR, 'config.test.json'), payload);
+  // The file holds the API key: owner-only directory and file.
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(CONFIG_DIR, 0o700);
+  const configPath = path.join(CONFIG_DIR, 'config.test.json');
+  fs.writeFileSync(configPath, payload, { mode: 0o600 });
+  fs.chmodSync(configPath, 0o600);
 }
 
 export async function setup() {
