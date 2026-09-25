@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Confines the app to its container: ~/Library/Containers/com.pharos.contextward -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- CSV, JSON, XLSX import, exchange export, and legacy workspace import via open/save panels -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <!-- Integration Center endpoint preflight (HTTP HEAD, no workspace data) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>
