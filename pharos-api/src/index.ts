@@ -41,6 +41,10 @@ export default {
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/v1/health") {
       return json({ ok: true, service: "pharos-contextward-api", environment: env.ENVIRONMENT ?? "unknown", storage: env.DB ? "d1" : "adapter-required" });
     }
+    if (request.method === "GET" && url.pathname === "/v1/auth/check") {
+      if (!(await authorized(request, env))) return json({ error: "unauthorized" }, 401);
+      return json({ ok: true, authenticated: true });
+    }
     if (url.pathname === "/v1/exchange/push" && request.method === "POST") {
       if (!(await authorized(request, env))) return json({ error: "unauthorized" }, 401);
       const idempotencyKey = request.headers.get("idempotency-key");
