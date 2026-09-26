@@ -11,7 +11,9 @@ enum GapAnalysisTests {
             ("Gaps: import turns active clusters into signals with scores", importClusters),
             ("Gaps: re-import updates by cluster id, never duplicates", reimport),
             ("Gaps: import paginates beyond 500 clusters without truncation", paginatesAllClusters),
+            ("Gaps: non-advancing pagination fails without reconciliation", rejectsNonAdvancingPagination),
             ("Gaps: missing upstream clusters are retired without deleting local signals", reconcilesMissingClusters),
+            ("Gaps: retired clusters leave operations and reactivate in place", retiredLifecycle),
             ("Gaps: scores embedded as an object or an array both work", embedShapes),
             ("Gaps: key never reaches activity, jobs, health, or logs", keyHygiene),
             ("Gaps: import without setup does nothing", needsSetup),
@@ -36,6 +38,7 @@ enum GapAnalysisTests {
         let key: String
         private let lock = NSLock()
         var clusters: [[String: Any]] = []
+        var ignoresCursor = false
         private(set) var requests: [URLRequest] = []
         init(key: String) { self.key = key }
 
@@ -51,10 +54,11 @@ enum GapAnalysisTests {
                 }
                 let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
                 let active = query.contains { $0.name == "status" && $0.value == "eq.active" }
-                let matching = clusters.filter { !active || ($0["status"] as? String) == "active" }
+                let after = ignoresCursor ? nil : query.first { $0.name == "id" && $0.value?.hasPrefix("gt.") == true }?.value.map { String($0.dropFirst(3)) }
+                let matching = clusters.filter { (!active || ($0["status"] as? String) == "active") && (after == nil || (($0["id"] as? String) ?? "") > after!) }
+                    .sorted { (($0["id"] as? String) ?? "") < (($1["id"] as? String) ?? "") }
                 let limit = query.first { $0.name == "limit" }.flatMap { $0.value }.flatMap(Int.init) ?? matching.count
-                let offset = query.first { $0.name == "offset" }.flatMap { $0.value }.flatMap(Int.init) ?? 0
-                let rows = Array(matching.dropFirst(offset).prefix(limit))
+                let rows = Array(matching.prefix(limit))
                 return HTTPResponse(status: 200, headers: [:], body: (try? JSONSerialization.data(withJSONObject: rows)) ?? Data())
             }
         }
@@ -127,16 +131,28 @@ enum GapAnalysisTests {
 
     static func paginatesAllClusters() async throws {
         let fake = FakeSupabase(key: key)
-        fake.clusters = (0..<501).map { cluster("c\($0)", label: "Gap \($0)", total: 0.5) }
+        fake.clusters = (0..<501).map { cluster(String(format: "c%04d", $0), label: "Gap \($0)", total: 0.5) }
         let store = try makeStore(fake)
         let job = await store.importGaps()
         try expect(job.status == "synced", "paginated import failed: \(job.error ?? "")")
         try expect(store.signals.filter { $0.sourceID?.hasPrefix("gap:") == true }.count == 501, "import silently truncated clusters")
-        let offsets = fake.requests.compactMap { request in
+        let cursors = fake.requests.compactMap { request in
             URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
-                .first { $0.name == "offset" }?.value.flatMap(Int.init)
+                .first { $0.name == "id" }?.value
         }
-        try expect(offsets == [0, 500], "expected complete offset pagination, got \(offsets)")
+        try expect(cursors == ["gt.c0499"], "expected deterministic keyset pagination, got \(cursors)")
+    }
+
+    static func rejectsNonAdvancingPagination() async throws {
+        let fake = FakeSupabase(key: key)
+        fake.clusters = (0..<500).map { cluster(String(format: "c%04d", $0), label: "Gap \($0)", total: 0.5) }
+        fake.ignoresCursor = true
+        let store = try makeStore(fake)
+        var existing = Signal(); existing.source = .imported; existing.sourceID = "gap:legacy"; existing.sourceActive = true
+        store.add(existing)
+        let job = await store.importGaps()
+        try expect(job.status == "failed" && job.error?.contains("repeated a page") == true, "non-advancing server did not fail safely")
+        try expect(store.signals.first { $0.sourceID == "gap:legacy" }?.sourceActive == true, "failed snapshot retired an existing signal")
     }
 
     static func reconcilesMissingClusters() async throws {
@@ -158,6 +174,27 @@ enum GapAnalysisTests {
         try expect(signals[0].sourceActive == false, "missing upstream gap was not marked inactive")
         try expect(signals[0].owner == "Martin" && signals[0].status == .routed && signals[0].nextAction == "Keep this local decision.", "reconciliation overwrote user-owned fields")
         try expect(job.detail?.contains("1 retired") == true, "retired count missing: \(job.detail ?? "")")
+    }
+
+    static func retiredLifecycle() async throws {
+        let fake = FakeSupabase(key: key)
+        fake.clusters = [cluster("c1", label: "Lifecycle", total: 0.9)]
+        let store = try makeStore(fake)
+        _ = await store.importGaps()
+        guard let original = store.signals.first(where: { $0.sourceID == "gap:c1" }) else { throw SmokeTestFailure.failed("gap not imported") }
+        fake.clusters = []
+        _ = await store.importGaps()
+        try expect(store.activeSignals.isEmpty && store.qualifiedSignals.isEmpty, "retired gap remained in active queues")
+        try expect(store.exchange.signals.isEmpty, "retired gap remained in exchange export")
+        try expect(store.signals.contains { $0.id == original.id && $0.sourceActive == false }, "retired gap was not retained for audit")
+        let tasksBefore = store.tasks.count
+        _ = store.runAutomations()
+        try expect(store.tasks.count == tasksBefore, "retired gap entered automation")
+        fake.clusters = [cluster("c1", label: "Lifecycle returns", total: 0.95)]
+        _ = await store.importGaps()
+        let reactivated = store.signals.first { $0.sourceID == "gap:c1" }
+        try expect(reactivated?.id == original.id && reactivated?.sourceActive == true, "reactivation did not restore the existing audit record")
+        try expect(store.activeSignals.count == 1, "reactivated gap did not return to active operations")
     }
 
     static func embedShapes() async throws {

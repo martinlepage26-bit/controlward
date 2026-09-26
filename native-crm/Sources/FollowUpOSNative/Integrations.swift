@@ -610,6 +610,17 @@ struct TwentyPlan: Equatable, Sendable {
     var updates: Int { operations.filter { $0.kind == .update }.count }
     var unchangedTotal: Int { unchanged.values.reduce(0, +) }
 
+    /// Stable identity for the exact operations and unchanged counts shown in a preview.
+    /// A push recomputes this before constructing a client, so stale previews cause zero writes.
+    var fingerprint: String {
+        var lines = operations.map {
+            "\($0.object.rawValue)|\($0.localKey)|\($0.kind.rawValue)|\($0.twentyID ?? "")|\($0.payloadHash)"
+        }.sorted()
+        lines.append(contentsOf: unchanged.map { "unchanged|\($0.key.rawValue)|\($0.value)" }.sorted())
+        return SHA256.hash(data: Data(lines.joined(separator: "\n").utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
     var summary: String {
         TwentyObject.allCases.map { object in
             "\(object.label): \(count(.create, object)) new, \(count(.update, object)) update, \(unchanged[object, default: 0]) unchanged"
@@ -791,6 +802,7 @@ struct GapCluster: Decodable, Sendable {
 /// Sends the key as both `apikey` and Bearer, as PostgREST expects. Never writes.
 struct GapClient: Sendable {
     static let pageSize = 500
+    static let maxPages = 200
     let baseURL: URL
     let apiKey: String
     let transport: HTTPTransport
@@ -825,15 +837,16 @@ struct GapClient: Sendable {
     func activeClusters() async throws -> [GapCluster] {
         var clusters: [GapCluster] = []
         var seenIDs: Set<String> = []
-        var offset = 0
-        while true {
-            let response = try await get([
+        var lastID: String?
+        for pageNumber in 0..<Self.maxPages {
+            var query = [
                 URLQueryItem(name: "select", value: "id,market_key,category,cluster_label,summary,created_at,gap_scores(total_score,frequency_score,intensity_score,breadth_score,wtp_score,workaround_score,segment_score)"),
                 URLQueryItem(name: "status", value: "eq.active"),
-                URLQueryItem(name: "order", value: "created_at.desc,id.asc"),
+                URLQueryItem(name: "order", value: "id.asc"),
                 URLQueryItem(name: "limit", value: String(Self.pageSize)),
-                URLQueryItem(name: "offset", value: String(offset)),
-            ])
+            ]
+            if let lastID { query.append(URLQueryItem(name: "id", value: "gt.\(lastID)")) }
+            let response = try await get(query)
             guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis read") }
             guard let page = try? JSONDecoder().decode([GapCluster].self, from: response.body) else {
                 throw IntegrationError.unexpected("gap clusters could not be read")
@@ -843,9 +856,15 @@ struct GapClient: Sendable {
                 throw IntegrationError.unexpected("gap analysis pagination repeated a page")
             }
             clusters.append(contentsOf: newRows)
-            if page.count < Self.pageSize { break }
-            offset += page.count
+            if page.count < Self.pageSize { return clusters }
+            guard let next = page.last?.id, next != lastID else {
+                throw IntegrationError.unexpected("gap analysis pagination did not advance")
+            }
+            lastID = next
+            if pageNumber == Self.maxPages - 1 {
+                throw IntegrationError.unexpected("gap analysis exceeded the safe pagination limit")
+            }
         }
-        return clusters
+        throw IntegrationError.unexpected("gap analysis pagination did not terminate")
     }
 }

@@ -31,7 +31,10 @@ struct RootView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            if store.business.name.isEmpty {
+            if case .blocked(let reason) = store.recoveryState {
+                ContentUnavailableView("Workspace recovery required", systemImage: "exclamationmark.shield.fill", description: Text(reason))
+                    .padding(40)
+            } else if store.business.name.isEmpty {
                 OnboardingView()
             } else {
                 MainWorkspaceView()

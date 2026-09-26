@@ -10,7 +10,7 @@ struct IntegrationCenterView: View {
     private var checks: [IntegrationCheck] {
         [
             IntegrationCheck(name: "Native workspace", detail: "SwiftUI app and atomic local JSON persistence", state: .ready, symbol: "checkmark.circle.fill"),
-            IntegrationCheck(name: "LeadGen OS", detail: "Qualified leads arrive through the PHAROS lead inbox (Pull leads below), or by JSON event import.", state: store.signals.isEmpty ? .ready : .connected, symbol: "dot.radiowaves.left.and.right"),
+            IntegrationCheck(name: "LeadGen OS", detail: "Qualified leads arrive through the PHAROS lead inbox (Pull leads below), or by JSON event import.", state: store.activeSignals.isEmpty ? .ready : .connected, symbol: "dot.radiowaves.left.and.right"),
             IntegrationCheck(name: "Lantern", detail: "FR/EN score imports, weighted gap and remediation", state: store.audits.isEmpty ? .ready : .connected, symbol: "checkmark.seal"),
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
             connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),

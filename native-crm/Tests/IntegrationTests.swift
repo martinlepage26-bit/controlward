@@ -14,6 +14,7 @@ enum IntegrationTests {
             ("PHAROS: push sends Bearer key and exchange.v1 body, records receipt", pharosPushShape),
             ("PHAROS: HTTP and network errors surface on job and status", pharosErrorSurfacing),
             ("Twenty: push requires a preview first", twentyRequiresPreview),
+            ("Twenty: changed workspace invalidates preview with zero writes", twentyRejectsStalePreview),
             ("Twenty: dry run counts creates without any request", twentyDryRun),
             ("Twenty: create then update by id map, no duplicates, no deletes", twentyUpsert),
             ("Twenty: relations resolve to Twenty ids", twentyRelations),
@@ -292,6 +293,18 @@ enum IntegrationTests {
         seedCRM(store)
         let job = await store.pushToTwenty()
         try expect(job.status == "failed" && fake.methodLog.isEmpty, "push ran without a preview")
+    }
+
+    static func twentyRejectsStalePreview() async throws {
+        let (store, fake) = try configuredTwenty()
+        seedCRM(store)
+        _ = store.previewTwentyPush()
+        var task = CRMTask(); task.title = "Added after preview"; store.add(task)
+        let before = fake.methodLog.count
+        let job = await store.pushToTwenty()
+        try expect(job.status == "failed" && job.error?.contains("changed after preview") == true, "stale preview was not rejected")
+        try expect(fake.methodLog.count == before, "stale preview made a network request")
+        try expect(store.twentyPreview == nil, "stale preview was not cleared")
     }
 
     static func twentyDryRun() async throws {

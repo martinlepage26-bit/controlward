@@ -104,7 +104,7 @@ private struct SignalQueueView: View {
         List {
             Section {
                 HStack(spacing: 12) {
-                    OpsMetric(value: "\(store.signals.count)", label: "captured", symbol: "dot.radiowaves.left.and.right")
+                    OpsMetric(value: "\(store.activeSignals.count)", label: "active", symbol: "dot.radiowaves.left.and.right")
                     OpsMetric(value: "\(store.qualifiedSignals.count)", label: "qualified / routed", symbol: "arrow.triangle.branch")
                     OpsMetric(value: "\(store.openTasks.count)", label: "open actions", symbol: "checklist")
                 }
@@ -134,6 +134,7 @@ private struct SignalQueueView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(signal.title.isEmpty ? "Untitled signal" : signal.title).font(.headline)
                                 Text("\(signal.source.label) · \(signal.status.label) · priority \(signal.priority)").font(.caption).foregroundStyle(.secondary)
+                                if signal.sourceActive == false { Text("Retired upstream · kept for audit").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
                                 if !signal.nextAction.isEmpty { Text(signal.nextAction).font(.caption).foregroundStyle(CRMTheme.steel) }
                             }
                             Spacer()

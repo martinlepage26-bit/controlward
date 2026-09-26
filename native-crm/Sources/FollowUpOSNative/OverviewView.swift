@@ -45,7 +45,7 @@ struct OverviewView: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel(text: "System pulse")
-                        pulse("LeadGen intake", store.signals.isEmpty ? "Waiting for import" : "Receiving signals")
+                        pulse("LeadGen intake", store.activeSignals.isEmpty ? "Waiting for import" : "Receiving signals")
                     pulse("Lantern evidence", store.audits.isEmpty ? "No audit loaded" : "Evidence available")
                         pulse("Pharos hygiene", store.exposureFindings.isEmpty ? "Scan workspace" : "Review findings")
                         pulse("Adapter queue", store.syncJobs.isEmpty ? "No sync intents" : "Review outbox")

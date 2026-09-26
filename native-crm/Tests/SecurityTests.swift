@@ -12,6 +12,7 @@ enum SecurityTests {
             ("F1 storage: workspace file 600, directory 700", storagePermissions),
             ("F1 storage: default location is Application Support/Contextward", defaultLocation),
             ("F1 storage: loading tightens an existing loose file", loadTightensPermissions),
+            ("F1 storage: corrupt workspace is preserved and blocks writes", corruptWorkspaceBlocksWrites),
             ("F7 outbox: directory 700, packages 600", outboxPermissions),
             ("F7 outbox: discarding deletes staged packages", outboxDiscardDeletes),
             ("F7 outbox: marking synced deletes the package", outboxSyncedDeletes),
@@ -113,6 +114,20 @@ enum SecurityTests {
         _ = AppStore(storageURL: file)
         try expect(try mode(file) == 0o600, "existing workspace.json was not tightened to 600")
         try expect(try mode(directory) == 0o700, "existing data directory was not tightened to 700")
+    }
+
+    static func corruptWorkspaceBlocksWrites() throws {
+        let directory = try tempDir()
+        let file = directory.appendingPathComponent("workspace.json")
+        let original = Data("{not valid workspace json".utf8)
+        try original.write(to: file)
+        let store = AppStore(storageURL: file)
+        guard case .blocked(let reason) = store.recoveryState else {
+            throw SmokeTestFailure.failed("corrupt workspace did not enter recovery state")
+        }
+        try expect(reason.contains("preserved"), "recovery state does not explain preservation")
+        store.createWorkspace(name: "Must Not Overwrite", industry: "Testing")
+        try expect(try Data(contentsOf: file) == original, "a write overwrote the corrupt workspace")
     }
 
     // MARK: - Outbox

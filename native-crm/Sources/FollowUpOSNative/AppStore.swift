@@ -6,10 +6,16 @@ import OSLog
 import UserNotifications
 import SwiftUI
 
+enum WorkspaceRecoveryState: Equatable {
+    case ready
+    case blocked(String)
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     @Published private(set) var workspace: PersistentWorkspace
     @Published var notice: String?
+    @Published private(set) var recoveryState: WorkspaceRecoveryState
 
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
@@ -30,13 +36,15 @@ final class AppStore: ObservableObject {
         self.storageURL = storageURL
         self.secrets = secrets
         self.transport = transport
-        self.workspace = Self.load(from: storageURL)
+        let loaded = Self.load(from: storageURL)
+        self.workspace = loaded.workspace
+        self.recoveryState = loaded.recovery
         self.savedKeys = Set(SyncTarget.keyed.filter { secrets.exists($0) })
         if FileManager.default.fileExists(atPath: storageURL.path) {
             try? SecureFiles.ensurePrivateDirectory(storageURL.deletingLastPathComponent())
             try? SecureFiles.restrict(storageURL)
         }
-        scrubStoredEndpointSecrets()
+        if case .ready = recoveryState { scrubStoredEndpointSecrets() }
         Self.log.notice("Loaded workspace (sandboxed: \(StorageLocation.isSandboxed, privacy: .public)): leads=\(self.workspace.leads.count, privacy: .public) contacts=\(self.workspace.contacts.count, privacy: .public) companies=\(self.workspace.companies.count, privacy: .public) tasks=\(self.workspace.tasks.count, privacy: .public)")
     }
 
@@ -60,6 +68,9 @@ final class AppStore: ObservableObject {
     var tasks: [CRMTask] { workspace.tasks }
     var notes: [CRMNote] { workspace.notes }
     var signals: [Signal] { workspace.signals }
+    /// Operational surfaces exclude records retired by an upstream source. The full
+    /// `signals` collection remains available for audit/history and reactivation.
+    var activeSignals: [Signal] { workspace.signals.filter { $0.sourceActive != false } }
     var audits: [BilingualAudit] { workspace.audits }
     var automationRules: [AutomationRule] { workspace.automationRules }
     var activity: [ActivityEvent] { workspace.activity }
@@ -252,9 +263,16 @@ final class AppStore: ObservableObject {
     @discardableResult
     func pushToTwenty() async -> SyncJob {
         var job = SyncJob(target: .twenty, status: "sending")
-        guard twentyPreview != nil else {
+        guard let preview = twentyPreview else {
             job.status = "failed"; job.error = "Run the preview before pushing."
             showNotice("Preview the Twenty push first.")
+            return job
+        }
+        let current = TwentyMapper.plan(workspace, links: workspace.twentyLinks)
+        guard current.fingerprint == preview.fingerprint else {
+            twentyPreview = nil
+            job.status = "failed"; job.error = "The workspace changed after preview. Preview again before pushing."
+            showNotice(job.error ?? "Preview again before pushing.")
             return job
         }
         workspace.syncJobs.insert(job, at: 0)
@@ -580,7 +598,7 @@ final class AppStore: ObservableObject {
         return retired
     }
 
-    var qualifiedSignals: [Signal] { signals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }
+    var qualifiedSignals: [Signal] { activeSignals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }
     var averageLanguageGap: Double {
         guard !audits.isEmpty else { return 0 }
         return audits.map(\.languageGap).reduce(0, +) / Double(audits.count)
@@ -699,7 +717,7 @@ final class AppStore: ObservableObject {
             }
         }
         if automationRules.contains(where: { $0.enabled && $0.trigger == .highIntentSignal }) {
-            for signal in signals where signal.status == .captured && signal.intentScore >= 70 && signal.fitScore >= 70 {
+            for signal in activeSignals where signal.status == .captured && signal.intentScore >= 70 && signal.fitScore >= 70 {
                 var routed = signal
                 routed.status = .qualified
                 routed.owner = routed.owner.isEmpty ? business.name : routed.owner
@@ -787,7 +805,9 @@ final class AppStore: ObservableObject {
     /// One-time, user-selected import of the pre-sandbox `native-crm/data/workspace.json`.
     func importLegacyWorkspace(from legacy: URL) throws {
         let outcome = try WorkspaceMigration.migrateLegacy(from: legacy, to: storageURL)
-        workspace = Self.load(from: storageURL)
+        let loaded = Self.load(from: storageURL)
+        workspace = loaded.workspace
+        recoveryState = loaded.recovery
         scrubStoredEndpointSecrets()
         showNotice(outcome.legacyRestricted
             ? "Imported and hash-verified the legacy workspace. The original was kept and set to owner-only access."
@@ -797,7 +817,7 @@ final class AppStore: ObservableObject {
     var exchange: WorkspaceExchange {
         WorkspaceExchange(
             business: business, leads: leads, contacts: contacts, companies: companies,
-            opportunities: opportunities, tasks: tasks, notes: notes, signals: signals,
+            opportunities: opportunities, tasks: tasks, notes: notes, signals: activeSignals,
             audits: audits, activity: activity, syncJobs: syncJobs, exposureFindings: exposureFindings, connectorEndpoints: workspace.connectorEndpoints
         )
     }
@@ -920,7 +940,7 @@ final class AppStore: ObservableObject {
         return SyncManifest(target: job.target, jobID: job.id, idempotencyKey: "ctx_\(digest.prefix(32))", entityCounts: [
             "leads": leads.count, "contacts": contacts.count, "companies": companies.count,
             "opportunities": opportunities.count, "tasks": tasks.count, "notes": notes.count,
-            "signals": signals.count, "audits": audits.count, "findings": exposureFindings.count,
+            "signals": activeSignals.count, "audits": audits.count, "findings": exposureFindings.count,
         ])
     }
 
@@ -939,7 +959,7 @@ final class AppStore: ObservableObject {
                 workspace.exposureFindings.append(ExposureFinding(lens: "Identity Exposure", severity: .warning, title: "Lead lacks a contact channel", detail: "Confirm the source and retention need before keeping this record.", recordID: lead.id))
             }
         }
-        for signal in signals where signal.evidence.isEmpty {
+        for signal in activeSignals where signal.evidence.isEmpty {
             workspace.exposureFindings.append(ExposureFinding(lens: "Digital Exposure", severity: .warning, title: "Signal has no evidence trail", detail: "Add the source event, file, or operator note before routing.", recordID: signal.id))
         }
         workspace.activity.insert(ActivityEvent(kind: "security_scan", message: "Ran local workspace exposure scan: \(workspace.exposureFindings.count) finding\(workspace.exposureFindings.count == 1 ? "" : "s")."), at: 0)
@@ -1195,21 +1215,31 @@ final class AppStore: ObservableObject {
         update(lead)
     }
 
-    private static func load(from url: URL) -> PersistentWorkspace {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(PersistentWorkspace.self, from: data)
-        else { return PersistentWorkspace() }
-        return decoded
+    private static func load(from url: URL) -> (workspace: PersistentWorkspace, recovery: WorkspaceRecoveryState) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (PersistentWorkspace(), .ready) }
+        do {
+            let data = try Data(contentsOf: url)
+            return (try JSONDecoder().decode(PersistentWorkspace.self, from: data), .ready)
+        } catch {
+            return (PersistentWorkspace(), .blocked("The existing workspace could not be read. Its original bytes were preserved and all workspace writes are blocked."))
+        }
     }
 
     /// Saves or throws. Used before acking pulled leads, so an ack never outruns the disk.
     private func persistOrThrow() throws {
+        guard case .ready = recoveryState else {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: "Workspace recovery is required before saving."])
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(workspace), to: storageURL)
     }
 
     private func persist(message: String? = nil) {
+        guard case .ready = recoveryState else {
+            showNotice("Workspace recovery required. The existing file was not changed.")
+            return
+        }
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
