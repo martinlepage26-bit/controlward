@@ -93,16 +93,25 @@ struct IntegrationCenterView: View {
                     Text("Pulls qualified leads that LeadGen OS sent to the PHAROS backend, using the PHAROS key. Leads are matched by LeadGen id, then email, then phone, so existing leads are updated instead of duplicated. Activity records counts only.")
                         .font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        Button("Pull leads", systemImage: "arrow.down.circle") { Task { await store.pullLeads() } }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isNeedsSetup(.pharos))
-                        Toggle("Pull when Contextward opens", isOn: Binding(get: { store.workspace.autoPullLeads }, set: { store.setAutoPullLeads($0) }))
-                            .toggleStyle(.checkbox)
+                        if store.isPullingLeads {
+                            Button("Stop pulling", systemImage: "stop.circle") { store.stopPulling() }
+                                .buttonStyle(.bordered)
+                        } else {
+                            Button("Start pulling", systemImage: "play.circle") { Task { await store.startPulling() } }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(isNeedsSetup(.pharos) || store.busyTargets.contains(.leadgen))
+                        }
+                        Button("Pull now", systemImage: "arrow.down.circle") { Task { await store.pullLeads() } }
+                            .buttonStyle(.bordered)
+                            .disabled(isNeedsSetup(.pharos) || store.busyTargets.contains(.leadgen))
                         if store.busyTargets.contains(.leadgen) { ProgressView().controlSize(.small) }
                         Spacer()
                         lastJobText(.leadgen)
                     }
-                    .disabled(store.busyTargets.contains(.leadgen))
+                    Text(store.isPullingLeads
+                         ? "Pulling: checks now and every 5 minutes while Contextward is open, and resumes when it reopens."
+                         : "Stopped: no leads are pulled until you start again or press Pull now.")
+                        .font(.caption).foregroundStyle(store.isPullingLeads ? .green : .secondary)
                 }
                 .crmCard()
                 .padding(.horizontal, 28)

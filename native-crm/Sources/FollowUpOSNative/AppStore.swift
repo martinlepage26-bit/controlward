@@ -357,15 +357,55 @@ final class AppStore: ObservableObject {
         return job
     }
 
-    /// Runs when the app opens, only if enabled and the PHAROS endpoint and key are saved.
+    /// How often leads are pulled while pulling is on and the app is open.
+    var leadPullInterval: Duration = .seconds(300)
+    private var pullLoop: Task<Void, Never>?
+    /// True while the periodic pull is running.
+    @Published private(set) var isPullingLeads = false
+
+    private var pharosConfigured: Bool { !endpoint(for: .pharos).isEmpty && hasKey(.pharos) }
+
+    /// Runs when the app opens: if pulling is on and PHAROS is set up, pull now and keep pulling.
     func pullLeadsOnLaunch() async {
-        guard workspace.autoPullLeads, !endpoint(for: .pharos).isEmpty, hasKey(.pharos) else { return }
+        guard workspace.autoPullLeads, pharosConfigured else { return }
         await pullLeads()
+        startPullLoop()
     }
 
-    func setAutoPullLeads(_ enabled: Bool) {
-        workspace.autoPullLeads = enabled
-        persist(message: enabled ? "Leads will be pulled when Contextward opens." : "Automatic lead pull turned off.")
+    /// "Start pulling": saves the choice, pulls now, then every `leadPullInterval` while the app is open.
+    func startPulling() async {
+        guard pharosConfigured else {
+            showNotice("Save the PHAROS endpoint and key before starting to pull leads.")
+            return
+        }
+        workspace.autoPullLeads = true
+        persist()
+        await pullLeads()
+        startPullLoop()
+    }
+
+    /// "Stop pulling": saves the choice and stops the periodic pull. Leads already pulled stay.
+    func stopPulling() {
+        pullLoop?.cancel()
+        pullLoop = nil
+        isPullingLeads = false
+        workspace.autoPullLeads = false
+        persist(message: "Stopped pulling leads.")
+    }
+
+    private func startPullLoop() {
+        pullLoop?.cancel()
+        isPullingLeads = true
+        pullLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let interval = self?.leadPullInterval else { break }
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self, self.workspace.autoPullLeads, self.pharosConfigured else { break }
+                await self.pullLeads()
+            }
+            // Ended on its own (key or endpoint removed): show pulling as off. A cancel means stop or restart handled it.
+            if !Task.isCancelled { self?.isPullingLeads = false }
+        }
     }
 
     private func applyInboxItem(_ item: LeadInboxItem) -> LeadPullCounts.Outcome {

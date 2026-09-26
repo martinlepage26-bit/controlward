@@ -21,6 +21,7 @@ enum LeadInboxTests {
             ("Lead inbox: one malformed item is skipped and acked, the rest apply", malformedItem),
             ("Lead inbox: a new inbox epoch resets the saved cursor", epochReset),
             ("Lead inbox: a lead deleted in Contextward is not recreated", deletedStaysDeleted),
+            ("Lead inbox: Start pulling pulls now and on an interval; Stop pulling stops it", startStopPulling),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -259,13 +260,14 @@ enum LeadInboxTests {
         await unconfigured.pullLeadsOnLaunch()
         try expect(unconfigured.leads.isEmpty && unconfigured.syncJobs.isEmpty, "auto pull ran without a key")
         let disabled = try makeStore(fake)
-        disabled.setAutoPullLeads(false)
+        disabled.stopPulling()
         await disabled.pullLeadsOnLaunch()
         try expect(disabled.leads.isEmpty, "auto pull ran while disabled")
         let enabled = try makeStore(fake)
         try expect(enabled.workspace.autoPullLeads, "auto pull should default to on")
         await enabled.pullLeadsOnLaunch()
         try expect(enabled.leads.count == 1, "auto pull did not run when enabled and configured")
+        enabled.stopPulling()
     }
 
     static func retraction() async throws {
@@ -364,5 +366,29 @@ enum LeadInboxTests {
         let job = await store.pullLeads()
         try expect(store.leads.isEmpty, "a lead deleted in Contextward came back")
         try expect(fake.pending == 0 && job.detail?.contains("1 skipped") == true, "dismissed lead not skipped and acked: \(job.detail ?? "")")
+    }
+
+    static func startStopPulling() async throws {
+        let fake = FakeInbox(key: key)
+        fake.add("ident_a", email: "a@example.test", first: "A", last: "One")
+        let store = try makeStore(fake)
+        store.leadPullInterval = .milliseconds(50)
+        store.stopPulling()
+        try expect(!store.isPullingLeads, "stop did not turn pulling off")
+        await store.startPulling()
+        try expect(store.isPullingLeads && store.workspace.autoPullLeads, "start did not turn pulling on and save it")
+        try expect(store.leads.count == 1, "start did not pull right away")
+        fake.add("ident_b", email: "b@example.test", first: "B", last: "Two")
+        try await Task.sleep(for: .milliseconds(400))
+        try expect(store.leads.count == 2, "interval pull did not bring in the later lead")
+        store.stopPulling()
+        try expect(!store.isPullingLeads && !store.workspace.autoPullLeads, "stop did not turn pulling off and save it")
+        let requestsAtStop = fake.pullSinceValues.count
+        fake.add("ident_c", email: "c@example.test", first: "C", last: "Three")
+        try await Task.sleep(for: .milliseconds(300))
+        try expect(fake.pullSinceValues.count == requestsAtStop && store.leads.count == 2, "pulling continued after stop")
+        // The choice survives a relaunch.
+        let relaunched = try makeStore(fake, storageURL: store.storageURL)
+        try expect(!relaunched.workspace.autoPullLeads, "stopped state not persisted")
     }
 }
