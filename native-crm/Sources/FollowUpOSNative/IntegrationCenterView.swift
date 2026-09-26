@@ -5,6 +5,7 @@ struct IntegrationCenterView: View {
     @State private var twentyEndpoint = ""
     @State private var leadgenEndpoint = ""
     @State private var pharosEndpoint = ""
+    @State private var gapsEndpoint = ""
     @State private var showExchangeImporter = false
     private var checks: [IntegrationCheck] {
         [
@@ -14,6 +15,7 @@ struct IntegrationCenterView: View {
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
             connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),
             connectorCheck(.pharos, name: "PHAROS backend", purpose: "Pushes the exchange snapshot to the PHAROS backend on your action.", symbol: "lock.shield"),
+            connectorCheck(.gaps, name: "Gap analysis", purpose: "Reads ranked market gaps from gap-analysis.govern-ai.ca as signals. Read-only.", symbol: "scope"),
         ]
     }
 
@@ -44,6 +46,7 @@ struct IntegrationCenterView: View {
                     endpointField("Twenty API (e.g. http://localhost:2020)", text: $twentyEndpoint, target: .twenty)
                     endpointField("LeadGen OS", text: $leadgenEndpoint, target: .leadgen)
                     endpointField("PHAROS backend (e.g. https://pharos-contextward-api.ml-c38.workers.dev)", text: $pharosEndpoint, target: .pharos)
+                    endpointField("Gap analysis (Supabase project URL, e.g. https://<project>.supabase.co)", text: $gapsEndpoint, target: .gaps)
                 }
                 .crmCard()
                 .padding(.horizontal, 28)
@@ -117,6 +120,25 @@ struct IntegrationCenterView: View {
                 .padding(.horizontal, 28)
 
                 VStack(alignment: .leading, spacing: 12) {
+                    SectionLabel(text: "Market gap analysis")
+                    Text("Imports the active gap clusters from the gap analysis pipeline as signals titled \"Market gap\", with their score as priority. Importing again updates them by cluster id and keeps your owner, status, and next action. Nothing is written back.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Verify") { Task { await store.verifyConnector(.gaps) } }
+                            .buttonStyle(.bordered)
+                        Button("Import gaps", systemImage: "arrow.down.circle") { Task { await store.importGaps() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isNeedsSetup(.gaps))
+                        if store.busyTargets.contains(.gaps) { ProgressView().controlSize(.small) }
+                        Spacer()
+                        lastJobText(.gaps)
+                    }
+                    .disabled(store.busyTargets.contains(.gaps))
+                }
+                .crmCard()
+                .padding(.horizontal, 28)
+
+                VStack(alignment: .leading, spacing: 12) {
                     SectionLabel(text: "Twenty push")
                     Text("Preview first, then push. Records are matched by a saved local-to-Twenty id map, so pushing again updates instead of duplicating. Nothing is deleted in Twenty. Requests are paced to respect rate limits.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -164,7 +186,7 @@ struct IntegrationCenterView: View {
                     Text("Queue a snapshot intent now; an authenticated adapter can execute it only after endpoint and credential setup.")
                         .font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        ForEach(SyncTarget.allCases) { target in
+                        ForEach(SyncTarget.exchangeTargets) { target in
                             Button("Queue \(target.label)") { store.queueSync(to: target) }
                                 .buttonStyle(.bordered)
                         }
@@ -198,6 +220,7 @@ struct IntegrationCenterView: View {
             twentyEndpoint = store.endpoint(for: .twenty)
             leadgenEndpoint = store.endpoint(for: .leadgen)
             pharosEndpoint = store.endpoint(for: .pharos)
+            gapsEndpoint = store.endpoint(for: .gaps)
         }
     }
 

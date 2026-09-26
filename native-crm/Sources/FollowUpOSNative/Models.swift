@@ -156,11 +156,20 @@ struct WorkspaceExchange: Codable, Equatable, Sendable {
 }
 
 enum SyncTarget: String, Codable, CaseIterable, Identifiable, Sendable {
-    case twenty, leadgen, pharos
+    case twenty, leadgen, pharos, gaps
     var id: String { rawValue }
-    var label: String { rawValue == "twenty" ? "Twenty" : rawValue == "leadgen" ? "LeadGen OS" : "PHAROS backend" }
+    var label: String {
+        switch self {
+        case .twenty: "Twenty"
+        case .leadgen: "LeadGen OS"
+        case .pharos: "PHAROS backend"
+        case .gaps: "Gap analysis"
+        }
+    }
     /// Targets whose API key is stored in the Keychain.
-    static let keyed: [SyncTarget] = [.twenty, .pharos]
+    static let keyed: [SyncTarget] = [.twenty, .pharos, .gaps]
+    /// Targets that receive exchange snapshots through the sync queue (gap analysis is read-only).
+    static let exchangeTargets: [SyncTarget] = [.twenty, .leadgen, .pharos]
 }
 
 struct SyncJob: Codable, Identifiable, Equatable, Sendable {
@@ -231,6 +240,8 @@ struct Signal: Codable, Identifiable, Equatable, Sendable {
     var nextAction = ""
     var capturedAt = Date.now.ISO8601Format()
     var routedAt: String?
+    /// Stable upstream id, e.g. "gap:<cluster id>", used to update instead of duplicate. Not PII.
+    var sourceID: String?
 }
 
 enum AuditLanguage: String, Codable, CaseIterable, Identifiable, Sendable {

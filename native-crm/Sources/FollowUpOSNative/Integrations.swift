@@ -743,3 +743,96 @@ enum TwentyMapper {
         domain.lowercased().hasPrefix("http://") || domain.lowercased().hasPrefix("https://") ? domain : "https://\(domain)"
     }
 }
+
+// MARK: - Gap analysis (Supabase)
+
+/// Scores for one gap cluster, each 0...1.
+struct GapScores: Decodable, Equatable, Sendable {
+    var total: Double?
+    var frequency: Double?
+    var intensity: Double?
+    var breadth: Double?
+    var willingnessToPay: Double?
+    var workaround: Double?
+    var segment: Double?
+    enum CodingKeys: String, CodingKey {
+        case total = "total_score", frequency = "frequency_score", intensity = "intensity_score", breadth = "breadth_score"
+        case willingnessToPay = "wtp_score", workaround = "workaround_score", segment = "segment_score"
+    }
+}
+
+/// One row of `gap_clusters` with its embedded `gap_scores` (PostgREST returns an
+/// object for a one-to-one relation and an array otherwise; both are accepted).
+struct GapCluster: Decodable, Sendable {
+    var id: String
+    var marketKey: String?
+    var category: String?
+    var label: String?
+    var summary: String?
+    var scores: GapScores?
+    enum CodingKeys: String, CodingKey {
+        case id, marketKey = "market_key", category, label = "cluster_label", summary, scores = "gap_scores"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let text = try? container.decode(String.self, forKey: .id) { id = text }
+        else { id = String(try container.decode(Int.self, forKey: .id)) }
+        marketKey = try container.decodeIfPresent(String.self, forKey: .marketKey)
+        category = try container.decodeIfPresent(String.self, forKey: .category)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        if let single = try? container.decodeIfPresent(GapScores.self, forKey: .scores) { scores = single }
+        else { scores = (try? container.decodeIfPresent([GapScores].self, forKey: .scores))??.first }
+    }
+}
+
+/// Read-only client for the gap analysis Supabase project: GET /rest/v1/gap_clusters.
+/// Sends the key as both `apikey` and Bearer, as PostgREST expects. Never writes.
+struct GapClient: Sendable {
+    static let maxClusters = 500
+    let baseURL: URL
+    let apiKey: String
+    let transport: HTTPTransport
+
+    init(endpoint: String, apiKey: String, transport: HTTPTransport) throws {
+        baseURL = try EndpointBase.url(from: endpoint, strippingSuffixes: ["/rest/v1/gap_clusters", "/rest/v1"])
+        guard !apiKey.isEmpty else { throw IntegrationError.missingKey }
+        self.apiKey = apiKey
+        self.transport = transport
+    }
+
+    private func get(_ query: [URLQueryItem]) async throws -> HTTPResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("rest/v1/gap_clusters"), resolvingAgainstBaseURL: false)
+        components?.queryItems = query
+        guard let url = components?.url else { throw IntegrationError.invalidEndpoint }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(apiKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        do { return try await transport.send(request) }
+        catch let error as IntegrationError { throw error }
+        catch { throw IntegrationError.transport(error.localizedDescription) }
+    }
+
+    func verify() async throws {
+        let response = try await get([URLQueryItem(name: "select", value: "id"), URLQueryItem(name: "limit", value: "1")])
+        guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis key check") }
+    }
+
+    func activeClusters() async throws -> [GapCluster] {
+        let response = try await get([
+            URLQueryItem(name: "select", value: "id,market_key,category,cluster_label,summary,created_at,gap_scores(total_score,frequency_score,intensity_score,breadth_score,wtp_score,workaround_score,segment_score)"),
+            URLQueryItem(name: "status", value: "eq.active"),
+            URLQueryItem(name: "order", value: "created_at.desc"),
+            URLQueryItem(name: "limit", value: String(Self.maxClusters)),
+        ])
+        guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis read") }
+        guard let clusters = try? JSONDecoder().decode([GapCluster].self, from: response.body) else {
+            throw IntegrationError.unexpected("gap clusters could not be read")
+        }
+        return clusters
+    }
+}

@@ -164,6 +164,10 @@ final class AppStore: ObservableObject {
         try PharosClient(endpoint: endpoint(for: .pharos), apiKey: try apiKey(for: .pharos), transport: transport)
     }
 
+    private func gapClient() throws -> GapClient {
+        try GapClient(endpoint: endpoint(for: .gaps), apiKey: try apiKey(for: .gaps), transport: transport)
+    }
+
     private func twentyClient() throws -> TwentyClient {
         try TwentyClient(endpoint: endpoint(for: .twenty), apiKey: try apiKey(for: .twenty), transport: transport,
                          interval: twentyPacing, maxBackoffSeconds: twentyMaxBackoffSeconds)
@@ -184,6 +188,7 @@ final class AppStore: ObservableObject {
             case .pharos: try await pharosClient().verify()
             case .twenty: try await twentyClient().verify()
             case .leadgen: break
+            case .gaps: try await gapClient().verify()
             }
             recordHealth(target, ok: true, detail: "Verified \(Date.now.formatted(date: .abbreviated, time: .shortened)): endpoint reachable and key accepted.")
             Self.syncLog.notice("verify target=\(target.rawValue, privacy: .public) ok")
@@ -484,6 +489,79 @@ final class AppStore: ObservableObject {
 
         if created { return .created }
         return lead == before && signal == signalBefore ? .unchanged : .updated
+    }
+
+    // MARK: - Gap analysis
+
+    /// Reads active gap clusters and turns each into a signal ("Market gap: ..."), matched by
+    /// cluster id so a re-import updates instead of duplicating. Local owner, status, and next
+    /// action are kept. Read-only: nothing is written to the gap analysis project.
+    @discardableResult
+    func importGaps() async -> SyncJob {
+        var job = SyncJob(target: .gaps, status: "sending", snapshotSchema: "gap_clusters")
+        guard !busyTargets.contains(.gaps) else {
+            job.status = "failed"; job.error = "A gap import is already running."
+            return job
+        }
+        workspace.syncJobs.insert(job, at: 0)
+        busyTargets.insert(.gaps); defer { busyTargets.remove(.gaps) }
+        var created = 0, updated = 0, unchanged = 0
+        do {
+            let clusters = try await gapClient().activeClusters()
+            for cluster in clusters {
+                switch applyGap(cluster) {
+                case .created: created += 1
+                case .updated: updated += 1
+                default: unchanged += 1
+                }
+            }
+            job.status = "synced"
+            job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged."
+            recordHealth(.gaps, ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            logSync("gap import ok created=\(created) updated=\(updated) unchanged=\(unchanged)")
+        } catch {
+            job.status = "failed"
+            job.error = message(for: error)
+            recordHealth(.gaps, ok: false, detail: job.error ?? "Import failed.")
+            logSync("gap import failed", error: true)
+        }
+        job.completedAt = Date.now.ISO8601Format()
+        replace(&workspace.syncJobs, with: job)
+        workspace.activity.insert(ActivityEvent(kind: "gap_import", message: job.status == "synced"
+            ? "Imported market gaps: \(job.detail ?? "")" : "Gap import failed: \(job.error ?? "")", sourceID: job.id), at: 0)
+        persist(message: job.status == "synced" ? "Market gaps: \(job.detail ?? "")" : "Gap import failed: \(job.error ?? "")")
+        return job
+    }
+
+    private func applyGap(_ cluster: GapCluster) -> LeadPullCounts.Outcome {
+        func percent(_ value: Double?) -> Int { min(max(Int(((value ?? 0) * 100).rounded()), 0), 100) }
+        let sourceID = "gap:\(cluster.id)"
+        let label = [cluster.label, cluster.summary].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? "Unlabelled gap"
+        let scores = cluster.scores
+        let category = (cluster.category ?? "other").replacingOccurrences(of: "_", with: " ")
+        var evidence = "Gap analysis cluster \(cluster.id): market \(cluster.marketKey ?? "unknown"), category \(category)."
+        if let scores {
+            evidence += " Scores (0-100): frequency \(percent(scores.frequency)), intensity \(percent(scores.intensity)), breadth \(percent(scores.breadth)), willingness to pay \(percent(scores.willingnessToPay)), workaround \(percent(scores.workaround)), segment \(percent(scores.segment))."
+        }
+        if let summary = cluster.summary, !summary.isEmpty, summary != label { evidence += " Summary: \(summary)" }
+
+        let index = workspace.signals.firstIndex { $0.sourceID == sourceID }
+        var signal = index.map { workspace.signals[$0] } ?? Signal()
+        let before = signal
+        if index == nil {
+            signal.source = .imported
+            signal.status = .captured
+            signal.sourceID = sourceID
+            signal.nextAction = "Decide whether this gap deserves an offer, content, or a product change."
+        }
+        signal.title = "Market gap: \(label)"
+        signal.evidence = evidence
+        signal.priority = percent(scores?.total)
+        signal.intentScore = percent(scores?.intensity)
+        signal.fitScore = percent(scores?.segment)
+        if let index { workspace.signals[index] = signal } else { workspace.signals.insert(signal, at: 0) }
+        if index == nil { return .created }
+        return signal == before ? .unchanged : .updated
     }
 
     var qualifiedSignals: [Signal] { signals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }

@@ -16,6 +16,7 @@ swiftc -parse-as-library \
   "${PROJECT_ROOT}/native-crm/Tests/SecurityTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/IntegrationTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadInboxTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/GapAnalysisTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
