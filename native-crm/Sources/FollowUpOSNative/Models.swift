@@ -242,6 +242,9 @@ struct Signal: Codable, Identifiable, Equatable, Sendable {
     var routedAt: String?
     /// Stable upstream id, e.g. "gap:<cluster id>", used to update instead of duplicate. Not PII.
     var sourceID: String?
+    /// Lifecycle reported by an upstream source. Nil for local/legacy signals; false means
+    /// the upstream record disappeared or is no longer active, without changing local workflow state.
+    var sourceActive: Bool?
 }
 
 enum AuditLanguage: String, Codable, CaseIterable, Identifiable, Sendable {

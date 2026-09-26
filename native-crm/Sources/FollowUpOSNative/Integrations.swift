@@ -790,7 +790,7 @@ struct GapCluster: Decodable, Sendable {
 /// Read-only client for the gap analysis Supabase project: GET /rest/v1/gap_clusters.
 /// Sends the key as both `apikey` and Bearer, as PostgREST expects. Never writes.
 struct GapClient: Sendable {
-    static let maxClusters = 500
+    static let pageSize = 500
     let baseURL: URL
     let apiKey: String
     let transport: HTTPTransport
@@ -823,15 +823,28 @@ struct GapClient: Sendable {
     }
 
     func activeClusters() async throws -> [GapCluster] {
-        let response = try await get([
-            URLQueryItem(name: "select", value: "id,market_key,category,cluster_label,summary,created_at,gap_scores(total_score,frequency_score,intensity_score,breadth_score,wtp_score,workaround_score,segment_score)"),
-            URLQueryItem(name: "status", value: "eq.active"),
-            URLQueryItem(name: "order", value: "created_at.desc"),
-            URLQueryItem(name: "limit", value: String(Self.maxClusters)),
-        ])
-        guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis read") }
-        guard let clusters = try? JSONDecoder().decode([GapCluster].self, from: response.body) else {
-            throw IntegrationError.unexpected("gap clusters could not be read")
+        var clusters: [GapCluster] = []
+        var seenIDs: Set<String> = []
+        var offset = 0
+        while true {
+            let response = try await get([
+                URLQueryItem(name: "select", value: "id,market_key,category,cluster_label,summary,created_at,gap_scores(total_score,frequency_score,intensity_score,breadth_score,wtp_score,workaround_score,segment_score)"),
+                URLQueryItem(name: "status", value: "eq.active"),
+                URLQueryItem(name: "order", value: "created_at.desc,id.asc"),
+                URLQueryItem(name: "limit", value: String(Self.pageSize)),
+                URLQueryItem(name: "offset", value: String(offset)),
+            ])
+            guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis read") }
+            guard let page = try? JSONDecoder().decode([GapCluster].self, from: response.body) else {
+                throw IntegrationError.unexpected("gap clusters could not be read")
+            }
+            let newRows = page.filter { seenIDs.insert($0.id).inserted }
+            guard page.isEmpty || !newRows.isEmpty else {
+                throw IntegrationError.unexpected("gap analysis pagination repeated a page")
+            }
+            clusters.append(contentsOf: newRows)
+            if page.count < Self.pageSize { break }
+            offset += page.count
         }
         return clusters
     }

@@ -10,6 +10,8 @@ enum GapAnalysisTests {
             ("Gaps: verify is an authenticated read; 401 is an error", verify),
             ("Gaps: import turns active clusters into signals with scores", importClusters),
             ("Gaps: re-import updates by cluster id, never duplicates", reimport),
+            ("Gaps: import paginates beyond 500 clusters without truncation", paginatesAllClusters),
+            ("Gaps: missing upstream clusters are retired without deleting local signals", reconcilesMissingClusters),
             ("Gaps: scores embedded as an object or an array both work", embedShapes),
             ("Gaps: key never reaches activity, jobs, health, or logs", keyHygiene),
             ("Gaps: import without setup does nothing", needsSetup),
@@ -49,7 +51,10 @@ enum GapAnalysisTests {
                 }
                 let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
                 let active = query.contains { $0.name == "status" && $0.value == "eq.active" }
-                let rows = clusters.filter { !active || ($0["status"] as? String) == "active" }
+                let matching = clusters.filter { !active || ($0["status"] as? String) == "active" }
+                let limit = query.first { $0.name == "limit" }.flatMap { $0.value }.flatMap(Int.init) ?? matching.count
+                let offset = query.first { $0.name == "offset" }.flatMap { $0.value }.flatMap(Int.init) ?? 0
+                let rows = Array(matching.dropFirst(offset).prefix(limit))
                 return HTTPResponse(status: 200, headers: [:], body: (try? JSONSerialization.data(withJSONObject: rows)) ?? Data())
             }
         }
@@ -118,6 +123,41 @@ enum GapAnalysisTests {
         try expect(gaps[0].priority == 90 && gaps[0].title == "Market gap: No French onboarding at all", "update not applied")
         try expect(gaps[0].owner == "Martin" && gaps[0].status == .routed, "local routing was overwritten")
         try expect(changed.detail?.contains("1 updated") == true, "update not counted: \(changed.detail ?? "")")
+    }
+
+    static func paginatesAllClusters() async throws {
+        let fake = FakeSupabase(key: key)
+        fake.clusters = (0..<501).map { cluster("c\($0)", label: "Gap \($0)", total: 0.5) }
+        let store = try makeStore(fake)
+        let job = await store.importGaps()
+        try expect(job.status == "synced", "paginated import failed: \(job.error ?? "")")
+        try expect(store.signals.filter { $0.sourceID?.hasPrefix("gap:") == true }.count == 501, "import silently truncated clusters")
+        let offsets = fake.requests.compactMap { request in
+            URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+                .first { $0.name == "offset" }?.value.flatMap(Int.init)
+        }
+        try expect(offsets == [0, 500], "expected complete offset pagination, got \(offsets)")
+    }
+
+    static func reconcilesMissingClusters() async throws {
+        let fake = FakeSupabase(key: key)
+        fake.clusters = [cluster("c1", label: "Still active", total: 0.8), cluster("c2", label: "Will archive", total: 0.6)]
+        let store = try makeStore(fake)
+        _ = await store.importGaps()
+        var retired = store.signals.first { $0.sourceID == "gap:c2" }!
+        let localID = retired.id
+        retired.owner = "Martin"
+        retired.status = .routed
+        retired.nextAction = "Keep this local decision."
+        store.update(retired)
+
+        fake.clusters = [cluster("c1", label: "Still active", total: 0.8), cluster("c2", label: "Will archive", total: 0.6, status: "archived")]
+        let job = await store.importGaps()
+        let signals = store.signals.filter { $0.sourceID == "gap:c2" }
+        try expect(signals.count == 1 && signals[0].id == localID, "retired upstream gap was deleted or duplicated")
+        try expect(signals[0].sourceActive == false, "missing upstream gap was not marked inactive")
+        try expect(signals[0].owner == "Martin" && signals[0].status == .routed && signals[0].nextAction == "Keep this local decision.", "reconciliation overwrote user-owned fields")
+        try expect(job.detail?.contains("1 retired") == true, "retired count missing: \(job.detail ?? "")")
     }
 
     static func embedShapes() async throws {

@@ -505,7 +505,7 @@ final class AppStore: ObservableObject {
         }
         workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.gaps); defer { busyTargets.remove(.gaps) }
-        var created = 0, updated = 0, unchanged = 0
+        var created = 0, updated = 0, unchanged = 0, retired = 0
         do {
             let clusters = try await gapClient().activeClusters()
             for cluster in clusters {
@@ -515,10 +515,11 @@ final class AppStore: ObservableObject {
                 default: unchanged += 1
                 }
             }
+            retired = retireMissingGaps(activeSourceIDs: Set(clusters.map { "gap:\($0.id)" }))
             job.status = "synced"
-            job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged."
+            job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged\(retired > 0 ? ", \(retired) retired" : "")."
             recordHealth(.gaps, ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
-            logSync("gap import ok created=\(created) updated=\(updated) unchanged=\(unchanged)")
+            logSync("gap import ok created=\(created) updated=\(updated) unchanged=\(unchanged) retired=\(retired)")
         } catch {
             job.status = "failed"
             job.error = message(for: error)
@@ -554,6 +555,7 @@ final class AppStore: ObservableObject {
             signal.sourceID = sourceID
             signal.nextAction = "Decide whether this gap deserves an offer, content, or a product change."
         }
+        signal.sourceActive = true
         signal.title = "Market gap: \(label)"
         signal.evidence = evidence
         signal.priority = percent(scores?.total)
@@ -562,6 +564,20 @@ final class AppStore: ObservableObject {
         if let index { workspace.signals[index] = signal } else { workspace.signals.insert(signal, at: 0) }
         if index == nil { return .created }
         return signal == before ? .unchanged : .updated
+    }
+
+    /// Marks imported gap signals absent from a complete active-cluster read as retired.
+    /// The signal and all user-owned workflow fields remain intact.
+    private func retireMissingGaps(activeSourceIDs: Set<String>) -> Int {
+        var retired = 0
+        for index in workspace.signals.indices {
+            guard let sourceID = workspace.signals[index].sourceID,
+                  sourceID.hasPrefix("gap:"), !activeSourceIDs.contains(sourceID),
+                  workspace.signals[index].sourceActive != false else { continue }
+            workspace.signals[index].sourceActive = false
+            retired += 1
+        }
+        return retired
     }
 
     var qualifiedSignals: [Signal] { signals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }
