@@ -9,13 +9,17 @@ Cloudflare Worker edge contract for the native Contextward workspace.
 - `POST /v1/exchange/push` (Contextward key)
 - `POST /v1/leads/push` (LeadGen key only): `leadgen.push.v1` body, up to 100 leads,
   each `{source_id, event}` with a `leadgen.event.v1` event. Idempotent per
-  `source_id` + content hash; only minimised fields are stored.
+  `source_id` + content hash; only minimised fields are stored. An optional
+  `retract: [source_id]` (up to 100) turns leads LeadGen withdrew (deletion,
+  consent withdrawn, disqualified) into PII-free tombstones.
 - `GET /v1/leads?since=<cursor>&limit=<n>` (Contextward key only): unacked leads
-  after the cursor, `contextward.lead-inbox.v1`, with `cursor` and `has_more`.
+  after the cursor, `contextward.lead-inbox.v1`, with `epoch`, `cursor` and
+  `has_more`. Tombstones arrive as `{source_id, seq, retracted: true}`. A new
+  `epoch` means the inbox was recreated and the client resets its cursor.
 - `POST /v1/leads/ack` (Contextward key only): `{acks:[{source_id, seq}]}`. Acks
   the exact version pulled and clears its payload.
-- Cron `17 3 * * *`: deletes rows acked more than 30 days ago and any row older
-  than 90 days.
+- Cron `17 3 * * *`: deletes lead rows acked more than 30 days ago (unacked
+  leads stay until pulled) and exchange snapshots older than 30 days.
 
 Keys are Worker secrets: `PHAROS_API_KEY` (Contextward) and `LEADGEN_PUSH_KEY`
 (the LeadGen OS exporter on CT920). Neither key can use the other's routes.

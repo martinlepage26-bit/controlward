@@ -88,6 +88,7 @@ const LEAD_EVENT_SCHEMA = "leadgen.event.v1";
 const MAX_PUSH_LEADS = 100;
 const MAX_PUSH_BYTES = 256 * 1024;
 const MAX_ACKS = 500;
+const MAX_RETRACTS = 100;
 const DEFAULT_PULL_LIMIT = 100;
 const MAX_PULL_LIMIT = 200;
 const SOURCE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
@@ -175,6 +176,12 @@ async function pushLeads(request: Request, env: Env): Promise<Response> {
     return json({ error: "invalid_push_schema", expected: "leadgen.push.v1" }, 422);
   }
   if (packet.leads.length > MAX_PUSH_LEADS) return json({ error: "too_many_leads", max: MAX_PUSH_LEADS }, 413);
+  const retract = (packet as { retract?: unknown }).retract ?? [];
+  if (!Array.isArray(retract)) return json({ error: "invalid_retract" }, 422);
+  if (retract.length > MAX_RETRACTS) return json({ error: "too_many_retractions", max: MAX_RETRACTS }, 413);
+  for (const [index, sourceId] of retract.entries()) {
+    if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId)) return json({ error: "invalid_retract", index }, 422);
+  }
 
   const incoming = new Map<string, { payload: string; hash: string }>();
   for (const [index, item] of packet.leads.entries()) {
@@ -185,34 +192,55 @@ async function pushLeads(request: Request, env: Env): Promise<Response> {
     const payload = JSON.stringify(event);
     incoming.set(sourceId, { payload, hash: await sha256Hex(payload) });
   }
-  if (incoming.size === 0) return json({ accepted: 0, created: 0, updated: 0, unchanged: 0 });
+  const retractIds = [...new Set(retract as string[])].filter((id) => !incoming.has(id));
+  if (incoming.size === 0 && retractIds.length === 0) return json({ accepted: 0, created: 0, updated: 0, unchanged: 0, retracted: 0 });
 
-  const ids = [...incoming.keys()];
-  const existing = await env.DB.prepare(`SELECT source_id, content_hash FROM lead_inbox WHERE source_id IN (${ids.map(() => "?").join(",")})`)
-    .bind(...ids).all<{ source_id: string; content_hash: string }>();
-  const known = new Map((existing.results ?? []).map((row) => [row.source_id, row.content_hash]));
+  // D1 allows at most 100 bound parameters per statement, so look ids up in chunks.
+  const known = new Map<string, { hash: string; retracted: number }>();
+  const ids = [...incoming.keys(), ...retractIds];
+  for (let start = 0; start < ids.length; start += 90) {
+    const chunk = ids.slice(start, start + 90);
+    const existing = await env.DB.prepare(`SELECT source_id, content_hash, retracted FROM lead_inbox WHERE source_id IN (${chunk.map(() => "?").join(",")})`)
+      .bind(...chunk).all<{ source_id: string; content_hash: string; retracted: number }>();
+    for (const row of existing.results ?? []) known.set(row.source_id, { hash: row.content_hash, retracted: row.retracted });
+  }
 
   let created = 0, updated = 0, unchanged = 0;
   const statements: D1PreparedStatement[] = [];
   for (const [sourceId, { payload, hash }] of incoming) {
-    const previous = known.get(sourceId);
+    const previous = known.get(sourceId)?.hash;
     if (previous === hash) { unchanged += 1; continue; }
     if (previous === undefined) created += 1; else updated += 1;
     statements.push(env.DB.prepare("UPDATE lead_inbox_counter SET value = value + 1 WHERE id = 1"));
     statements.push(env.DB.prepare(
-      `INSERT INTO lead_inbox (source_id, content_hash, seq, payload_json, updated_at, acked_at)
-       VALUES (?, ?, (SELECT value FROM lead_inbox_counter WHERE id = 1), ?, datetime('now'), NULL)
+      `INSERT INTO lead_inbox (source_id, content_hash, seq, payload_json, updated_at, acked_at, retracted)
+       VALUES (?, ?, (SELECT value FROM lead_inbox_counter WHERE id = 1), ?, datetime('now'), NULL, 0)
        ON CONFLICT(source_id) DO UPDATE SET content_hash = excluded.content_hash, seq = excluded.seq,
-         payload_json = excluded.payload_json, updated_at = excluded.updated_at, acked_at = NULL
+         payload_json = excluded.payload_json, updated_at = excluded.updated_at, acked_at = NULL, retracted = 0
        WHERE lead_inbox.content_hash <> excluded.content_hash`
     ).bind(sourceId, hash, payload));
+  }
+  // A retraction becomes a PII-free tombstone with a new seq, even for ids never seen or already purged,
+  // so a client that received the lead earlier still hears about it.
+  let retracted = 0;
+  for (const sourceId of retractIds) {
+    if (known.get(sourceId)?.retracted === 1) continue;
+    retracted += 1;
+    statements.push(env.DB.prepare("UPDATE lead_inbox_counter SET value = value + 1 WHERE id = 1"));
+    statements.push(env.DB.prepare(
+      `INSERT INTO lead_inbox (source_id, content_hash, seq, payload_json, updated_at, acked_at, retracted)
+       VALUES (?, 'retracted', (SELECT value FROM lead_inbox_counter WHERE id = 1), NULL, datetime('now'), NULL, 1)
+       ON CONFLICT(source_id) DO UPDATE SET content_hash = 'retracted', seq = excluded.seq, payload_json = NULL,
+         updated_at = excluded.updated_at, acked_at = NULL, retracted = 1
+       WHERE lead_inbox.retracted = 0`
+    ).bind(sourceId));
   }
   try {
     if (statements.length) await env.DB.batch(statements);
   } catch {
     return json({ error: "storage_failure" }, 503);
   }
-  return json({ accepted: incoming.size, created, updated, unchanged });
+  return json({ accepted: incoming.size, created, updated, unchanged, retracted });
 }
 
 async function pullLeads(env: Env, url: URL): Promise<Response> {
@@ -224,12 +252,15 @@ async function pullLeads(env: Env, url: URL): Promise<Response> {
   const since = Number(sinceRaw);
   const limit = Math.min(Math.max(Number(limitRaw), 1), MAX_PULL_LIMIT);
   const { results } = await env.DB.prepare(
-    "SELECT source_id, seq, content_hash, payload_json FROM lead_inbox WHERE acked_at IS NULL AND seq > ? ORDER BY seq LIMIT ?"
-  ).bind(since, limit + 1).all<{ source_id: string; seq: number; content_hash: string; payload_json: string }>();
+    "SELECT source_id, seq, content_hash, payload_json, retracted FROM lead_inbox WHERE acked_at IS NULL AND seq > ? ORDER BY seq LIMIT ?"
+  ).bind(since, limit + 1).all<{ source_id: string; seq: number; content_hash: string; payload_json: string | null; retracted: number }>();
+  const counter = await env.DB.prepare("SELECT epoch FROM lead_inbox_counter WHERE id = 1").first<{ epoch: string | null }>();
   const page = (results ?? []).slice(0, limit);
-  const leads = page.map((row) => ({ source_id: row.source_id, seq: row.seq, content_hash: row.content_hash, event: JSON.parse(row.payload_json) }));
+  const leads = page.map((row) => row.retracted === 1 || row.payload_json === null
+    ? { source_id: row.source_id, seq: row.seq, retracted: true }
+    : { source_id: row.source_id, seq: row.seq, content_hash: row.content_hash, event: JSON.parse(row.payload_json) });
   const cursor = page.length ? page[page.length - 1].seq : since;
-  return json({ schema_version: "contextward.lead-inbox.v1", leads, cursor, has_more: (results ?? []).length > limit }, 200, noStore);
+  return json({ schema_version: "contextward.lead-inbox.v1", epoch: counter?.epoch ?? "none", leads, cursor, has_more: (results ?? []).length > limit }, 200, noStore);
 }
 
 async function ackLeads(request: Request, env: Env): Promise<Response> {
@@ -257,7 +288,9 @@ async function ackLeads(request: Request, env: Env): Promise<Response> {
 
 export async function purgeLeadInbox(env: Env): Promise<void> {
   if (!env.DB) return;
-  await env.DB.prepare(
-    "DELETE FROM lead_inbox WHERE (acked_at IS NOT NULL AND acked_at < datetime('now', '-30 days')) OR updated_at < datetime('now', '-90 days')"
-  ).run();
+  // Unacked leads are kept until Contextward pulls them: deleting them would lose them for good,
+  // because the exporter only re-sends changed leads. Withdrawn leads are handled by retraction.
+  await env.DB.prepare("DELETE FROM lead_inbox WHERE acked_at IS NOT NULL AND acked_at < datetime('now', '-30 days')").run();
+  // Manual exchange snapshots can carry lead PII; keep them 30 days.
+  await env.DB.prepare("DELETE FROM exchange_receipts WHERE created_at < datetime('now', '-30 days')").run();
 }

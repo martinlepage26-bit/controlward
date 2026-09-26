@@ -38,7 +38,8 @@ async function call(method: string, path: string, key: string | null, body?: unk
   return { status: response.status, body: text ? JSON.parse(text) : null, headers: response.headers };
 }
 
-const push = (leads: unknown[], key: string | null = LEADGEN_KEY) => call("POST", "/v1/leads/push", key, { schema_version: "leadgen.push.v1", leads });
+const push = (leads: unknown[], key: string | null = LEADGEN_KEY, retract?: string[]) =>
+  call("POST", "/v1/leads/push", key, { schema_version: "leadgen.push.v1", leads, ...(retract ? { retract } : {}) });
 const pull = (since = 0, key: string | null = CONTEXTWARD_KEY, limit?: number) =>
   call("GET", `/v1/leads?since=${since}${limit ? `&limit=${limit}` : ""}`, key);
 const ack = (acks: unknown[], key: string | null = CONTEXTWARD_KEY) => call("POST", "/v1/leads/ack", key, { acks });
@@ -182,14 +183,69 @@ describe("ack", () => {
   });
 });
 
+describe("retraction", () => {
+  it("a retracted lead reaches the next pull as a tombstone with no PII, then acks like any lead", async () => {
+    await push([lead("ld_1"), lead("ld_2")]);
+    const first = await pull(0);
+    await ack(first.body.leads.map((l: { source_id: string; seq: number }) => ({ source_id: l.source_id, seq: l.seq })));
+    const response = await push([], LEADGEN_KEY, ["ld_1"]);
+    expect(response.body).toMatchObject({ retracted: 1 });
+    const next = await pull(first.body.cursor);
+    expect(next.body.leads).toEqual([{ source_id: "ld_1", seq: expect.any(Number), retracted: true }]);
+    await ack([{ source_id: "ld_1", seq: next.body.leads[0].seq }]);
+    expect((await pull(0)).body.leads).toEqual([]);
+  });
+
+  it("retracting an unknown or already-purged id still leaves a tombstone; retracting twice is a no-op", async () => {
+    expect((await push([], LEADGEN_KEY, ["ld_gone"])).body).toMatchObject({ retracted: 1 });
+    expect((await push([], LEADGEN_KEY, ["ld_gone"])).body).toMatchObject({ retracted: 0 });
+    expect((await pull(0)).body.leads).toEqual([{ source_id: "ld_gone", seq: expect.any(Number), retracted: true }]);
+  });
+
+  it("a retracted lead that qualifies again comes back as a normal lead", async () => {
+    await push([lead("ld_1")]);
+    await push([], LEADGEN_KEY, ["ld_1"]);
+    await push([lead("ld_1")]);
+    const [item] = (await pull(0)).body.leads;
+    expect(item.retracted).toBeUndefined();
+    expect(item.event.event_id).toBe("ld_1");
+  });
+
+  it("the Contextward key cannot retract", async () => {
+    await push([lead("ld_1")]);
+    expect((await push([], CONTEXTWARD_KEY, ["ld_1"])).status).toBe(401);
+  });
+
+  it("rejects too many or malformed retractions", async () => {
+    expect((await push([], LEADGEN_KEY, Array.from({ length: 101 }, (_, i) => `ld_${i}`))).status).toBe(413);
+    expect((await push([], LEADGEN_KEY, ["bad id"])).status).toBe(422);
+  });
+});
+
+describe("inbox epoch", () => {
+  it("every pull reports a stable epoch so a client can detect a reset inbox", async () => {
+    const a = await pull(0);
+    const b = await pull(0);
+    expect(typeof a.body.epoch).toBe("string");
+    expect(a.body.epoch.length).toBeGreaterThan(8);
+    expect(b.body.epoch).toBe(a.body.epoch);
+  });
+});
+
 describe("retention", () => {
-  it("deletes leads acked more than 30 days ago and anything older than 90 days", async () => {
-    await push([lead("ld_old_ack"), lead("ld_recent_ack"), lead("ld_stale"), lead("ld_fresh")]);
+  it("deletes leads and tombstones acked more than 30 days ago, keeps unacked leads until pulled", async () => {
+    await push([lead("ld_old_ack"), lead("ld_recent_ack"), lead("ld_unpulled"), lead("ld_fresh")]);
     d1.exec("UPDATE lead_inbox SET acked_at = datetime('now','-31 days'), payload_json = NULL WHERE source_id = 'ld_old_ack'");
     d1.exec("UPDATE lead_inbox SET acked_at = datetime('now','-5 days'), payload_json = NULL WHERE source_id = 'ld_recent_ack'");
-    d1.exec("UPDATE lead_inbox SET updated_at = datetime('now','-91 days') WHERE source_id = 'ld_stale'");
+    d1.exec("UPDATE lead_inbox SET updated_at = datetime('now','-200 days') WHERE source_id = 'ld_unpulled'");
     await worker.scheduled!({} as ScheduledController, env, {} as ExecutionContext);
     const left = d1.rows<{ source_id: string }>("SELECT source_id FROM lead_inbox ORDER BY source_id").map((row) => row.source_id);
-    expect(left).toEqual(["ld_fresh", "ld_recent_ack"]);
+    expect(left).toEqual(["ld_fresh", "ld_recent_ack", "ld_unpulled"]);
+  });
+
+  it("deletes exchange snapshots older than 30 days", async () => {
+    d1.exec("INSERT INTO exchange_receipts (idempotency_key, receipt, payload_json, created_at) VALUES ('old', 'r1', '{}', datetime('now','-31 days')), ('new', 'r2', '{}', datetime('now'))");
+    await worker.scheduled!({} as ScheduledController, env, {} as ExecutionContext);
+    expect(d1.rows<{ idempotency_key: string }>("SELECT idempotency_key FROM exchange_receipts").map((r) => r.idempotency_key)).toEqual(["new"]);
   });
 });
