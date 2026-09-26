@@ -265,9 +265,6 @@ struct PharosClient: Sendable {
               page.schemaVersion == LeadInboxPage.schema else {
             throw IntegrationError.unexpected("PHAROS lead inbox page could not be read")
         }
-        for item in page.leads where !LeadGenEvent.supportedVersions.contains(item.event.schemaVersion ?? "leadgen.event.v1") {
-            throw IntegrationError.unexpected("PHAROS lead inbox sent an unsupported lead schema")
-        }
         return page
     }
 
@@ -287,20 +284,39 @@ struct PharosClient: Sendable {
 
 // MARK: - PHAROS lead inbox
 
+/// One inbox entry: a lead, a retraction (tombstone, no fields), or an entry whose
+/// event could not be read. Unreadable entries decode with `event == nil` so they can
+/// be skipped and acked instead of blocking the inbox.
 struct LeadInboxItem: Decodable, Sendable {
     var sourceID: String
     var seq: Int
-    var event: LeadGenEvent
-    enum CodingKeys: String, CodingKey { case sourceID = "source_id", seq, event }
+    var event: LeadGenEvent?
+    var retracted = false
+    enum CodingKeys: String, CodingKey { case sourceID = "source_id", seq, event, retracted }
+
+    init(sourceID: String, seq: Int, event: LeadGenEvent?, retracted: Bool = false) {
+        self.sourceID = sourceID; self.seq = seq; self.event = event; self.retracted = retracted
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceID = try container.decode(String.self, forKey: .sourceID)
+        seq = try container.decode(Int.self, forKey: .seq)
+        retracted = try container.decodeIfPresent(Bool.self, forKey: .retracted) ?? false
+        guard !retracted, let decoded = try? container.decode(LeadGenEvent.self, forKey: .event),
+              LeadGenEvent.supportedVersions.contains(decoded.schemaVersion ?? "leadgen.event.v1") else { event = nil; return }
+        event = decoded
+    }
 }
 
 struct LeadInboxPage: Decodable, Sendable {
     static let schema = "contextward.lead-inbox.v1"
     var schemaVersion: String
+    var epoch: String?
     var leads: [LeadInboxItem]
     var cursor: Int
     var hasMore: Bool
-    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", leads, cursor, hasMore = "has_more" }
+    enum CodingKeys: String, CodingKey { case schemaVersion = "schema_version", epoch, leads, cursor, hasMore = "has_more" }
 }
 
 struct LeadAckResult: Decodable, Sendable {
@@ -310,8 +326,8 @@ struct LeadAckResult: Decodable, Sendable {
 
 /// Counts only. This is all a lead pull ever writes to activity, jobs, or logs.
 struct LeadPullCounts: Equatable, Sendable {
-    enum Outcome { case created, updated, unchanged, skipped }
-    var created = 0, updated = 0, unchanged = 0, skipped = 0, acked = 0
+    enum Outcome { case created, updated, unchanged, skipped, removed }
+    var created = 0, updated = 0, unchanged = 0, skipped = 0, removed = 0, acked = 0
 
     mutating func add(_ outcome: Outcome) {
         switch outcome {
@@ -319,12 +335,13 @@ struct LeadPullCounts: Equatable, Sendable {
         case .updated: updated += 1
         case .unchanged: unchanged += 1
         case .skipped: skipped += 1
+        case .removed: removed += 1
         }
     }
 
-    var total: Int { created + updated + unchanged + skipped }
+    var total: Int { created + updated + unchanged + skipped + removed }
     var summary: String {
-        "\(created) new, \(updated) updated, \(unchanged) unchanged\(skipped > 0 ? ", \(skipped) skipped" : ""); \(acked) acked."
+        "\(created) new, \(updated) updated, \(unchanged) unchanged\(removed > 0 ? ", \(removed) removed" : "")\(skipped > 0 ? ", \(skipped) skipped" : ""); \(acked) acked."
     }
 }
 

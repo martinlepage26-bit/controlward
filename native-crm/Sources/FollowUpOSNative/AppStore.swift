@@ -318,14 +318,22 @@ final class AppStore: ObservableObject {
             let client = try pharosClient()
             var cursor = workspace.leadInboxCursor ?? 0
             for _ in 0..<Self.maxInboxPages {
-                let page = try await client.pullLeads(since: cursor)
-                for item in page.leads { counts.add(applyInboxLead(item)) }
+                var page = try await client.pullLeads(since: cursor)
+                // A recreated inbox restarts its sequence; a cursor from the old one would skip every new lead.
+                if let epoch = page.epoch, let known = workspace.leadInboxEpoch, epoch != known, cursor != 0 {
+                    cursor = 0
+                    workspace.leadInboxCursor = nil
+                    page = try await client.pullLeads(since: 0)
+                }
+                if let epoch = page.epoch { workspace.leadInboxEpoch = epoch }
+                for item in page.leads { counts.add(applyInboxItem(item)) }
                 if page.leads.isEmpty { break }
-                persist()
+                // Ack only what is durably saved: a failed save throws here and nothing is acked.
+                try persistOrThrow()
                 counts.acked += try await client.ackLeads(page.leads).acked
                 cursor = page.cursor
                 workspace.leadInboxCursor = cursor
-                persist()
+                try persistOrThrow()
                 if !page.hasMore { break }
             }
             job.status = "synced"
@@ -360,22 +368,43 @@ final class AppStore: ObservableObject {
         persist(message: enabled ? "Leads will be pulled when Contextward opens." : "Automatic lead pull turned off.")
     }
 
-    /// Matches by source id, then (for unlinked leads) by email, then by phone.
-    /// Existing leads keep local edits: only empty fields are filled. Scores refresh on the lead's LeadGen signal.
-    private func applyInboxLead(_ item: LeadInboxItem) -> LeadPullCounts.Outcome {
-        let identity = item.event.identity
+    private func applyInboxItem(_ item: LeadInboxItem) -> LeadPullCounts.Outcome {
+        let sourceID = "leadgen:\(item.sourceID)"
+        if item.retracted { return removeRetractedLead(sourceID) }
+        guard let event = item.event, !workspace.dismissedLeadSources.contains(sourceID) else { return .skipped }
+        return applyInboxLead(sourceID: sourceID, event: event)
+    }
+
+    /// LeadGen withdrew the lead (deletion request, consent withdrawn, or no longer qualified):
+    /// remove it and the signals that point at it.
+    private func removeRetractedLead(_ sourceID: String) -> LeadPullCounts.Outcome {
+        let ids = Set(workspace.leads.filter { $0.sourceID == sourceID }.map(\.id))
+        guard !ids.isEmpty else { return .unchanged }
+        workspace.leads.removeAll { ids.contains($0.id) }
+        workspace.signals.removeAll { $0.leadID.map(ids.contains) ?? false }
+        return .removed
+    }
+
+    /// Matches by source id, then by email (relinking a lead whose LeadGen identity was merged),
+    /// then by phone only when the emails cannot conflict. Existing leads keep local edits:
+    /// only empty fields are filled. Scores refresh on the lead's LeadGen signal.
+    private func applyInboxLead(sourceID: String, event: LeadGenEvent) -> LeadPullCounts.Outcome {
+        let identity = event.identity
         func clean(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
         let name = [clean(identity.firstName), clean(identity.lastName)].filter { !$0.isEmpty }.joined(separator: " ")
-        let email = clean(identity.email ?? item.event.email)
+        let email = clean(identity.email ?? event.email)
         let phone = clean(identity.phoneRaw)
         let company = clean(identity.companyNameRaw)
         guard !name.isEmpty || !email.isEmpty else { return .skipped }
-        let sourceID = "leadgen:\(item.sourceID)"
         let phoneKey = LeadMatching.phoneKey(phone)
+        let fromLeadGen = { (lead: Lead) in lead.sourceID == nil || lead.sourceID?.hasPrefix("leadgen:") == true }
 
         let index = workspace.leads.firstIndex { $0.sourceID == sourceID }
-            ?? (email.isEmpty ? nil : workspace.leads.firstIndex { $0.sourceID == nil && $0.email.caseInsensitiveCompare(email) == .orderedSame })
-            ?? (phoneKey == nil ? nil : workspace.leads.firstIndex { $0.sourceID == nil && LeadMatching.phoneKey($0.phone) == phoneKey })
+            ?? (email.isEmpty ? nil : workspace.leads.firstIndex { fromLeadGen($0) && $0.email.caseInsensitiveCompare(email) == .orderedSame })
+            // A shared switchboard number is not identity: never match two people with different emails.
+            ?? (phoneKey == nil ? nil : workspace.leads.firstIndex {
+                $0.sourceID == nil && LeadMatching.phoneKey($0.phone) == phoneKey && ($0.email.isEmpty || email.isEmpty)
+            })
 
         var lead: Lead
         let created = index == nil
@@ -383,7 +412,7 @@ final class AppStore: ObservableObject {
             lead = workspace.leads[index]
         } else {
             lead = Lead.blank()
-            lead.createdAt = item.event.capturedAt ?? lead.createdAt
+            lead.createdAt = event.capturedAt ?? lead.createdAt
         }
         let before = lead
         lead.sourceID = sourceID
@@ -393,9 +422,9 @@ final class AppStore: ObservableObject {
         if lead.company.isEmpty { lead.company = company }
         if let index { workspace.leads[index] = lead } else { workspace.leads.insert(lead, at: 0) }
 
-        let fit = min(max(item.event.fitScore ?? 0, 0), 100)
-        let intent = min(max(item.event.intentScore ?? 0, 0), 100)
-        let priority = min(max(item.event.compositeScore ?? ((fit + intent) / 2), 0), 100)
+        let fit = min(max(event.fitScore ?? 0, 0), 100)
+        let intent = min(max(event.intentScore ?? 0, 0), 100)
+        let priority = min(max(event.compositeScore ?? ((fit + intent) / 2), 0), 100)
         let signalIndex = workspace.signals.firstIndex { $0.leadID == lead.id && $0.source == .imported }
         var signal = signalIndex.map { workspace.signals[$0] } ?? Signal()
         let signalBefore = signal
@@ -405,9 +434,9 @@ final class AppStore: ObservableObject {
             signal.status = .qualified
             signal.leadID = lead.id
             signal.nextAction = "Review the qualified lead and make first contact."
-            signal.capturedAt = item.event.capturedAt ?? signal.capturedAt
+            signal.capturedAt = event.capturedAt ?? signal.capturedAt
         }
-        signal.evidence = "Pulled from the PHAROS lead inbox. LeadGen id: \(item.sourceID)."
+        signal.evidence = "Pulled from the PHAROS lead inbox. LeadGen id: \(sourceID.dropFirst("leadgen:".count))."
         signal.fitScore = fit
         signal.intentScore = intent
         signal.priority = priority
@@ -586,6 +615,10 @@ final class AppStore: ObservableObject {
 
     func delete(_ lead: Lead) {
         workspace.leads.removeAll { $0.id == lead.id }
+        // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
+        if let source = lead.sourceID, source.hasPrefix("leadgen:"), !workspace.dismissedLeadSources.contains(source) {
+            workspace.dismissedLeadSources.append(source)
+        }
         persist(message: "Lead deleted.")
     }
 
@@ -1033,6 +1066,13 @@ final class AppStore: ObservableObject {
               let decoded = try? JSONDecoder().decode(PersistentWorkspace.self, from: data)
         else { return PersistentWorkspace() }
         return decoded
+    }
+
+    /// Saves or throws. Used before acking pulled leads, so an ack never outruns the disk.
+    private func persistOrThrow() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try SecureFiles.writePrivate(try encoder.encode(workspace), to: storageURL)
     }
 
     private func persist(message: String? = nil) {

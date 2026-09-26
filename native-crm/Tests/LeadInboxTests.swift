@@ -14,6 +14,13 @@ enum LeadInboxTests {
             ("Lead inbox: 401 surfaces on the job and leaves the cursor untouched", unauthorized),
             ("Lead inbox: no keys or PII in activity, jobs, health, notices, or logs", noKeysOrPII),
             ("Lead inbox: auto pull on open only when enabled and configured", autoPull),
+            ("Lead inbox: a retraction removes the lead and its signal, counts only", retraction),
+            ("Lead inbox: nothing is acked when the workspace cannot be saved", noAckWithoutSave),
+            ("Lead inbox: phone match never links a lead with a different email", phoneConflict),
+            ("Lead inbox: a LeadGen merge relinks by email instead of duplicating", mergeRelink),
+            ("Lead inbox: one malformed item is skipped and acked, the rest apply", malformedItem),
+            ("Lead inbox: a new inbox epoch resets the saved cursor", epochReset),
+            ("Lead inbox: a lead deleted in Contextward is not recreated", deletedStaysDeleted),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -32,7 +39,8 @@ enum LeadInboxTests {
     static let key = "pk_inbox_\(UUID().uuidString)"
 
     final class FakeInbox: HTTPTransport, @unchecked Sendable {
-        struct Item { var sourceID: String; var seq: Int; var event: [String: Any]; var acked = false }
+        struct Item { var sourceID: String; var seq: Int; var event: [String: Any]?; var acked = false; var retracted = false; var raw: [String: Any]? = nil }
+        var epoch = "epoch-1"
         let key: String
         private let lock = NSLock()
         private var items: [Item] = []
@@ -54,6 +62,24 @@ enum LeadInboxTests {
             }
         }
 
+        func retract(_ sourceID: String) {
+            lock.withLock {
+                counter += 1
+                items.removeAll { $0.sourceID == sourceID }
+                items.append(Item(sourceID: sourceID, seq: counter, event: nil, retracted: true))
+            }
+        }
+
+        /// An item whose event does not decode (unsupported schema).
+        func addMalformed(_ sourceID: String) {
+            lock.withLock {
+                counter += 1
+                items.append(Item(sourceID: sourceID, seq: counter, event: nil, raw: ["source_id": sourceID, "seq": counter, "event": ["schema_version": "leadgen.event.v99", "raw_identity": 42]]))
+            }
+        }
+
+        func resetInbox(epoch newEpoch: String) { lock.withLock { items = []; counter = 0; epoch = newEpoch } }
+
         var pending: Int { lock.withLock { items.filter { !$0.acked }.count } }
         var pullSinceValues: [String] {
             lock.withLock { requests.filter { $0.url?.path == "/v1/leads" }.compactMap { URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "since" }?.value } }
@@ -73,7 +99,12 @@ enum LeadInboxTests {
                     let matching = items.filter { !$0.acked && $0.seq > since }.sorted { $0.seq < $1.seq }
                     let page = Array(matching.prefix(limit))
                     return reply(200, ["schema_version": "contextward.lead-inbox.v1",
-                                       "leads": page.map { ["source_id": $0.sourceID, "seq": $0.seq, "content_hash": "h\($0.seq)", "event": $0.event] },
+                                       "epoch": epoch,
+                                       "leads": page.map { item -> [String: Any] in
+                                           if let raw = item.raw { return raw }
+                                           if item.retracted { return ["source_id": item.sourceID, "seq": item.seq, "retracted": true] }
+                                           return ["source_id": item.sourceID, "seq": item.seq, "content_hash": "h\(item.seq)", "event": item.event ?? [:]]
+                                       },
                                        "cursor": page.last?.seq ?? since, "has_more": matching.count > limit])
                 }
                 if path == "/v1/leads/ack", request.httpMethod == "POST" {
@@ -235,5 +266,103 @@ enum LeadInboxTests {
         try expect(enabled.workspace.autoPullLeads, "auto pull should default to on")
         await enabled.pullLeadsOnLaunch()
         try expect(enabled.leads.count == 1, "auto pull did not run when enabled and configured")
+    }
+
+    static func retraction() async throws {
+        let fake = FakeInbox(key: key)
+        fake.add("ident_a", email: "a@example.test", first: "Ana", last: "Gone")
+        fake.add("ident_b", email: "b@example.test", first: "Ben", last: "Stays")
+        let store = try makeStore(fake)
+        _ = await store.pullLeads()
+        try expect(store.leads.count == 2 && store.signals.count == 2, "setup pull failed")
+        fake.retract("ident_a")
+        fake.retract("ident_never_seen")
+        let job = await store.pullLeads()
+        try expect(job.status == "synced", "pull failed: \(job.error ?? "")")
+        try expect(store.leads.map(\.sourceID) == ["leadgen:ident_b"], "retracted lead not removed: \(store.leads.map(\.sourceID))")
+        try expect(store.signals.count == 1, "retracted lead's signal not removed")
+        try expect(fake.pending == 0, "retractions not acked")
+        try expect(job.detail?.contains("1 removed") == true, "removed not counted: \(job.detail ?? "")")
+        try expect(!store.activity.contains { $0.message.contains("Ana") || $0.message.contains("a@example.test") }, "PII in activity")
+    }
+
+    static func noAckWithoutSave() async throws {
+        let fake = FakeInbox(key: key)
+        fake.add("ident_a", email: "a@example.test", first: "A", last: "One")
+        let store = try makeStore(fake)
+        // Make the save target a directory, so every write of workspace.json fails.
+        try? FileManager.default.removeItem(at: store.storageURL)
+        try FileManager.default.createDirectory(at: store.storageURL.appendingPathComponent("blocker"), withIntermediateDirectories: true)
+        let job = await store.pullLeads()
+        try expect(job.status == "failed", "pull reported success although the save failed")
+        try expect(fake.pending == 1, "lead was acked although it was never saved")
+    }
+
+    static func phoneConflict() async throws {
+        let fake = FakeInbox(key: key)
+        let store = try makeStore(fake)
+        var dan = Lead.blank(); dan.name = "Dan Local"; dan.email = "dan@company.test"; dan.phone = "+1 514 555 0100"; store.add(dan)
+        fake.add("ident_x", email: "someone.else@company.test", first: "Other", last: "Person", phone: "514-555-0100")
+        _ = await store.pullLeads()
+        try expect(store.leads.count == 2, "a different person was merged into Dan by switchboard phone")
+        try expect(store.leads.first { $0.id == dan.id }?.sourceID == nil, "Dan was linked to another person's LeadGen id")
+        // Phone still matches when one side has no email.
+        var noEmail = Lead.blank(); noEmail.name = "No Email"; noEmail.phone = "438 555 0111"; store.add(noEmail)
+        fake.add("ident_y", email: "y@example.test", first: "Y", last: "Person", phone: "+1 438-555-0111")
+        _ = await store.pullLeads()
+        try expect(store.leads.first { $0.id == noEmail.id }?.sourceID == "leadgen:ident_y", "phone match without email conflict did not link")
+    }
+
+    static func mergeRelink() async throws {
+        let fake = FakeInbox(key: key)
+        fake.add("ident_old", email: "merge@example.test", first: "Mia", last: "Merge")
+        let store = try makeStore(fake)
+        _ = await store.pullLeads()
+        fake.add("ident_new", email: "merge@example.test", first: "Mia", last: "Merge", fit: 88)
+        fake.retract("ident_old")
+        let job = await store.pullLeads()
+        try expect(store.leads.count == 1, "merge created a duplicate or the retraction removed the relinked lead: \(store.leads.count)")
+        try expect(store.leads.first?.sourceID == "leadgen:ident_new", "lead not relinked to the surviving id")
+        try expect(store.signals.count == 1 && store.signals.first?.fitScore == 88, "signal not carried over")
+        try expect(job.status == "synced", "pull failed: \(job.error ?? "")")
+    }
+
+    static func malformedItem() async throws {
+        let fake = FakeInbox(key: key)
+        fake.add("ident_a", email: "a@example.test", first: "A", last: "One")
+        fake.addMalformed("ident_bad")
+        fake.add("ident_c", email: "c@example.test", first: "C", last: "Three")
+        let store = try makeStore(fake)
+        let job = await store.pullLeads()
+        try expect(job.status == "synced", "one bad item failed the whole pull: \(job.error ?? "")")
+        try expect(store.leads.count == 2, "valid items not applied")
+        try expect(fake.pending == 0, "bad item not acked, so it would block the inbox")
+        try expect(job.detail?.contains("1 skipped") == true, "skip not counted: \(job.detail ?? "")")
+    }
+
+    static func epochReset() async throws {
+        let fake = FakeInbox(key: key)
+        for index in 0..<3 { fake.add("ident_\(index)", email: "e\(index)@example.test", first: "E", last: "\(index)") }
+        let store = try makeStore(fake)
+        _ = await store.pullLeads()
+        try expect(store.workspace.leadInboxCursor == 3, "setup cursor wrong")
+        fake.resetInbox(epoch: "epoch-2")
+        fake.add("ident_fresh", email: "fresh@example.test", first: "F", last: "Resh")
+        _ = await store.pullLeads()
+        try expect(store.leads.contains { $0.sourceID == "leadgen:ident_fresh" }, "lead in the recreated inbox was skipped by the stale cursor")
+        try expect(store.workspace.leadInboxCursor == 1, "cursor not reset for the new epoch")
+    }
+
+    static func deletedStaysDeleted() async throws {
+        let fake = FakeInbox(key: key)
+        fake.add("ident_a", email: "a@example.test", first: "A", last: "One")
+        let store = try makeStore(fake)
+        _ = await store.pullLeads()
+        guard let lead = store.leads.first else { throw SmokeTestFailure.failed("setup pull failed") }
+        store.delete(lead)
+        fake.add("ident_a", email: "a@example.test", first: "A", last: "One", fit: 99)
+        let job = await store.pullLeads()
+        try expect(store.leads.isEmpty, "a lead deleted in Contextward came back")
+        try expect(fake.pending == 0 && job.detail?.contains("1 skipped") == true, "dismissed lead not skipped and acked: \(job.detail ?? "")")
     }
 }

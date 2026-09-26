@@ -97,6 +97,10 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     var leadInboxCursor: Int?
     /// Pull leads from the PHAROS lead inbox when the app opens (needs the PHAROS endpoint and key).
     var autoPullLeads = true
+    /// Epoch of the inbox the cursor belongs to; a different epoch resets the cursor.
+    var leadInboxEpoch: String?
+    /// LeadGen source ids of leads deleted in Contextward, so later updates do not recreate them. Ids only.
+    var dismissedLeadSources: [String] = []
 
     init() {}
 
@@ -122,10 +126,12 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
         lastSecurityReview = try container.decodeIfPresent(String.self, forKey: .lastSecurityReview)
         leadInboxCursor = try container.decodeIfPresent(Int.self, forKey: .leadInboxCursor)
         autoPullLeads = try container.decodeIfPresent(Bool.self, forKey: .autoPullLeads) ?? true
+        leadInboxEpoch = try container.decodeIfPresent(String.self, forKey: .leadInboxEpoch)
+        dismissedLeadSources = try container.decodeIfPresent([String].self, forKey: .dismissedLeadSources) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview, leadInboxCursor, autoPullLeads
+        case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview, leadInboxCursor, autoPullLeads, leadInboxEpoch, dismissedLeadSources
     }
 }
 
