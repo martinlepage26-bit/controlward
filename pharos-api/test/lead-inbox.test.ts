@@ -45,6 +45,12 @@ const pull = (since = 0, key: string | null = CONTEXTWARD_KEY, limit?: number) =
 const ack = (acks: unknown[], key: string | null = CONTEXTWARD_KEY) => call("POST", "/v1/leads/ack", key, { acks });
 
 describe("authentication", () => {
+  it("reports the configured environment and D1 storage without authentication", async () => {
+    const response = await call("GET", "/v1/health", null);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true, service: "pharos-contextward-api", environment: "test", storage: "d1" });
+  });
+
   it("rejects push without a key or with a wrong key", async () => {
     expect((await push([lead("ld_1")], null)).status).toBe(401);
     expect((await push([lead("ld_1")], "wrong")).status).toBe(401);

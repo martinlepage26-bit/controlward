@@ -30,16 +30,25 @@ When a D1 binding is provisioned, the packet persists the payload and enforces
 idempotency. Without that binding it returns `persisted: false` and never
 pretends a receipt means durable storage.
 
-The included migration creates the receipt table. Creating the Cloudflare D1
-database, setting its `database_id`, adding the `DB` binding, and deploying
-still require owner-controlled credentials and authorization.
+The included migrations create the receipt and lead-inbox tables. The production
+Worker is `pharos-contextward-api`, backed by the configured
+`pharos-contextward` D1 database and scheduled at `17 3 * * *`.
 
 ## Local validation
 
 ```bash
-npx vitest run --config pharos-api/vitest.config.ts
-npx wrangler types --config pharos-api/wrangler.jsonc
-npx wrangler deploy --config pharos-api/wrangler.jsonc --dry-run
+yarn test:worker
+yarn check:worker
 ```
 
-Deployment is not performed by this packet.
+Production deployment is deliberately separate from validation:
+
+```bash
+npx wrangler d1 migrations list pharos-contextward --remote --config pharos-api/wrangler.jsonc
+npx wrangler deploy --config pharos-api/wrangler.jsonc
+curl --fail --silent --show-error https://pharos-contextward-api.ml-c38.workers.dev/v1/health
+```
+
+The remote health response must report `environment: "production"` and
+`storage: "d1"`. Never place either Worker secret in source, command arguments,
+logs, or GitHub workflow files.

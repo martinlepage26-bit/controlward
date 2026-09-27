@@ -33,17 +33,29 @@ provider credentials remain outside the native workspace.
 ./bin/build-native-app
 ```
 
-The signed development bundle is created at:
+The signed production bundle is created at:
 
 ```text
 native-crm/dist/Contextward.app
 ```
 
 The bundle intentionally remains in this workspace to comply with the managed
-Mac host boundary. It is ad-hoc signed with the hardened runtime and the App
-Sandbox (`Resources/Contextward.entitlements`: sandbox, user-selected
-read-write files, outbound network for the endpoint preflight). Developer ID
-signing and notarization need an Apple signing identity and are not done here.
+Mac host boundary. `bin/build-native-app` uses the installed Developer ID
+Application identity when available and otherwise falls back to an ad-hoc local
+signature. Both paths enable the hardened runtime and App Sandbox
+(`Resources/Contextward.entitlements`: sandbox, user-selected read-write files,
+and outbound network access). The current Mac build is Developer ID signed;
+notarization is a separate distribution step and is not claimed here.
+
+Create a versioned, checksum-bearing ZIP without modifying workspace data:
+
+```bash
+./bin/package-native-app
+```
+
+Release artifacts are written below `native-crm/release/`, which is excluded
+from Git. The packaging command re-runs the complete native test/build/signature
+gate before producing the archive and SHA-256 file.
 
 ## Data location
 

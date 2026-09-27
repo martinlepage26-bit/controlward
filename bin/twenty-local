@@ -101,7 +101,9 @@ case "$command_name" in
   status)
     limactl list
     if [ "$(engine_status)" = "Running" ]; then
-      yarn twenty docker:status
+      # The upstream status command prints seeded login credentials. They are
+      # neither health evidence nor appropriate terminal/log output.
+      yarn twenty docker:status | sed '/^[[:space:]]*Login:/d'
       curl -fsS http://127.0.0.1:2020/healthz || true
       echo
     fi

@@ -5,7 +5,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-30",
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "production"
   },
   "observability": { "enabled": true },
   // Daily lead-inbox retention (see migrations/0002_lead_inbox.sql).

@@ -2,56 +2,64 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request: {}
 
 permissions:
   contents: read
-
-env:
-  TWENTY_VERSION: latest
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  extension-and-worker:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+      - run: yarn install --immutable
+      - run: yarn lint
+      - run: yarn typecheck
+      - run: yarn test:unit
+      - run: yarn test:worker
+      - run: yarn check:worker
 
+  twenty-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - name: Spawn Twenty test instance
         id: twenty
         uses: twentyhq/twenty/.github/actions/spawn-twenty-app-dev-test@main
         with:
-          twenty-version: ${{ env.TWENTY_VERSION }}
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          twenty-version: latest
+      - run: corepack enable
+      - uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
+          node-version-file: .nvmrc
           cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      - name: Lint
-        run: yarn lint
-
-      - name: Typecheck
-        run: yarn typecheck
-
-      - name: Unit tests
-        run: yarn test:unit
-
-      - name: Run integration tests
+      - run: yarn install --immutable
+      - name: Run Twenty integration tests
         run: yarn test
         env:
           TWENTY_API_URL: ${{ steps.twenty.outputs.server-url }}
           TWENTY_API_KEY: ${{ steps.twenty.outputs.api-key }}
+
+  native-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Swift toolchain
+        run: |
+          expected="$(tr -d '[:space:]' < native-crm/.swift-version)"
+          actual="$(swift --version | sed -nE 's/.*Swift version ([0-9]+\.[0-9]+).*/\1/p' | head -1)"
+          test "$actual" = "$expected"
+      - name: Native test suite
+        run: ./bin/test-native-app
+      - name: Native release build
+        run: swift build -c release --package-path native-crm

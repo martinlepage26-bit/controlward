@@ -21,7 +21,7 @@ Reference inspected: `https://followupos.pages.dev/`, as linked by
 | Six PHAROS protection lenses | Expandable native disclosures |
 | Business settings | Native Settings view |
 | Full reset with confirmation | Native destructive confirmation |
-| Persistent local data | Atomic JSON file under `native-crm/data` |
+| Persistent local data | Atomic JSON file in the sandboxed owner-only `Application Support/Contextward` directory |
 | Browser-independent operation | Native SwiftUI/AppKit executable; no HTTP server |
 | People/Contacts object | Dedicated `Contact` records with company and lead relationships |
 | Companies object | Dedicated `Company` records with domain, industry, phone, and notes |
@@ -31,6 +31,11 @@ Reference inspected: `https://followupos.pages.dev/`, as linked by
 | Workspace navigation | Native sidebar for each object and settings/security |
 | Saved views | Default local views for all contacts, open opportunities, and tasks |
 | Backward compatibility | Existing FollowUp OS JSON workspaces migrate with new collections empty/defaulted |
+| PHAROS backend | Authenticated, idempotent exchange push with D1 receipts |
+| Lead inbox | Authenticated pagination, acknowledgement, retraction, cursor persistence, and automatic pull |
+| Gap analysis | Read-only, keyset-paginated import with retirement and reactivation |
+| Twenty | Preview-bound, idempotent create/update push with no deletes |
+| Workspace recovery | Corrupt files are preserved and writes remain blocked until recovery |
 
 The deployed reference tries a remote Anthropic request and falls back to a
 standard template when it cannot complete. The native build improves privacy

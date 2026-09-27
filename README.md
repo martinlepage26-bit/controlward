@@ -1,34 +1,70 @@
-# My Twenty App
+# Contextward
 
-Describe your app in one or two sentences.
+Contextward is a local-first macOS relationship and operations workspace for
+PHAROS. It combines a native SwiftUI CRM, governed external connectors, a
+Twenty app extension, and a small Cloudflare Worker/D1 edge service.
 
-## Features
+## What is operational
 
-List the top things your app does, for example:
+- Native Contacts, Companies, Opportunities, Tasks, Notes, pipeline, saved
+  views, Lantern audits, LeadGen signals, automations, and activity history.
+- Owner-only atomic local persistence with backups, import limits, corruption
+  blocking, and Keychain-backed connector credentials.
+- Authenticated PHAROS exchange pushes and lead-inbox pulling through the live
+  `pharos-contextward-api` Worker and D1.
+- Read-only Gap Analysis imports with pagination and lifecycle reconciliation.
+- Preview-bound Twenty pushes that create or update records and never delete.
+- Developer ID signed macOS builds and reproducible checksum-bearing ZIPs.
 
-- Feature one
-- Feature two
-- Feature three
+## Mac build
 
-## Getting started
+```bash
+./bin/test-native-app
+./bin/build-native-app
+open native-crm/dist/Contextward.app
+```
 
-Setup instructions live in [SETUP.md](SETUP.md).
+The persistent Desktop shortcut is:
 
-## Publishing
+```text
+~/Desktop/Contextward.app -> native-crm/dist/Contextward.app
+```
 
-The `Publish` workflow (`.github/workflows/publish.yml`) publishes the app to npm with provenance using [npm trusted publishing](https://docs.npmjs.com/trusted-publishers). To publish:
+Create a verified release archive with:
 
-1. On npmjs.com register this repository as a trusted publisher of your package, pointing at the `publish.yml` workflow.
-2. Bump the version in `package.json`, then push a version tag (e.g. `git tag v1.0.0 && git push --tags`) or run the workflow manually from the Actions tab.
+```bash
+./bin/package-native-app
+```
 
-Publishing with provenance is also how you prove ownership when claiming your app in a Twenty marketplace.
+See [`native-crm/README.md`](native-crm/README.md) for data paths, migration,
+security boundaries, imports, and native behavior.
 
-## Changelog
+## Worker validation
 
-Notable changes are documented in [CHANGELOG.md](CHANGELOG.md).
+```bash
+corepack yarn install --immutable
+yarn test:worker
+yarn check:worker
+```
 
-## Learn more
+The live public health endpoint is:
 
-- [Twenty Apps documentation](https://docs.twenty.com/developers/extend/apps/getting-started/quick-start)
-- [twenty-sdk CLI reference](https://www.npmjs.com/package/twenty-sdk)
-- [Discord](https://discord.gg/cx5n4Jzs57)
+<https://pharos-contextward-api.ml-c38.workers.dev/v1/health>
+
+See [`pharos-api/README.md`](pharos-api/README.md) for the authenticated route
+contract, retention policy, deployment procedure, and secret boundaries.
+
+## Twenty extension
+
+The repository also contains a Twenty extension scaffold. Local setup and the
+persistent Lima-based development environment are documented in
+[`SETUP.md`](SETUP.md). The native app does not require Twenty, Docker, a
+browser, or a localhost server to run.
+
+## Release gates
+
+GitHub CI validates the extension, Worker, Twenty integration, native Swift
+tests, and native release compilation. Production Worker deployment is manual
+and environment-gated; it requires the repository's protected
+`CLOUDFLARE_API_TOKEN` secret and performs tests, a dry run, D1 migrations,
+deployment, and live health verification in that order.
