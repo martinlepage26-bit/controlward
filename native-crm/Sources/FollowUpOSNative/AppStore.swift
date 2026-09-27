@@ -1,7 +1,9 @@
 import AppKit
 import CryptoKit
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 import OSLog
 import UserNotifications
 import SwiftUI
@@ -1164,12 +1166,17 @@ final class AppStore: ObservableObject {
 
     func generateMessage(for lead: Lead) async -> GeneratedMessage {
         let fallback = standardMessage(for: lead)
+#if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else {
             return GeneratedMessage(text: fallback, usedIntelligence: false)
         }
         return await generateOnDevice(for: lead, fallback: fallback)
+#else
+        return GeneratedMessage(text: fallback, usedIntelligence: false)
+#endif
     }
 
+#if canImport(FoundationModels)
     @available(macOS 26.0, *)
     private func generateOnDevice(for lead: Lead, fallback: String) async -> GeneratedMessage {
         guard SystemLanguageModel.default.availability == .available else {
@@ -1189,6 +1196,7 @@ final class AppStore: ObservableObject {
             return GeneratedMessage(text: fallback, usedIntelligence: false)
         }
     }
+#endif
 
     func standardMessage(for lead: Lead) -> String {
         let firstName = lead.name.split(separator: " ").first.map(String.init) ?? lead.name
