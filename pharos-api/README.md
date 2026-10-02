@@ -18,11 +18,21 @@ Cloudflare Worker edge contract for the native Contextward workspace.
   `epoch` means the inbox was recreated and the client resets its cursor.
 - `POST /v1/leads/ack` (Contextward key only): `{acks:[{source_id, seq}]}`. Acks
   the exact version pulled and clears its payload.
+- `POST /v1/intake` (public on allowed origins, or `Authorization: Bearer $INTAKE_KEY`
+  for servers such as the KAIROS signup hook): `{name, email, company?, interest,
+  source, note?, test?}`. Stores the lead in `intake_leads`, routes it by `interest`
+  (kairos, contextward, quickscan, pharos, security, lavoie, fba, secondact, aid,
+  northbound, meta-ads, research) to a Project Control project, copies it into the
+  lead inbox as `intake:<id>`, and files a Project Control intake item with the
+  `PC_FEED_TOKEN` feed key (masked email only). Browser posts are limited to 5 per
+  IP per hour and have a `website` honeypot. Nothing is ever sent to the lead.
+- `GET /v1/intake` (Contextward key only): the 100 most recent intake rows.
 - Cron `17 3 * * *`: deletes lead rows acked more than 30 days ago (unacked
   leads stay until pulled) and exchange snapshots older than 30 days.
 
-Keys are Worker secrets: `PHAROS_API_KEY` (Contextward) and `LEADGEN_PUSH_KEY`
-(the LeadGen OS exporter on CT920). Neither key can use the other's routes.
+Keys are Worker secrets: `PHAROS_API_KEY` (Contextward), `LEADGEN_PUSH_KEY`
+(the LeadGen OS exporter on CT920), `INTAKE_KEY` (server intake) and `PC_FEED_TOKEN`
+(Project Control feed connection). Neither key can use the other's routes.
 
 `POST /v1/exchange/push` requires `Authorization: Bearer $PHAROS_API_KEY`, an
 `Idempotency-Key` header, and a `contextward.exchange.v1` JSON body. The
