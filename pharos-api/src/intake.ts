@@ -178,7 +178,9 @@ async function fileProjectControlItem(
   const label = INTAKE_ROUTES[lead.route].label;
   const summary = `${lead.test ? "[TEST] " : ""}New lead via ${lead.source} for ${label}: ${lead.name} (${maskEmail(lead.email)})${lead.company ? `, ${lead.company}` : ""}. Suggested project ${lead.project}. Full record in the ContextWard lead inbox (${lead.id}). No reply has been sent.`;
   try {
-    const response = await fetch(`${PC_URL}/api/items`, {
+    // Same-account workers.dev fetches are refused by Cloudflare, so prefer the service binding.
+    const send = env.PROJECT_CONTROL ? env.PROJECT_CONTROL.fetch.bind(env.PROJECT_CONTROL) : fetch;
+    const response = await send(`${PC_URL}/api/items`, {
       method: "POST",
       headers: { authorization: `Bearer ${env.PC_FEED_TOKEN}`, "content-type": "application/json", "user-agent": "pharos-contextward-intake/1.0" },
       body: JSON.stringify({

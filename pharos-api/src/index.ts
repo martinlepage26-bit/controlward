@@ -10,6 +10,8 @@ export interface Env {
   INTAKE_KEY?: string;
   /** Project Control feed-role token: inserts intake items only. */
   PC_FEED_TOKEN?: string;
+  /** Service binding to the project-control Worker (same account, so a public fetch would 404). */
+  PROJECT_CONTROL?: Fetcher;
   DB?: D1Database;
 }
 
