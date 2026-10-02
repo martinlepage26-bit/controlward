@@ -96,6 +96,15 @@ describe("intake", () => {
     expect(r.body.project_control.filed).toBe(false);
   });
 
+  it("uses the Project Control service binding when present", async () => {
+    const bound: string[] = [];
+    env.PROJECT_CONTROL = { fetch: async (url: string) => { bound.push(String(url)); return new Response(JSON.stringify({ id: "viaBinding" }), { status: 201 }); } } as unknown as Fetcher;
+    const r = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+    expect(r.body.project_control.item_id).toBe("viaBinding");
+    expect(bound[0]).toContain("/api/items");
+    expect(pcCalls).toHaveLength(0);
+  });
+
   it("helpers", () => {
     expect(maskEmail("martin@example.ca")).toBe("m***@example.ca");
     expect(isTestLead("TEST Pipeline", "a@b.ca", undefined)).toBe(true);

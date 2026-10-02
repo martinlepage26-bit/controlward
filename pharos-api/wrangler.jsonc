@@ -10,6 +10,8 @@
   "observability": { "enabled": true },
   // Daily lead-inbox retention (see migrations/0002_lead_inbox.sql).
   "triggers": { "crons": ["17 3 * * *"] },
+  // Project Control intake items (see src/intake.ts).
+  "services": [{ "binding": "PROJECT_CONTROL", "service": "project-control" }],
   "d1_databases": [
     {
       "binding": "DB",
