@@ -105,6 +105,53 @@ describe("intake", () => {
     expect(pcCalls).toHaveLength(0);
   });
 
+  it("files the item against the published Project Control request contract", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ id: "pc_contract" }), { status: 201, headers: { "content-type": "application/json" } });
+    });
+    const r = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+
+    expect(r.status).toBe(201);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://project-control.ml-c38.workers.dev/api/items");
+    expect(calls[0].init.method).toBe("POST");
+
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer pc-feed-not-real");
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers["user-agent"]).toBe("pharos-contextward-intake/1.0");
+
+    const body = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["link", "metadata", "source", "source_id", "summary"]);
+    expect(body.source).toBe("contextward-intake");
+    expect(body.source_id).toBe(r.body.id);
+    expect(body.metadata).toEqual({ route: "quickscan", suggested_project_id: "kpji3kub", origin: "kairos", test: true });
+    // The link resolves to this lead, not to a generic health page.
+    expect(body.link).toBe(`https://pharos-contextward-api.ml-c38.workers.dev/v1/intake?id=${r.body.id}`);
+  });
+
+  it("reports the upstream status when Project Control rejects the item", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }));
+    const r = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+    expect(r.status).toBe(201);
+    expect(r.body.project_control).toEqual({ filed: false, item_id: undefined, status: 403 });
+  });
+
+  it("resolves one intake lead by id and rejects a malformed id", async () => {
+    const created = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+    const read = async (query: string) =>
+      worker.fetch(new Request(`${BASE}/v1/intake${query}`, { headers: { authorization: `Bearer ${CONTEXTWARD_KEY}` } }), env);
+
+    const one = await read(`?id=${created.body.id}`);
+    expect(one.status).toBe(200);
+    expect(((await one.json()) as { leads: { id: string }[] }).leads.map((row) => row.id)).toEqual([created.body.id]);
+
+    expect((await read("?id=not-an-id")).status).toBe(422);
+    expect(((await (await read("")).json()) as { leads: unknown[] }).leads).toHaveLength(1);
+  });
+
   it("helpers", () => {
     expect(maskEmail("martin@example.ca")).toBe("m***@example.ca");
     expect(isTestLead("TEST Pipeline", "a@b.ca", undefined)).toBe(true);

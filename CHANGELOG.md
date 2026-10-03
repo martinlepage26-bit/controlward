@@ -2,9 +2,10 @@
 
 All notable changes to this application are documented in this file.
 
-## 1.0.0 - 2026-09-26
+## 0.1.0 - 2026-09-26
 
-- Shipped the Developer ID signed native Contextward macOS workspace.
+- Shipped the native Contextward macOS workspace (Developer ID signed when a
+  signing identity is available, ad-hoc otherwise).
 - Added guarded PHAROS and Twenty connectors with Keychain-backed credentials.
 - Added the PHAROS lead inbox with pagination, acknowledgement, retractions,
   persisted cursors, and automatic polling.

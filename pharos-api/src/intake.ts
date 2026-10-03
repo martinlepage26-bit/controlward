@@ -29,7 +29,9 @@ const DEFAULT_ROUTE = "contextward";
 
 const ORIGIN = /^https:\/\/([a-z0-9-]+\.)*(pharos-ai\.ca|govern-ai\.ca)$|^https:\/\/([a-z0-9-]+\.)?kairos-dashboard-dy4\.pages\.dev$|^https:\/\/[a-z0-9-]+\.ml-c38\.workers\.dev$/;
 const EMAIL = /^[^\s@<>()",;:]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$/;
+const INTAKE_ID = /^in_[a-z0-9]{20}$/;
 const PC_URL = "https://project-control.ml-c38.workers.dev";
+const API_BASE = "https://pharos-contextward-api.ml-c38.workers.dev";
 const BROWSER_LIMIT_PER_HOUR = 5;
 
 const json = (body: unknown, status = 200, headers: HeadersInit = {}) =>
@@ -90,9 +92,13 @@ export async function handleIntake(request: Request, env: Env, url: URL): Promis
     // Martin's view of recent intake, Contextward key only.
     if (!(await keyMatches(request.headers.get("authorization"), env.PHAROS_API_KEY))) return json({ error: "unauthorized" }, 401);
     if (!env.DB) return json({ error: "storage_unavailable" }, 503);
-    const { results } = await env.DB.prepare(
-      "SELECT id, created_at, source, route, project_id, name, email, company, test, status, pc_item_id, pc_status FROM intake_leads ORDER BY created_at DESC LIMIT 100"
-    ).all();
+    const columns = "id, created_at, source, route, project_id, name, email, company, test, status, pc_item_id, pc_status";
+    const id = url.searchParams.get("id");
+    if (id !== null && !INTAKE_ID.test(id)) return json({ error: "invalid_id" }, 422);
+    const query = id
+      ? env.DB.prepare(`SELECT ${columns} FROM intake_leads WHERE id = ? LIMIT 1`).bind(id)
+      : env.DB.prepare(`SELECT ${columns} FROM intake_leads ORDER BY created_at DESC LIMIT 100`);
+    const { results } = await query.all();
     return json({ schema_version: "contextward.intake.v1", leads: results ?? [] });
   }
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, cors);
@@ -187,7 +193,9 @@ async function fileProjectControlItem(
         source: "contextward-intake",
         source_id: lead.id,
         summary,
-        link: "https://pharos-contextward-api.ml-c38.workers.dev/v1/health",
+        // Points at the stored intake row, not a generic page: the Project Control
+        // item opens the exact lead. Key-gated, like every other read of intake.
+        link: `${API_BASE}/v1/intake?id=${encodeURIComponent(lead.id)}`,
         metadata: { route: lead.route, suggested_project_id: lead.project, origin: lead.source, test: lead.test },
       }),
     });
