@@ -139,6 +139,58 @@ describe("intake", () => {
     expect(r.body.project_control).toEqual({ filed: false, item_id: undefined, status: 403 });
   });
 
+  describe("project control binding contract", () => {
+    function stubBinding(impl: (url: string, init: RequestInit) => Promise<Response>) {
+      const calls: { url: string; init: RequestInit }[] = [];
+      env.PROJECT_CONTROL = {
+        fetch: async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return impl(url, init); },
+      } as unknown as Fetcher;
+      return calls;
+    }
+
+    it("files through the binding with the feed token and the documented payload, never global fetch", async () => {
+      const calls = stubBinding(async () => new Response(JSON.stringify({ id: "pc_binding" }), { status: 201 }));
+      const r = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+
+      expect(r.status).toBe(201);
+      expect(r.body.project_control).toEqual({ filed: true, item_id: "pc_binding", status: 201 });
+      expect(pcCalls).toHaveLength(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toBe("https://project-control.ml-c38.workers.dev/api/items");
+      expect(calls[0].init.method).toBe("POST");
+      expect((calls[0].init.headers as Record<string, string>).authorization).toBe("Bearer pc-feed-not-real");
+
+      const body = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(["link", "metadata", "source", "source_id", "summary"]);
+      expect(body.source).toBe("contextward-intake");
+      expect(body.source_id).toBe(r.body.id);
+      expect(String(body.summary)).toContain("t***@example.test");
+      expect(String(body.summary)).not.toContain("test.pipeline@");
+      expect(body.metadata).toEqual({ route: "quickscan", suggested_project_id: "kpji3kub", origin: "kairos", test: true });
+    });
+
+    it("still stores the lead when the binding throws", async () => {
+      stubBinding(async () => { throw new Error("binding down"); });
+      const r = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+      expect(r.status).toBe(201);
+      expect(r.body.project_control).toEqual({ filed: false, status: 0 });
+      const stored = await worker.fetch(new Request(`${BASE}/v1/intake?id=${r.body.id}`, { headers: { authorization: `Bearer ${CONTEXTWARD_KEY}` } }), env);
+      expect(((await stored.json()) as { leads: unknown[] }).leads).toHaveLength(1);
+    });
+
+    it("skips filing silently when PC_FEED_TOKEN is not set", async () => {
+      const calls = stubBinding(async () => new Response(JSON.stringify({ id: "pc_binding" }), { status: 201 }));
+      delete env.PC_FEED_TOKEN;
+      const r = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
+      expect(r.status).toBe(201);
+      expect(r.body.project_control).toEqual({ filed: false });
+      expect(calls).toHaveLength(0);
+      expect(pcCalls).toHaveLength(0);
+      const stored = await worker.fetch(new Request(`${BASE}/v1/intake?id=${r.body.id}`, { headers: { authorization: `Bearer ${CONTEXTWARD_KEY}` } }), env);
+      expect(((await stored.json()) as { leads: unknown[] }).leads).toHaveLength(1);
+    });
+  });
+
   it("resolves one intake lead by id and rejects a malformed id", async () => {
     const created = await post(lead, { authorization: `Bearer ${INTAKE_KEY}` });
     const read = async (query: string) =>

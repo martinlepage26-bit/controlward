@@ -60,10 +60,14 @@ contract, retention policy, deployment procedure, and secret boundaries.
 
 ## Twenty extension
 
-The repository also contains a Twenty extension scaffold. Local setup and the
-persistent Lima-based development environment are documented in
-[`SETUP.md`](SETUP.md). The native app does not require Twenty, Docker, a
-browser, or a localhost server to run.
+The `src/` Twenty extension is formally DESCOPED. It stays in the repository as
+a parked scaffold and is not connected to the operational pipeline: nothing in
+the live flow (native app, `pharos-contextward-api` Worker, lead inbox, or
+Project Control intake) depends on it. The extension code is kept, not deleted,
+for a possible future pickup, and extension CI remains in place as scaffold
+validation only. Local setup and the persistent Lima-based development
+environment are documented in [`SETUP.md`](SETUP.md). The native app does not
+require Twenty, Docker, a browser, or a localhost server to run.
 
 ## Release gates
 
