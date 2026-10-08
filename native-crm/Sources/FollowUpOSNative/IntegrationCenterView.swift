@@ -6,11 +6,13 @@ struct IntegrationCenterView: View {
     @State private var leadgenEndpoint = ""
     @State private var pharosEndpoint = ""
     @State private var gapsEndpoint = ""
+    @State private var kairosEndpoint = ""
     @State private var showExchangeImporter = false
     private var checks: [IntegrationCheck] {
         [
             IntegrationCheck(name: "Native workspace", detail: "SwiftUI app and atomic local JSON persistence", state: .ready, symbol: "checkmark.circle.fill"),
             IntegrationCheck(name: "LeadGen OS", detail: "Qualified leads arrive through the PHAROS lead inbox (Pull leads below), or by JSON event import.", state: store.activeSignals.isEmpty ? .ready : .connected, symbol: "dot.radiowaves.left.and.right"),
+            connectorCheck(.kairos, name: "Kairos", purpose: "Reads lead-intent conversations into this local workspace when you choose Import. Nothing is sent back.", symbol: "bubble.left.and.bubble.right"),
             IntegrationCheck(name: "Lantern", detail: "FR/EN score imports, weighted gap and remediation", state: store.audits.isEmpty ? .ready : .connected, symbol: "checkmark.seal"),
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
             connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),
@@ -47,6 +49,7 @@ struct IntegrationCenterView: View {
                     endpointField("LeadGen OS", text: $leadgenEndpoint, target: .leadgen)
                     endpointField("PHAROS backend (e.g. https://pharos-contextward-api.ml-c38.workers.dev)", text: $pharosEndpoint, target: .pharos)
                     endpointField("Gap analysis (Supabase project URL, e.g. https://<project>.supabase.co)", text: $gapsEndpoint, target: .gaps)
+                    endpointField("Kairos API (https://kairos.govern-ai.ca)", text: $kairosEndpoint, target: .kairos)
                 }
                 .crmCard()
                 .padding(.horizontal, 28)
@@ -87,6 +90,25 @@ struct IntegrationCenterView: View {
                         lastJobText(.pharos)
                     }
                     .disabled(store.busyTargets.contains(.pharos))
+                }
+                .crmCard()
+                .padding(.horizontal, 28)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionLabel(text: "Kairos lead inbox")
+                    Text("Reads up to 200 recent Kairos conversations and imports only those classified as leads. Handles and the latest inbound message are saved in this Mac’s Contextward workspace. Ignored conversations are skipped. Import is manual; Contextward never sends replies or publishes content to Kairos.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Verify") { Task { await store.verifyConnector(.kairos) } }
+                            .buttonStyle(.bordered)
+                        Button("Import Kairos leads", systemImage: "arrow.down.circle") { Task { await store.importKairosLeads() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isNeedsSetup(.kairos) || store.busyTargets.contains(.kairos))
+                        if store.busyTargets.contains(.kairos) { ProgressView().controlSize(.small) }
+                        Spacer()
+                        lastJobText(.kairos)
+                    }
+                    .disabled(store.busyTargets.contains(.kairos))
                 }
                 .crmCard()
                 .padding(.horizontal, 28)
@@ -221,6 +243,7 @@ struct IntegrationCenterView: View {
             leadgenEndpoint = store.endpoint(for: .leadgen)
             pharosEndpoint = store.endpoint(for: .pharos)
             gapsEndpoint = store.endpoint(for: .gaps)
+            kairosEndpoint = store.endpoint(for: .kairos)
         }
     }
 

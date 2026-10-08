@@ -12,6 +12,10 @@ native directory views. LeadGen JSON, flat Lantern CSV exports, and the canonica
 Lantern XLSX workbook layout can be imported with source-file provenance, retaining
 transcript-level language scores, taxonomy codes, and quoted notes. This is a local single-user workspace, not yet a
 multi-user sync service or the full Twenty server platform.
+Kairos can be connected as a read-only source: a user-triggered import copies
+only lead-intent conversations into local leads, deduplicated by conversation id.
+The Kairos API key is stored in macOS Keychain; Contextward never sends replies
+or publishing actions back to Kairos.
 Due follow-ups can also be scheduled as explicit native macOS notifications;
 the app does not send outbound messages automatically.
 The default Overview combines CRM, LeadGen, Lantern, Pharos findings, automation,

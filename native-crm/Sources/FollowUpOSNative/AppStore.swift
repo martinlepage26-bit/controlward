@@ -78,7 +78,9 @@ final class AppStore: ObservableObject {
     var activity: [ActivityEvent] { workspace.activity }
     var syncJobs: [SyncJob] { workspace.syncJobs }
     var exposureFindings: [ExposureFinding] { workspace.exposureFindings }
-    func endpoint(for target: SyncTarget) -> String { workspace.connectorEndpoints[target.rawValue] ?? "" }
+    func endpoint(for target: SyncTarget) -> String {
+        workspace.connectorEndpoints[target.rawValue] ?? (target == .kairos ? KairosClient.defaultEndpoint : "")
+    }
 
     /// Saves an endpoint without its secret parts. `user:pass@` and token-like
     /// query items are removed before anything is persisted.
@@ -87,7 +89,9 @@ final class AppStore: ObservableObject {
         if value.isEmpty {
             workspace.connectorEndpoints.removeValue(forKey: target.rawValue)
             invalidateConnector(target)
-            persist(message: "\(target.label) endpoint cleared.")
+            persist(message: target == .kairos
+                ? "Kairos endpoint reset to its default URL."
+                : "\(target.label) endpoint cleared.")
             return
         }
         guard let result = EndpointPolicy.sanitize(value) else {
@@ -186,6 +190,10 @@ final class AppStore: ObservableObject {
                          interval: twentyPacing, maxBackoffSeconds: twentyMaxBackoffSeconds)
     }
 
+    private func kairosClient() throws -> KairosClient {
+        try KairosClient(endpoint: endpoint(for: .kairos), apiKey: try apiKey(for: .kairos), transport: transport)
+    }
+
     private func message(for error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
@@ -202,6 +210,7 @@ final class AppStore: ObservableObject {
             case .twenty: try await twentyClient().verify()
             case .leadgen: break
             case .gaps: try await gapClient().verify()
+            case .kairos: try await kairosClient().verify()
             }
             recordHealth(target, ok: true, detail: "Verified \(Date.now.formatted(date: .abbreviated, time: .shortened)): endpoint reachable and key accepted.")
             Self.syncLog.notice("verify target=\(target.rawValue, privacy: .public) ok")
@@ -313,6 +322,86 @@ final class AppStore: ObservableObject {
             ? "Pushed to Twenty: \(job.detail ?? "")" : "Twenty push failed: \(job.error ?? "")", sourceID: job.id), at: 0)
         persist(message: job.status == "synced" ? "Twenty push complete: \(job.detail ?? "")" : "Twenty push failed: \(job.error ?? "")")
         return job
+    }
+
+    // MARK: - Kairos inbox
+
+    /// Imports only lead-intent conversations on explicit user action. This is read-only
+    /// against Kairos; message bodies remain in the local Contextward workspace.
+    @discardableResult
+    func importKairosLeads() async -> SyncJob {
+        var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.inbox.v1")
+        guard case .ready = recoveryState else {
+            job.status = "failed"; job.error = "Workspace recovery is blocked; no Kairos data was imported."
+            return job
+        }
+        guard !busyTargets.contains(.kairos) else {
+            job.status = "failed"; job.error = "A Kairos import is already running."
+            return job
+        }
+        workspace.syncJobs.insert(job, at: 0)
+        busyTargets.insert(.kairos); defer { busyTargets.remove(.kairos) }
+        var created = 0, updated = 0, unchanged = 0, skipped = 0
+        do {
+            let inbox = try await kairosClient().pullInbox()
+            for conversation in inbox.conversations {
+                guard conversation.intent.lowercased() == "lead",
+                      conversation.status.lowercased() != "ignored" else { skipped += 1; continue }
+                switch applyKairosLead(conversation) {
+                case .created: created += 1
+                case .updated: updated += 1
+                case .unchanged: unchanged += 1
+                case .skipped: skipped += 1
+                }
+            }
+            try persistOrThrow()
+            job.status = "synced"
+            job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged, \(skipped) skipped."
+            recordHealth(.kairos, ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            Self.syncLog.notice("kairos import ok created=\(created) updated=\(updated) unchanged=\(unchanged) skipped=\(skipped)")
+        } catch {
+            job.status = "failed"
+            job.error = message(for: error)
+            recordHealth(.kairos, ok: false, detail: job.error ?? "Import failed.")
+            Self.syncLog.error("kairos import failed")
+        }
+        job.completedAt = Date.now.ISO8601Format()
+        replace(&workspace.syncJobs, with: job)
+        workspace.activity.insert(ActivityEvent(kind: "kairos_import", message: job.status == "synced"
+            ? "Imported Kairos leads: \(job.detail ?? "")"
+            : "Kairos import failed: \(job.error ?? "unknown error")", sourceID: job.id), at: 0)
+        persist(message: job.status == "synced" ? "Kairos import complete: \(job.detail ?? "")" : "Kairos import failed: \(job.error ?? "")")
+        return job
+    }
+
+    private enum KairosLeadOutcome { case created, updated, unchanged, skipped }
+
+    private func applyKairosLead(_ conversation: KairosConversation) -> KairosLeadOutcome {
+        let handle = conversation.authorHandle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !conversation.id.isEmpty, !handle.isEmpty else { return .skipped }
+        let sourceID = "kairos:\(conversation.id)"
+        if let index = workspace.leads.firstIndex(where: { $0.sourceID == sourceID }) {
+            var lead = workspace.leads[index]
+            if let appliedAt = lead.sourceUpdatedAt, conversation.lastMessageAt <= appliedAt { return .unchanged }
+            if let latestMessage = conversation.latestMessage, !latestMessage.isEmpty {
+                lead.lastMessage = String(latestMessage.prefix(4_000))
+            }
+            lead.sourceUpdatedAt = conversation.lastMessageAt
+            if lead.status == .new && conversation.status.lowercased() == "answered" { lead.status = .contacted }
+            workspace.leads[index] = lead
+            return .updated
+        }
+
+        var lead = Lead.blank()
+        lead.name = handle
+        lead.service = "Kairos · \(conversation.platform)"
+        lead.lastMessage = String((conversation.latestMessage ?? "").prefix(4_000))
+        lead.notes = "Imported from a Kairos conversation classified as a lead."
+        lead.status = conversation.status.lowercased() == "answered" ? .contacted : .new
+        lead.sourceID = sourceID
+        lead.sourceUpdatedAt = conversation.lastMessageAt
+        workspace.leads.insert(lead, at: 0)
+        return .created
     }
 
     // MARK: - PHAROS lead inbox

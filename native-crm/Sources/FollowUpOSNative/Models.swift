@@ -64,6 +64,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var lostAt: String?
     /// Stable upstream id, e.g. "leadgen:<identity id>", used to dedupe pulled leads. Not PII.
     var sourceID: String?
+    /// Timestamp of the latest upstream message applied to this lead, when source-backed.
+    var sourceUpdatedAt: String?
 
     static func blank(today: Date = .now) -> Lead {
         var lead = Lead()
@@ -156,7 +158,7 @@ struct WorkspaceExchange: Codable, Equatable, Sendable {
 }
 
 enum SyncTarget: String, Codable, CaseIterable, Identifiable, Sendable {
-    case twenty, leadgen, pharos, gaps
+    case twenty, leadgen, pharos, gaps, kairos
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -164,10 +166,11 @@ enum SyncTarget: String, Codable, CaseIterable, Identifiable, Sendable {
         case .leadgen: "LeadGen OS"
         case .pharos: "PHAROS backend"
         case .gaps: "Gap analysis"
+        case .kairos: "Kairos"
         }
     }
     /// Targets whose API key is stored in the Keychain.
-    static let keyed: [SyncTarget] = [.twenty, .pharos, .gaps]
+    static let keyed: [SyncTarget] = [.twenty, .pharos, .gaps, .kairos]
     /// Targets that receive exchange snapshots through the sync queue (gap analysis is read-only).
     static let exchangeTargets: [SyncTarget] = [.twenty, .leadgen, .pharos]
 }
