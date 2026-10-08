@@ -1,9 +1,17 @@
+import { handleIntake, purgeIntake } from "./intake";
+
 export interface Env {
   ENVIRONMENT?: string;
   /** Contextward key: exchange push, auth check, lead pull and ack. */
   PHAROS_API_KEY?: string;
   /** LeadGen OS exporter key: lead push only. */
   LEADGEN_PUSH_KEY?: string;
+  /** Server-to-server intake key (KAIROS signup hook). */
+  INTAKE_KEY?: string;
+  /** Project Control feed-role token: inserts intake items only. */
+  PC_FEED_TOKEN?: string;
+  /** Service binding to the project-control Worker (same account, so a public fetch would 404). */
+  PROJECT_CONTROL?: Fetcher;
   DB?: D1Database;
 }
 
@@ -44,6 +52,8 @@ function validExchange(value: unknown): value is Exchange {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const intake = await handleIntake(request, env, url);
+    if (intake) return intake;
     const leads = await handleLeadInbox(request, env, url);
     if (leads) return leads;
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/v1/health") {
@@ -79,6 +89,7 @@ export default {
   /** Daily retention for the lead inbox. */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     await purgeLeadInbox(env);
+    await purgeIntake(env);
   }
 } satisfies ExportedHandler<Env>;
 

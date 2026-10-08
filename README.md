@@ -15,7 +15,11 @@ Twenty app extension, and a small Cloudflare Worker/D1 edge service.
 - Read-only Gap Analysis imports with pagination and lifecycle reconciliation.
 - User-triggered, read-only Kairos inbox imports for conversations classified as leads. The Kairos key stays in macOS Keychain; imported handles and latest messages stay in the local workspace.
 - Preview-bound Twenty pushes that create or update records and never delete.
-- Developer ID signed macOS builds and reproducible checksum-bearing ZIPs.
+- Hardened-runtime macOS builds, signed with the Developer ID identity when it
+  is present in the keychain and ad-hoc signed otherwise, packaged as
+  reproducible checksum-bearing ZIPs.
+- Daily retention on the edge service: intake rows (7 days for test leads, 400
+  days otherwise) and lead-inbox rows (30 days after ack).
 
 ## Mac build
 
@@ -57,10 +61,14 @@ contract, retention policy, deployment procedure, and secret boundaries.
 
 ## Twenty extension
 
-The repository also contains a Twenty extension scaffold. Local setup and the
-persistent Lima-based development environment are documented in
-[`SETUP.md`](SETUP.md). The native app does not require Twenty, Docker, a
-browser, or a localhost server to run.
+The `src/` Twenty extension is formally DESCOPED. It stays in the repository as
+a parked scaffold and is not connected to the operational pipeline: nothing in
+the live flow (native app, `pharos-contextward-api` Worker, lead inbox, or
+Project Control intake) depends on it. The extension code is kept, not deleted,
+for a possible future pickup, and extension CI remains in place as scaffold
+validation only. Local setup and the persistent Lima-based development
+environment are documented in [`SETUP.md`](SETUP.md). The native app does not
+require Twenty, Docker, a browser, or a localhost server to run.
 
 ## Release gates
 
