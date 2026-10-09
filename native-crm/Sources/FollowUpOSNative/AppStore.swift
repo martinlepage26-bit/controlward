@@ -1089,10 +1089,13 @@ final class AppStore: ObservableObject {
 
     func importCSV(from url: URL) throws -> Int {
         let rows = CSVParser.parse(try ImportLimits.readCappedText(url))
-        guard rows.count >= 2 else { return 0 }
-        try ImportLimits.checkRows(rows.count - 1, url.lastPathComponent)
+        try ImportLimits.checkRows(max(rows.count - 1, 0), url.lastPathComponent)
         // Exact header names or known alternatives only; unknown columns are ignored.
-        let fields = rows[0].map(CSVHeaderMap.field(for:))
+        let fields = CSVHeaderMap.fields(for: rows.first ?? [])
+        guard fields.contains(where: { $0 != nil }) else {
+            showNotice(rows.isEmpty ? "No valid leads found in CSV." : "No recognized columns in CSV. Use headers such as name, email, phone, company, service, quote.")
+            return 0
+        }
         var imported: [Lead] = []
 
         for row in rows.dropFirst() where !row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
@@ -1110,9 +1113,7 @@ final class AppStore: ObservableObject {
                 case .phone: lead.phone = value
                 case .company: lead.company = value
                 case .service: lead.service = value
-                case .amount:
-                    let numeric = value.filter { $0.isNumber || $0 == "." }
-                    lead.quoteAmount = Double(numeric)
+                case .amount: lead.quoteAmount = CSVAmount.parse(value)
                 case .date:
                     if let date = CalendarCRM.date(from: value) { lead.createdAt = date.ISO8601Format() }
                 }
@@ -1200,8 +1201,11 @@ final class AppStore: ObservableObject {
     }
 
     private func importBAEARows(_ rows: [[String]], source: String) -> Int {
-        guard rows.count > 1 else { return 0 }
-        let headers = rows[0].map { $0.lowercased().replacingOccurrences(of: " ", with: "_") }
+        guard rows.count > 1 else {
+            showNotice("No Lantern scores found.")
+            return 0
+        }
+        let headers = rows[0].map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: " ", with: "_") }
         var grouped: [String: BilingualAudit] = [:]
         for row in rows.dropFirst() {
             func value(_ names: String...) -> String {
@@ -1364,46 +1368,110 @@ struct GeneratedMessage: Equatable {
 }
 
 enum CSVParser {
+    /// Parses RFC 4180-style CSV. Works on Unicode scalars so CRLF ("\r\n", a single
+    /// Swift Character) still ends a row. The delimiter is detected from the header row
+    /// (comma, semicolon as in French-locale Excel, or tab) unless an Excel `sep=` line
+    /// names it. A leading byte-order mark is dropped.
     static func parse(_ text: String) -> [[String]] {
+        var scalars = Substring(text).unicodeScalars[...]
+        if scalars.first == "\u{FEFF}" { scalars = scalars.dropFirst() }
+        let delimiter: Unicode.Scalar
+        if let hinted = separatorHint(scalars) {
+            delimiter = hinted.delimiter
+            scalars = scalars[hinted.rest...]
+        } else {
+            delimiter = detectDelimiter(scalars)
+        }
+
         var rows: [[String]] = []
         var row: [String] = []
-        var field = ""
+        var field = String.UnicodeScalarView()
         var quoted = false
-        var index = text.startIndex
+        var index = scalars.startIndex
 
-        while index < text.endIndex {
-            let character = text[index]
-            if character == "\"" {
-                let next = text.index(after: index)
-                if quoted, next < text.endIndex, text[next] == "\"" {
+        func endRow() {
+            row.append(String(field))
+            if !row.allSatisfy({ $0.isEmpty }) { rows.append(row) }
+            row = []
+            field = String.UnicodeScalarView()
+        }
+
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            if scalar == "\"" {
+                let next = scalars.index(after: index)
+                if quoted, next < scalars.endIndex, scalars[next] == "\"" {
                     field.append("\"")
                     index = next
                 } else {
                     quoted.toggle()
                 }
-            } else if character == ",", !quoted {
-                row.append(field)
-                field = ""
-            } else if (character == "\n" || character == "\r"), !quoted {
-                if character == "\r" {
-                    let next = text.index(after: index)
-                    if next < text.endIndex, text[next] == "\n" { index = next }
+            } else if scalar == delimiter, !quoted {
+                row.append(String(field))
+                field = String.UnicodeScalarView()
+            } else if scalar == "\n" || scalar == "\r", !quoted {
+                if scalar == "\r" {
+                    let next = scalars.index(after: index)
+                    if next < scalars.endIndex, scalars[next] == "\n" { index = next }
                 }
-                row.append(field)
-                if !row.allSatisfy({ $0.isEmpty }) { rows.append(row) }
-                row = []
-                field = ""
+                endRow()
             } else {
-                field.append(character)
+                field.append(scalar)
             }
-            index = text.index(after: index)
+            index = scalars.index(after: index)
         }
 
-        if !field.isEmpty || !row.isEmpty {
-            row.append(field)
-            rows.append(row)
-        }
+        if !field.isEmpty || !row.isEmpty { endRow() }
         return rows
+    }
+
+    /// Excel writes `sep=;` as the first line when the delimiter differs from the locale default.
+    private static func separatorHint(_ scalars: Substring.UnicodeScalarView) -> (delimiter: Unicode.Scalar, rest: Substring.UnicodeScalarView.Index)? {
+        let line = Array(scalars.prefix { $0 != "\n" && $0 != "\r" })
+        guard line.count == 5, String(String.UnicodeScalarView(line[..<4])).lowercased() == "sep=" else { return nil }
+        var rest = scalars.index(scalars.startIndex, offsetBy: line.count)
+        while rest < scalars.endIndex, scalars[rest] == "\r" || scalars[rest] == "\n" { rest = scalars.index(after: rest) }
+        return (line[4], rest)
+    }
+
+    /// Picks the most frequent unquoted candidate in the first row; ties keep the comma.
+    private static func detectDelimiter(_ scalars: Substring.UnicodeScalarView) -> Unicode.Scalar {
+        var comma = 0, semicolon = 0, tab = 0
+        var quoted = false
+        for scalar in scalars {
+            if scalar == "\"" { quoted.toggle(); continue }
+            guard !quoted else { continue }
+            if scalar == "\n" || scalar == "\r" { break }
+            if scalar == "," { comma += 1 } else if scalar == ";" { semicolon += 1 } else if scalar == "\t" { tab += 1 }
+        }
+        if semicolon > comma, semicolon >= tab { return ";" }
+        if tab > comma, tab > semicolon { return "\t" }
+        return ","
+    }
+}
+
+enum CSVAmount {
+    /// Parses quote amounts written in English or French conventions: "$2,500.00",
+    /// "2 500,00 $", "2.500,00", "1,200". When both "." and "," appear, the last one is
+    /// the decimal mark. A lone mark followed by exactly three digits groups thousands.
+    static func parse(_ raw: String) -> Double? {
+        var text = String(raw.unicodeScalars.filter { ("0"..."9").contains($0) || $0 == "." || $0 == "," }.map(Character.init))
+        guard text.contains(where: \.isNumber) else { return nil }
+        let lastDot = text.lastIndex(of: "."), lastComma = text.lastIndex(of: ",")
+        if let lastDot, let lastComma {
+            let decimal: Character = lastDot > lastComma ? "." : ","
+            text = text.filter { $0 != (decimal == "." ? "," : ".") }
+            text = text.replacingOccurrences(of: String(decimal), with: ".")
+        } else if let mark = lastDot ?? lastComma {
+            let separator = text[mark]
+            let digitsAfter = text.distance(from: text.index(after: mark), to: text.endIndex)
+            if text.filter({ $0 == separator }).count > 1 || digitsAfter == 3 {
+                text = text.filter { $0 != separator }
+            } else {
+                text = text.replacingOccurrences(of: String(separator), with: ".")
+            }
+        }
+        return Double(text)
     }
 }
 
