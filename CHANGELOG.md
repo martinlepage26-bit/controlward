@@ -2,6 +2,19 @@
 
 All notable changes to this application are documented in this file.
 
+## Unreleased
+
+- Fixed CSV import for Excel and Windows exports: CRLF and CR line endings now
+  split rows instead of collapsing the file into one row.
+- CSV import detects semicolon (French-locale Excel) and tab delimiters, and
+  honours an Excel `sep=` first line.
+- CSV import accepts UTF-16 and Windows-1252 files and drops a leading
+  byte-order mark, which previously broke Lantern header matching.
+- Quote amounts parse English and French formats (`$2,500.00`, `2 500,00 $`).
+- French lead headers (`Nom`, `Prénom`, `Courriel`, `Soumission`, …) map
+  without regard to accents; `Prénom` + `Nom` combine into the full name.
+- Imports that find nothing now say so instead of failing silently.
+
 ## 0.1.0 - 2026-09-26
 
 - Shipped the native Contextward macOS workspace (Developer ID signed when a
