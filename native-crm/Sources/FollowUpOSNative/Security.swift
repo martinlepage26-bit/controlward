@@ -131,10 +131,15 @@ enum ImportLimits {
     }
 
     static func readCappedText(_ url: URL) throws -> String {
-        guard let text = String(data: try readCapped(url), encoding: .utf8) else {
-            throw error(415, "\(url.lastPathComponent) is not UTF-8 text.")
+        let data = try readCapped(url)
+        if let text = String(data: data, encoding: .utf8) { return text }
+        // Excel "Unicode Text" and other UTF-16 exports start with a byte-order mark.
+        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]), let text = String(data: data, encoding: .utf16) {
+            return text
         }
-        return text
+        // Legacy Excel/Windows CSVs are Windows-1252. NUL bytes mean binary, not text.
+        if !data.contains(0), let text = String(data: data, encoding: .windowsCP1252) { return text }
+        throw error(415, "\(url.lastPathComponent) is not UTF-8, UTF-16, or Windows-1252 text.")
     }
 
     static func checkRows(_ count: Int, _ name: String) throws {
@@ -151,25 +156,34 @@ enum CSVHeaderMap {
     static let aliases: [String: LeadField] = {
         var map: [String: LeadField] = [:]
         func add(_ field: LeadField, _ names: String...) { for name in names { map[name] = field } }
-        add(.name, "name", "full_name", "customer", "customer_name", "client", "client_name", "lead", "lead_name", "contact", "contact_name")
-        add(.firstName, "first_name", "firstname", "given_name")
-        add(.lastName, "last_name", "lastname", "surname", "family_name")
-        add(.email, "email", "e_mail", "email_address", "courriel")
-        add(.phone, "phone", "phone_number", "telephone", "tel", "mobile", "cell", "telephone_number")
-        add(.company, "company", "company_name", "business", "business_name", "organization", "organisation", "entreprise")
-        add(.service, "service", "services", "project", "project_type", "service_type", "service_requested", "job")
-        add(.amount, "quote", "quote_amount", "amount", "$", "price", "estimate", "total", "value")
-        add(.date, "date", "created", "created_at", "date_created", "quote_date", "date_sent", "sent_date")
+        add(.name, "name", "full_name", "customer", "customer_name", "client", "client_name", "lead", "lead_name", "contact", "contact_name", "nom", "nom_complet", "nom_du_client")
+        add(.firstName, "first_name", "firstname", "given_name", "prenom")
+        add(.lastName, "last_name", "lastname", "surname", "family_name", "nom_de_famille")
+        add(.email, "email", "e_mail", "email_address", "courriel", "adresse_courriel", "adresse_electronique")
+        add(.phone, "phone", "phone_number", "telephone", "tel", "mobile", "cell", "telephone_number", "numero_de_telephone", "cellulaire")
+        add(.company, "company", "company_name", "business", "business_name", "organization", "organisation", "entreprise", "compagnie", "nom_de_l'entreprise")
+        add(.service, "service", "services", "project", "project_type", "service_type", "service_requested", "job", "projet", "type_de_projet", "service_demande")
+        add(.amount, "quote", "quote_amount", "amount", "$", "price", "estimate", "total", "value", "soumission", "montant", "prix", "estimation")
+        add(.date, "date", "created", "created_at", "date_created", "quote_date", "date_sent", "sent_date", "date_de_creation", "date_de_soumission")
         return map
     }()
 
     static func normalize(_ header: String) -> String {
-        let trimmed = header.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmed = header.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
         let separated = trimmed.map { $0 == " " || $0 == "-" || $0 == "." ? "_" : String($0) }.joined()
         return separated.split(separator: "_", omittingEmptySubsequences: true).joined(separator: "_").ifEmpty(trimmed)
     }
 
     static func field(for header: String) -> LeadField? { aliases[normalize(header)] }
+
+    /// Maps a header row. French forms often split "Prénom" and "Nom"; when a first-name
+    /// column is present, "Nom" is the family name rather than the full name.
+    static func fields(for headers: [String]) -> [LeadField?] {
+        let fields = headers.map(field(for:))
+        guard fields.contains(.firstName) else { return fields }
+        return zip(headers, fields).map { normalize($0) == "nom" ? .lastName : $1 }
+    }
 }
 
 private extension String {
