@@ -1280,12 +1280,13 @@ struct GeneratedMessage: Equatable {
 
 enum CSVParser {
     /// Parses RFC 4180-style CSV. Works on Unicode scalars so CRLF ("\r\n", a single
-    /// Swift Character) still ends a row. The delimiter is detected from the header row
+    /// Swift Character) still ends a row. The delimiter is detected from the first rows
     /// (comma, semicolon as in French-locale Excel, or tab) unless an Excel `sep=` line
-    /// names it. A leading byte-order mark is dropped.
+    /// names it. A leading byte-order mark and leading blank lines are dropped.
     static func parse(_ text: String) -> [[String]] {
         var scalars = Substring(text).unicodeScalars[...]
         if scalars.first == "\u{FEFF}" { scalars = scalars.dropFirst() }
+        scalars = scalars.drop { $0 == "\n" || $0 == "\r" }
         let delimiter: Unicode.Scalar
         if let hinted = separatorHint(scalars) {
             delimiter = hinted.delimiter
@@ -1345,26 +1346,51 @@ enum CSVParser {
         return (line[4], rest)
     }
 
-    /// Picks the most frequent unquoted candidate in the first row; ties keep the comma.
+    /// Counts unquoted candidates per record over the first rows. A delimiter that appears
+    /// the same number of times in every sampled record wins, so a stray comma in a tab or
+    /// semicolon file (a "Last, First" header, French decimals) does not outvote it.
+    /// Otherwise the most frequent candidate wins; ties keep comma, then semicolon.
     private static func detectDelimiter(_ scalars: Substring.UnicodeScalarView) -> Unicode.Scalar {
-        var comma = 0, semicolon = 0, tab = 0
-        var quoted = false
+        let candidates: [Unicode.Scalar] = [",", ";", "\t"]
+        let sampleLimit = 10
+        var samples: [[Int]] = []
+        var counts = [0, 0, 0]
+        var quoted = false, hasContent = false
+
         for scalar in scalars {
-            if scalar == "\"" { quoted.toggle(); continue }
-            guard !quoted else { continue }
-            if scalar == "\n" || scalar == "\r" { break }
-            if scalar == "," { comma += 1 } else if scalar == ";" { semicolon += 1 } else if scalar == "\t" { tab += 1 }
+            if scalar == "\"" { quoted.toggle(); hasContent = true; continue }
+            if !quoted, scalar == "\n" || scalar == "\r" {
+                if hasContent { samples.append(counts) }
+                counts = [0, 0, 0]
+                hasContent = false
+                if samples.count == sampleLimit { break }
+                continue
+            }
+            hasContent = true
+            if !quoted, let candidate = candidates.firstIndex(of: scalar) { counts[candidate] += 1 }
         }
-        if semicolon > comma, semicolon >= tab { return ";" }
-        if tab > comma, tab > semicolon { return "\t" }
-        return ","
+        if hasContent, samples.count < sampleLimit { samples.append(counts) }
+
+        var best: (index: Int, score: Int)?
+        for index in candidates.indices {
+            let perRecord = samples.map { $0[index] }
+            guard let first = perRecord.first, first > 0, perRecord.allSatisfy({ $0 == first }) else { continue }
+            if best == nil || first > best!.score { best = (index, first) }
+        }
+        if let best { return candidates[best.index] }
+
+        let totals = candidates.indices.map { index in samples.reduce(0) { $0 + $1[index] } }
+        let top = totals.max() ?? 0
+        return top > 0 ? candidates[totals.firstIndex(of: top)!] : ","
     }
 }
 
 enum CSVAmount {
     /// Parses quote amounts written in English or French conventions: "$2,500.00",
     /// "2 500,00 $", "2.500,00", "1,200". When both "." and "," appear, the last one is
-    /// the decimal mark. A lone mark followed by exactly three digits groups thousands.
+    /// the decimal mark, and a repeated mark groups thousands. A lone "." is always a
+    /// decimal point ("99.950" is 99.95). A lone "," groups thousands only in the
+    /// "2,500" shape: one to three leading digits, not zero, then exactly three digits.
     static func parse(_ raw: String) -> Double? {
         var text = String(raw.unicodeScalars.filter { ("0"..."9").contains($0) || $0 == "." || $0 == "," }.map(Character.init))
         guard text.contains(where: \.isNumber) else { return nil }
@@ -1375,8 +1401,9 @@ enum CSVAmount {
             text = text.replacingOccurrences(of: String(decimal), with: ".")
         } else if let mark = lastDot ?? lastComma {
             let separator = text[mark]
-            let digitsAfter = text.distance(from: text.index(after: mark), to: text.endIndex)
-            if text.filter({ $0 == separator }).count > 1 || digitsAfter == 3 {
+            let leading = text[..<mark], trailing = text[text.index(after: mark)...]
+            let groupsThousands = separator == "," && trailing.count == 3 && (1...3).contains(leading.count) && leading.first != "0"
+            if text.filter({ $0 == separator }).count > 1 || groupsThousands {
                 text = text.filter { $0 != separator }
             } else {
                 text = text.replacingOccurrences(of: String(separator), with: ".")
