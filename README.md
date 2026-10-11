@@ -13,6 +13,7 @@ Twenty app extension, and a small Cloudflare Worker/D1 edge service.
 - Authenticated PHAROS exchange pushes and lead-inbox pulling through the live
   `pharos-contextward-api` Worker and D1.
 - Read-only Gap Analysis imports with pagination and lifecycle reconciliation.
+- User-triggered, read-only Kairos inbox imports for conversations classified as leads. The Kairos key stays in macOS Keychain; imported handles and latest messages stay in the local workspace.
 - Preview-bound Twenty pushes that create or update records and never delete.
 - Hardened-runtime macOS builds, signed with the Developer ID identity when it
   is present in the keychain and ad-hoc signed otherwise, packaged as

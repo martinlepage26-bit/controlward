@@ -2,12 +2,14 @@ import Foundation
 
 /// Gap analysis connector: reads active gap clusters from the Supabase REST API
 /// (`/rest/v1/gap_clusters` with embedded `gap_scores`) and turns them into signals.
-/// The fake mirrors PostgREST: `apikey` + Bearer headers, JSON array body.
+/// The fake mirrors PostgREST key headers and returns a JSON array body.
 @MainActor
 enum GapAnalysisTests {
     static func run() async -> Bool {
         let tests: [(String, () async throws -> Void)] = [
             ("Gaps: verify is an authenticated read; 401 is an error", verify),
+            ("Gaps: publishable key is sent only as apikey", publishableKeyHeaders),
+            ("Gaps: secret key is rejected before any request", secretKeyRejected),
             ("Gaps: import turns active clusters into signals with scores", importClusters),
             ("Gaps: re-import updates by cluster id, never duplicates", reimport),
             ("Gaps: import paginates beyond 500 clusters without truncation", paginatesAllClusters),
@@ -32,21 +34,26 @@ enum GapAnalysisTests {
     }
 
     static let url = "https://example-project.supabase.co"
-    static let key = "sb_anon_\(UUID().uuidString)"
+    static let key = "eyJ_legacy_anon_\(UUID().uuidString)"
 
     final class FakeSupabase: HTTPTransport, @unchecked Sendable {
         let key: String
+        let expectsBearer: Bool
         private let lock = NSLock()
         var clusters: [[String: Any]] = []
         var ignoresCursor = false
         private(set) var requests: [URLRequest] = []
-        init(key: String) { self.key = key }
+        init(key: String, expectsBearer: Bool = true) {
+            self.key = key
+            self.expectsBearer = expectsBearer
+        }
 
         func send(_ request: URLRequest) async throws -> HTTPResponse {
             lock.withLock {
                 requests.append(request)
+                let expectedAuthorization = expectsBearer ? "Bearer \(key)" : nil
                 guard request.value(forHTTPHeaderField: "apikey") == key,
-                      request.value(forHTTPHeaderField: "Authorization") == "Bearer \(key)" else {
+                      request.value(forHTTPHeaderField: "Authorization") == expectedAuthorization else {
                     return HTTPResponse(status: 401, headers: [:], body: Data(#"{"message":"Invalid API key"}"#.utf8))
                 }
                 guard request.url?.path == "/rest/v1/gap_clusters", request.httpMethod == "GET" else {
@@ -73,10 +80,10 @@ enum GapAnalysisTests {
                 "gap_scores": embedAsArray ? [scores] as Any : scores as Any]
     }
 
-    private static func makeStore(_ fake: FakeSupabase, withKey: Bool = true, withEndpoint: Bool = true) throws -> AppStore {
+    private static func makeStore(_ fake: FakeSupabase, apiKey: String? = nil, withKey: Bool = true, withEndpoint: Bool = true) throws -> AppStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("contextward-gaps-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let store = AppStore(storageURL: directory.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(withKey ? [.gaps: key] : [:]), transport: fake)
+        let store = AppStore(storageURL: directory.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(withKey ? [.gaps: apiKey ?? key] : [:]), transport: fake)
         if withEndpoint { store.setEndpoint(url, for: .gaps) }
         return store
     }
@@ -91,6 +98,25 @@ enum GapAnalysisTests {
         let wrong = try makeStore(FakeSupabase(key: "other"))
         try expect(await wrong.verifyConnector(.gaps) == false, "wrong key verified")
         guard case .error(let reason) = wrong.connectorStatus(.gaps), reason.contains("401") else { throw SmokeTestFailure.failed("401 not surfaced") }
+    }
+
+    static func publishableKeyHeaders() async throws {
+        let publishableKey = "sb_publishable_test_\(UUID().uuidString)"
+        let fake = FakeSupabase(key: publishableKey, expectsBearer: false)
+        let store = try makeStore(fake, apiKey: publishableKey)
+        try expect(await store.verifyConnector(.gaps), "publishable key was not accepted")
+        let request = fake.requests.last
+        try expect(request?.value(forHTTPHeaderField: "apikey") == publishableKey, "publishable key missing from apikey")
+        try expect(request?.value(forHTTPHeaderField: "Authorization") == nil, "publishable key was incorrectly sent as Bearer")
+    }
+
+    static func secretKeyRejected() async throws {
+        do {
+            _ = try GapClient(endpoint: url, apiKey: "sb_secret_test", transport: FakeSupabase(key: "sb_secret_test"))
+            throw SmokeTestFailure.failed("secret key was accepted")
+        } catch let error as IntegrationError {
+            try expect(error == .elevatedKeyNotAllowed, "wrong error for a secret key")
+        }
     }
 
     static func importClusters() async throws {

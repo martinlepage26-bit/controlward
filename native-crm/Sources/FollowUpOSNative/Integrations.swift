@@ -132,6 +132,7 @@ struct URLSessionTransport: HTTPTransport {
 enum IntegrationError: LocalizedError, Equatable {
     case missingEndpoint
     case missingKey
+    case elevatedKeyNotAllowed
     case invalidEndpoint
     case http(status: Int, code: String?, context: String)
     case transport(String)
@@ -141,6 +142,7 @@ enum IntegrationError: LocalizedError, Equatable {
         switch self {
         case .missingEndpoint: "No endpoint URL is saved."
         case .missingKey: "No API key is saved in the Keychain."
+        case .elevatedKeyNotAllowed: "Supabase secret keys cannot be used in Contextward. Save the project's publishable key instead."
         case .invalidEndpoint: "The endpoint is not a valid http(s) URL."
         case .http(let status, let code, let context):
             "\(context) returned HTTP \(status)\(code.map { " (\($0))" } ?? "")\(status == 401 || status == 403 ? ": the API key was rejected" : "")."
@@ -185,6 +187,92 @@ enum EndpointBase {
         components.fragment = nil
         guard let url = components.url else { throw IntegrationError.invalidEndpoint }
         return url
+    }
+}
+
+// MARK: - Kairos inbox
+
+struct KairosConversation: Decodable, Sendable {
+    var id: String
+    var authorHandle: String
+    var intent: String
+    var priority: Int
+    var status: String
+    var lastMessageAt: String
+    var platform: String
+    var latestMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, intent, priority, status, platform
+        case authorHandle = "author_handle"
+        case lastMessageAt = "last_message_at"
+        case latestMessage = "latest_message"
+    }
+}
+
+struct KairosInbox: Decodable, Sendable {
+    var conversations: [KairosConversation]
+}
+
+/// Read-only client for the Kairos account API. Contextward calls only GET /v1/me
+/// and GET /v1/inbox; it never approves or sends replies or publishes posts.
+struct KairosClient: Sendable {
+    static let defaultEndpoint = "https://kairos.govern-ai.ca"
+    static let maximumInboxBytes = 2 * 1024 * 1024
+    let baseURL: URL
+    let apiKey: String
+    let transport: HTTPTransport
+
+    init(endpoint: String, apiKey: String, transport: HTTPTransport) throws {
+        baseURL = try EndpointBase.url(from: endpoint, strippingSuffixes: ["/v1/inbox", "/v1/me", "/v1"])
+        guard !apiKey.isEmpty else { throw IntegrationError.missingKey }
+        self.apiKey = apiKey
+        self.transport = transport
+    }
+
+    private func request(_ url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    private func send(_ request: URLRequest, context: String) async throws -> HTTPResponse {
+        do {
+            let response = try await transport.send(request)
+            guard response.status == 200 else { throw IntegrationError.from(response, context: context) }
+            return response
+        } catch let error as IntegrationError { throw error }
+        catch { throw IntegrationError.transport(error.localizedDescription) }
+    }
+
+    func verify() async throws {
+        let url = baseURL.appendingPathComponent("v1/me")
+        let response = try await send(request(url), context: "Kairos key check")
+        guard let body = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any],
+              body["account"] is [String: Any] else {
+            throw IntegrationError.unexpected("Kairos account response could not be read")
+        }
+    }
+
+    func pullInbox() async throws -> KairosInbox {
+        var components = URLComponents(url: baseURL.appendingPathComponent("v1/inbox"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "includeAnswered", value: "true"),
+            URLQueryItem(name: "limit", value: "200"),
+        ]
+        guard let url = components?.url else { throw IntegrationError.invalidEndpoint }
+        let response = try await send(request(url), context: "Kairos inbox pull")
+        guard response.body.count <= Self.maximumInboxBytes else {
+            throw IntegrationError.unexpected("Kairos inbox response exceeded the 2 MB safety limit")
+        }
+        guard let inbox = try? JSONDecoder().decode(KairosInbox.self, from: response.body) else {
+            throw IntegrationError.unexpected("Kairos inbox response could not be read")
+        }
+        return inbox
     }
 }
 
@@ -810,6 +898,7 @@ struct GapClient: Sendable {
     init(endpoint: String, apiKey: String, transport: HTTPTransport) throws {
         baseURL = try EndpointBase.url(from: endpoint, strippingSuffixes: ["/rest/v1/gap_clusters", "/rest/v1"])
         guard !apiKey.isEmpty else { throw IntegrationError.missingKey }
+        guard !apiKey.hasPrefix("sb_secret_") else { throw IntegrationError.elevatedKeyNotAllowed }
         self.apiKey = apiKey
         self.transport = transport
     }
@@ -823,7 +912,12 @@ struct GapClient: Sendable {
         request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(apiKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        // Supabase's new publishable keys are not JWTs. Sending one as a
+        // Bearer token causes an Invalid JWT rejection; the apikey header is
+        // sufficient for this unauthenticated, read-only connector.
+        if !apiKey.hasPrefix("sb_publishable_") {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         do { return try await transport.send(request) }
         catch let error as IntegrationError { throw error }
         catch { throw IntegrationError.transport(error.localizedDescription) }

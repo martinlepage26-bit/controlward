@@ -68,3 +68,21 @@ It's highly recommended to create new app entities using `yarn twenty dev:add`. 
 | Connection provider  | `yarn twenty dev:add connectionProvider` | `src/connection-providers/<name>.ts`  |
 
 This helps automatically generate required IDs etc.
+
+## Shared Skill Discovery
+
+Before task work, check whether the request matches a reusable skill. Use the
+current runtime's installed skill root first:
+
+- Claude-compatible hosts: `~/.claude/skills`
+- Codex-compatible hosts: `~/.codex/skills`
+- Generic local agent hosts: `~/.agents/skills`
+- Hermes-compatible hosts: `~/.hermes/skills`
+
+The portable exchange set is `/Users/pharos_ai/Documents/Skills - ALL AGENTS`.
+Read its `AGENTS.md` before using it. Files ending in `.skill` are ZIP skill
+packages; inspect or extract the archive, then read the contained
+`<skill-name>/SKILL.md` and any bundled resources it asks for. Translate tool
+names to the current host's available capabilities instead of assuming one
+specific agent runtime.
+

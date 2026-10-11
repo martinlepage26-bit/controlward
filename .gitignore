@@ -22,6 +22,7 @@ generated
 /dist/
 
 .twenty
+/skill-observations/
 
 # production
 /build
