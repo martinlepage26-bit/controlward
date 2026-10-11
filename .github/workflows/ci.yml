@@ -1,5 +1,13 @@
 name: CI
 
+# CI runner: the extension-and-worker job and the secrets guard run on
+# Martin's self-hosted runner on CT920 (labels self-hosted, ct920) to save
+# GitHub-hosted minutes. twenty-integration (spawns a Twenty instance with
+# Docker) and native-macos stay on GitHub-hosted runners; cd.yml and
+# publish.yml are unchanged. No self-hosted job may use secrets other than
+# GITHUB_TOKEN (scripts/check-self-hosted-secrets.py enforces it). To revert,
+# change `runs-on: [self-hosted, ct920]` back to `runs-on: ubuntu-latest`.
+
 on:
   push:
     branches: [main]
@@ -13,8 +21,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runner-secrets-guard:
+    name: Self-hosted runner secrets guard
+    runs-on: [self-hosted, ct920]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PyYAML
+        run: python3 -m venv /tmp/guard && /tmp/guard/bin/pip install pyyaml==6.0.2
+      - run: /tmp/guard/bin/python scripts/check-self-hosted-secrets.py --self-test
+      - run: /tmp/guard/bin/python scripts/check-self-hosted-secrets.py .github/workflows
+
   extension-and-worker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ct920]
     steps:
       - uses: actions/checkout@v4
       - run: corepack enable
