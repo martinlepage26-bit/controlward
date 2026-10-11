@@ -132,14 +132,62 @@ enum ImportLimits {
 
     static func readCappedText(_ url: URL) throws -> String {
         let data = try readCapped(url)
-        if let text = String(data: data, encoding: .utf8) { return text }
-        // Excel "Unicode Text" and other UTF-16 exports start with a byte-order mark.
-        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]), let text = String(data: data, encoding: .utf16) {
-            return text
+        guard let text = decodeText(data) else {
+            throw error(415, "\(url.lastPathComponent) is not UTF-8, UTF-16, or Windows-1252 text. Save it as CSV UTF-8 and import again.")
         }
-        // Legacy Excel/Windows CSVs are Windows-1252. NUL bytes mean binary, not text.
-        if !data.contains(0), let text = String(data: data, encoding: .windowsCP1252) { return text }
-        throw error(415, "\(url.lastPathComponent) is not UTF-8, UTF-16, or Windows-1252 text.")
+        return text
+    }
+
+    /// Decodes spreadsheet text exports. Returns nil rather than guess when the bytes
+    /// would import as garbled text.
+    static func decodeText(_ data: Data) -> String? {
+        // Excel "Unicode Text" and other UTF-16 exports start with a byte-order mark.
+        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) { return String(data: data, encoding: .utf16) }
+        // NUL bytes are UTF-16 without a byte-order mark, or binary. ASCII-only UTF-16 is
+        // also valid UTF-8, so this is checked before UTF-8.
+        if data.contains(0) { return decodeBareUTF16(data) }
+        if let text = String(data: data, encoding: .utf8) { return text }
+        // Legacy Excel/Windows CSVs are Windows-1252.
+        return looksLikeWindows1252(data) ? String(data: data, encoding: .windowsCP1252) : nil
+    }
+
+    /// Latin-script UTF-16 has a NUL in the high byte of nearly every code unit, which
+    /// gives the byte order: odd offsets are little-endian, even offsets big-endian.
+    private static func decodeBareUTF16(_ data: Data) -> String? {
+        guard data.count >= 2, data.count.isMultiple(of: 2) else { return nil }
+        var even = 0, odd = 0
+        for (offset, byte) in data.enumerated() where byte == 0 {
+            if offset.isMultiple(of: 2) { even += 1 } else { odd += 1 }
+        }
+        let units = data.count / 2
+        let encoding: String.Encoding
+        if odd >= units / 2, odd >= even * 4 { encoding = .utf16LittleEndian }
+        else if even >= units / 2, even >= odd * 4 { encoding = .utf16BigEndian }
+        else { return nil }
+        guard let text = String(data: data, encoding: encoding), !text.unicodeScalars.contains("\u{0}") else { return nil }
+        return text
+    }
+
+    /// Rejects bytes that would decode as Windows-1252 but are almost certainly something
+    /// else: UTF-8 with a corrupt byte (a valid multi-byte sequence is present), or Mac
+    /// Roman, whose accented letters sit at 0x80-0x9F where Windows-1252 has only
+    /// punctuation and a few symbols.
+    private static func looksLikeWindows1252(_ data: Data) -> Bool {
+        // € … ' ' " " • – — ™ Œ œ: the 0x80-0x9F bytes real Windows-1252 text uses.
+        let expectedC1: Set<UInt8> = [0x80, 0x85, 0x8C, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x99, 0x9C]
+        let bytes = [UInt8](data)
+        var index = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            if (0x80...0x9F).contains(byte), !expectedC1.contains(byte) { return false }
+            let continuation = byte >= 0xF0 ? 3 : byte >= 0xE0 ? 2 : byte >= 0xC2 ? 1 : 0
+            if continuation > 0, byte <= 0xF4, index + continuation < bytes.count,
+               bytes[(index + 1)...(index + continuation)].allSatisfy({ (0x80...0xBF).contains($0) }) {
+                return false
+            }
+            index += 1
+        }
+        return true
     }
 
     static func checkRows(_ count: Int, _ name: String) throws {

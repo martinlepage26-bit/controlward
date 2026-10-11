@@ -8,9 +8,14 @@ All notable changes to this application are documented in this file.
   split rows instead of collapsing the file into one row.
 - CSV import detects semicolon (French-locale Excel) and tab delimiters, and
   honours an Excel `sep=` first line.
-- CSV import accepts UTF-16 and Windows-1252 files and drops a leading
-  byte-order mark, which previously broke Lantern header matching.
+- CSV import accepts UTF-16 (with or without a byte-order mark) and
+  Windows-1252 files and drops a leading byte-order mark, which previously
+  broke Lantern header matching. Corrupt UTF-8 and Mac Roman files are
+  rejected instead of importing garbled accents.
+- Delimiter detection samples the first rows and ignores leading blank lines.
 - Quote amounts parse English and French formats (`$2,500.00`, `2 500,00 $`).
+  A lone `.` is always a decimal point; a lone `,` groups thousands only in
+  the `2,500` shape.
 - French lead headers (`Nom`, `Prénom`, `Courriel`, `Soumission`, …) map
   without regard to accents; `Prénom` + `Nom` combine into the full name.
 - Imports that find nothing now say so instead of failing silently.
