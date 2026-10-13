@@ -25,10 +25,13 @@ enum CSVImportTests {
             ("CSV: UTF-16 export imports", utf16Import),
             ("CSV: Windows-1252 export imports accents", windows1252Import),
             ("CSV: Windows-1252 punctuation and ligatures import", windows1252Punctuation),
+            ("CSV: Windows-1252 extended letters import", windows1252ExtendedLetters),
+            ("CSV: every defined Windows-1252 C1 character decodes", windows1252DefinedCharacters),
+            ("CSV: undefined Windows-1252 bytes are rejected", windows1252UndefinedBytes),
             ("CSV: UTF-16 without a byte-order mark imports", bareUTF16Import),
             ("CSV: binary file is rejected as unsupported text", binaryRejected),
             ("CSV: UTF-8 with a corrupt byte is rejected, not garbled", corruptUTF8Rejected),
-            ("CSV: Mac Roman file is rejected, not garbled", macRomanRejected),
+            ("CSV: Mac Roman with undefined Windows-1252 bytes is rejected", macRomanRejected),
             ("CSV: header-only file reports nothing imported", headerOnlyNotice),
             ("CSV: unrecognized headers say so", unknownHeadersNotice),
             ("CSV: Lantern CRLF export with BOM imports", baeaCRLFWithBOM),
@@ -50,7 +53,7 @@ enum CSVImportTests {
     private static func freshStore() throws -> (AppStore, URL) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("contextward-csv-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return (AppStore(storageURL: directory.appendingPathComponent("data/workspace.json")), directory)
+        return (AppStore(storageURL: directory.appendingPathComponent("data/workspace.json"), secrets: InMemorySecretStore()), directory)
     }
 
     private static func file(_ name: String, _ data: Data, in directory: URL) throws -> URL {
@@ -188,6 +191,32 @@ enum CSVImportTests {
         try expect(store.leads.first?.name == "Zoé L’Écuyer" && store.leads.first?.company == "Cœur & Fils", "Windows-1252 punctuation: \(String(describing: store.leads.first?.name))")
     }
 
+    static func windows1252ExtendedLetters() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["Šárka", "Žofie", "Aleš", "Blaž", "Ÿvette"]
+        let text = "name,email\r\n" + names.map { "\($0),lead@example.test\r\n" }.joined()
+        let url = try file("legacy-letters.csv", text.data(using: .windowsCP1252)!, in: directory)
+        try expect(try store.importCSV(from: url) == names.count, "valid extended letters rejected")
+        try expect(store.leads.map(\.name) == names, "extended names were changed")
+    }
+
+    static func windows1252DefinedCharacters() throws {
+        // All 27 defined characters in the 0x80...0x9F byte range, separated so
+        // adjacent bytes cannot accidentally look like a UTF-8 sequence.
+        let text = "€ ‚ ƒ „ … † ‡ ˆ ‰ Š ‹ Œ Ž ‘ ’ “ ” • – — ˜ ™ š › œ ž Ÿ"
+        try expect(ImportLimits.decodeText(text.data(using: .windowsCP1252)!) == text, "defined Windows-1252 characters rejected or changed")
+    }
+
+    static func windows1252UndefinedBytes() throws {
+        for byte: UInt8 in [0x81, 0x8D, 0x8F, 0x90, 0x9D] {
+            var data = Data("name,email\r\nInvalid".utf8)
+            data.append(byte)
+            data.append(Data(",lead@example.test\r\n".utf8))
+            try expectUnsupportedText("undefined.csv", data, "undefined Windows-1252 byte \(byte)")
+        }
+    }
+
     static func bareUTF16Import() throws {
         for (label, encoding) in [("LE", String.Encoding.utf16LittleEndian), ("BE", .utf16BigEndian)] {
             for name in ["Jane Doe", "Élise Côté"] {
@@ -223,7 +252,9 @@ enum CSVImportTests {
     }
 
     static func macRomanRejected() throws {
-        try expectUnsupportedText("mac.csv", "name,email\rÉlise Côté,elise@example.test\r".data(using: .macOSRoman)!, "Mac Roman file")
+        // Some Mac Roman byte sequences are also valid Windows-1252 and cannot
+        // be distinguished automatically. Here ç is 0x8D, undefined in CP1252.
+        try expectUnsupportedText("mac.csv", "name,email\rFrançois Côté,lead@example.test\r".data(using: .macOSRoman)!, "Mac Roman with undefined Windows-1252 bytes")
     }
 
     static func headerOnlyNotice() throws {

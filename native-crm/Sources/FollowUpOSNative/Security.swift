@@ -138,8 +138,8 @@ enum ImportLimits {
         return text
     }
 
-    /// Decodes spreadsheet text exports. Returns nil rather than guess when the bytes
-    /// would import as garbled text.
+    /// Decodes spreadsheet text exports, preferring UTF-8. Legacy single-byte
+    /// encodings overlap, so their original encoding cannot always be inferred.
     static func decodeText(_ data: Data) -> String? {
         // Excel "Unicode Text" and other UTF-16 exports start with a byte-order mark.
         if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) { return String(data: data, encoding: .utf16) }
@@ -168,18 +168,16 @@ enum ImportLimits {
         return text
     }
 
-    /// Rejects bytes that would decode as Windows-1252 but are almost certainly something
-    /// else: UTF-8 with a corrupt byte (a valid multi-byte sequence is present), or Mac
-    /// Roman, whose accented letters sit at 0x80-0x9F where Windows-1252 has only
-    /// punctuation and a few symbols.
+    /// Rejects undefined Windows-1252 bytes and likely mixed/corrupt UTF-8. The C1
+    /// range also contains valid letters, not just punctuation. Some Mac Roman
+    /// sequences overlap valid Windows-1252 and cannot be identified from bytes alone.
     private static func looksLikeWindows1252(_ data: Data) -> Bool {
-        // € … ' ' " " • – — ™ Œ œ: the 0x80-0x9F bytes real Windows-1252 text uses.
-        let expectedC1: Set<UInt8> = [0x80, 0x85, 0x8C, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x99, 0x9C]
+        let undefinedBytes: Set<UInt8> = [0x81, 0x8D, 0x8F, 0x90, 0x9D]
         let bytes = [UInt8](data)
         var index = 0
         while index < bytes.count {
             let byte = bytes[index]
-            if (0x80...0x9F).contains(byte), !expectedC1.contains(byte) { return false }
+            if undefinedBytes.contains(byte) { return false }
             let continuation = byte >= 0xF0 ? 3 : byte >= 0xE0 ? 2 : byte >= 0xC2 ? 1 : 0
             if continuation > 0, byte <= 0xF4, index + continuation < bytes.count,
                bytes[(index + 1)...(index + continuation)].allSatisfy({ (0x80...0xBF).contains($0) }) {

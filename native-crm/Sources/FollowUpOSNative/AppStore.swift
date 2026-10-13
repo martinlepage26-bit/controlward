@@ -382,12 +382,17 @@ final class AppStore: ObservableObject {
         let sourceID = "kairos:\(conversation.id)"
         if let index = workspace.leads.firstIndex(where: { $0.sourceID == sourceID }) {
             var lead = workspace.leads[index]
-            if let appliedAt = lead.sourceUpdatedAt, conversation.lastMessageAt <= appliedAt { return .unchanged }
-            if let latestMessage = conversation.latestMessage, !latestMessage.isEmpty {
-                lead.lastMessage = String(latestMessage.prefix(4_000))
+            if let appliedAt = lead.sourceUpdatedAt, conversation.lastMessageAt < appliedAt { return .unchanged }
+            if lead.sourceUpdatedAt != conversation.lastMessageAt {
+                if let latestMessage = conversation.latestMessage, !latestMessage.isEmpty {
+                    lead.lastMessage = String(latestMessage.prefix(4_000))
+                }
+                lead.sourceUpdatedAt = conversation.lastMessageAt
             }
-            lead.sourceUpdatedAt = conversation.lastMessageAt
+            // Sending a reply changes Kairos status without advancing its inbound
+            // message timestamp. Reconcile that status even when the message is unchanged.
             if lead.status == .new && conversation.status.lowercased() == "answered" { lead.status = .contacted }
+            guard lead != workspace.leads[index] else { return .unchanged }
             workspace.leads[index] = lead
             return .updated
         }

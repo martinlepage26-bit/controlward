@@ -94,3 +94,8 @@ Every import (CSV, XLSX, LeadGen JSON, exchange JSON) is capped at 20 MB and
 in-process (no `unzip` subprocess). CSV headers must match exact names or known
 alternatives. LeadGen JSON must match the `leadgen.event.v1` schema; events
 without `schema_version` are treated as v1.
+
+CSV text accepts UTF-8, UTF-16 and Windows-1252, including the defined extended
+letters and punctuation. Undefined Windows-1252 bytes and likely mixed/corrupt
+UTF-8 are rejected. Legacy encodings can share valid byte sequences; export Mac
+Roman or other legacy files as CSV UTF-8 to avoid ambiguous character decoding.

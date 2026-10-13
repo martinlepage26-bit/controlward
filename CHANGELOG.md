@@ -4,14 +4,22 @@ All notable changes to this application are documented in this file.
 
 ## Unreleased
 
+- Self-hosted CI now waits for a GitHub-hosted secrets preflight. The guard
+  rejects whole-context, wildcard and mixed-case secret access, allowing only
+  explicit `secrets.GITHUB_TOKEN` references.
+- Kairos answered-only updates now mark new leads as contacted even when the
+  inbound message timestamp is unchanged; local workflow states are preserved.
+- Windows-1252 imports accept every defined C1 character, including Š, š, Ž,
+  ž and Ÿ. Undefined bytes remain rejected; use UTF-8 for legacy files whose
+  encoding is ambiguous.
 - Fixed CSV import for Excel and Windows exports: CRLF and CR line endings now
   split rows instead of collapsing the file into one row.
 - CSV import detects semicolon (French-locale Excel) and tab delimiters, and
   honours an Excel `sep=` first line.
 - CSV import accepts UTF-16 (with or without a byte-order mark) and
   Windows-1252 files and drops a leading byte-order mark, which previously
-  broke Lantern header matching. Corrupt UTF-8 and Mac Roman files are
-  rejected instead of importing garbled accents.
+  broke Lantern header matching. Likely mixed/corrupt UTF-8 and files with
+  undefined Windows-1252 bytes are rejected instead of importing garbled accents.
 - Delimiter detection samples the first rows and ignores leading blank lines.
 - Quote amounts parse English and French formats (`$2,500.00`, `2 500,00 $`).
   A lone `.` is always a decimal point; a lone `,` groups thousands only in
