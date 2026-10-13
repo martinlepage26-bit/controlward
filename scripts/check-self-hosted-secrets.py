@@ -7,7 +7,8 @@ scan jobs may run on it. This check fails when a job whose runs-on includes
 "self-hosted" (or the "ct920" label):
   - references secrets.<NAME> other than secrets.GITHUB_TOKEN, in the job
     or in workflow-level env,
-  - uses `secrets: inherit` or bracket access like secrets['X'],
+  - uses `secrets: inherit`, bracket access like secrets['X'], or the whole
+    secrets context (including toJSON(secrets) and secrets.*),
   - declares a deployment `environment:`,
   - lives in a deploy workflow (file name starting with "deploy" or
     containing "pages-deploy").
@@ -21,9 +22,24 @@ import sys
 
 import yaml
 
-SECRET_RE = re.compile(r"(?<![\w./-])secrets\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)")
-SECRET_BRACKET_RE = re.compile(r"(?<![\w./-])secrets\s*\[")
+SECRET_RE = re.compile(r"(?<![\w./-])secrets\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+SECRET_BRACKET_RE = re.compile(r"(?<![\w./-])secrets\s*\[", re.IGNORECASE)
+SECRET_CONTEXT_RE = re.compile(r"(?<![\w./-])secrets\b(?!\s*(?:\.\s*[A-Za-z_]|\[))", re.IGNORECASE)
+# A quoted '}}' is an expression string, not the end of the expression.
+EXPRESSION_RE = re.compile(r"\$\{\{((?:'(?:[^']|'')*'|[^'])+?)\}\}", re.DOTALL)
+STRING_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
 SELF_HOSTED_LABELS = {"self-hosted", "ct920"}
+
+
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
 
 
 def _labels(runs_on):
@@ -54,7 +70,7 @@ def check_workflow(name, text):
     problems = []
     doc = yaml.safe_load(text) or {}
     jobs = doc.get("jobs") or {}
-    top_env = yaml.safe_dump(doc.get("env") or {})
+    top_env = doc.get("env") or {}
     deploy_file = name.lower().startswith("deploy") or "pages-deploy" in name.lower()
     for job_id, job in jobs.items():
         if not isinstance(job, dict) or not _is_self_hosted(job.get("runs-on")):
@@ -66,12 +82,17 @@ def check_workflow(name, text):
             problems.append(f"{where} but declares environment {job['environment']!r}")
         if job.get("secrets") == "inherit":
             problems.append(f"{where} but uses 'secrets: inherit'")
-        body = yaml.safe_dump(job) + top_env
+        # Read parsed values directly so YAML quoting cannot hide multiline expressions.
+        values = list(_strings([job, top_env]))
+        body = "\n".join(values)
         if SECRET_BRACKET_RE.search(body):
             problems.append(f"{where} but uses bracket secrets access")
         for secret in sorted(set(SECRET_RE.findall(body))):
-            if secret != "GITHUB_TOKEN":
+            if secret.upper() != "GITHUB_TOKEN":
                 problems.append(f"{where} but references secrets.{secret}")
+        if any(SECRET_CONTEXT_RE.search(STRING_LITERAL_RE.sub("", expression))
+               for value in values for expression in EXPRESSION_RE.findall(value)):
+            problems.append(f"{where} but references the whole secrets context")
     return problems
 
 
@@ -129,11 +150,21 @@ jobs:
 """,
     }
     assert check_workflow("tests.yml", ok) == [], check_workflow("tests.yml", ok)
+    for expression in ("toJSON(secrets)", "secrets", "toJSON( secrets )", "toJSON(SeCrEtS)",
+                       "secrets.*", "format('}} {0}', toJSON(secrets))", "toJSON(\n  secrets\n)"):
+        for top_level in (False, True):
+            job = {"runs-on": ["self-hosted", "ct920"], "steps": [{"run": "echo test"}]}
+            workflow = {"jobs": {"t": job}}
+            (workflow if top_level else job)["env"] = {"VALUE": "${{ " + expression + " }}"}
+            bad_cases[f"whole context {expression}, top-level={top_level}"] = yaml.safe_dump(workflow)
+    for expression in ("toJSON(secrets.GITHUB_TOKEN)", "secrets.github_token", "'secrets'", "inputs.secrets"):
+        allowed = {"jobs": {"t": {"runs-on": "self-hosted", "env": {"VALUE": "${{ " + expression + " }}"}}}}
+        assert check_workflow("tests.yml", yaml.safe_dump(allowed)) == [], f"allowed expression rejected: {expression}"
     for label, text in bad_cases.items():
         assert check_workflow("tests.yml", text), f"self-test case not caught: {label}"
     deploy = "jobs:\n  b:\n    runs-on: [self-hosted, ct920]\n    steps: [{run: echo}]\n"
     assert check_workflow("deploy.yml", deploy), "deploy workflow on self-hosted not caught"
-    print(f"self-test passed ({len(bad_cases) + 2} cases)")
+    print(f"self-test passed ({len(bad_cases) + 6} cases)")
 
 
 def main(argv):

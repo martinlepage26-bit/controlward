@@ -21,6 +21,8 @@ enum IntegrationTests {
             ("Twenty: failure surfaces, keeps progress, retry does not duplicate", twentyErrorAndResume),
             ("Twenty: 429 is retried, 404 on update recreates and relinks", twentyRetryAndRelink),
             ("Twenty: verify is an authenticated GET; 401 is an error", twentyVerify),
+            ("Kairos: answered status updates with the same message timestamp and persists", kairosAnsweredWithoutNewMessage),
+            ("Kairos: repeat and stale imports preserve local lead state", kairosPreservesLocalState),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -52,6 +54,78 @@ enum IntegrationTests {
 
     private static let pharosURL = "https://pharos-contextward-api.example.test"
     private static let twentyURL = "http://localhost:2020"
+
+    private actor FakeKairos: HTTPTransport {
+        private var status = "open"
+        private var timestamp = "2026-10-13T12:00:00Z"
+        private var message = "Can you help with my project?"
+
+        func set(status: String, timestamp: String = "2026-10-13T12:00:00Z", message: String = "Can you help with my project?") {
+            self.status = status
+            self.timestamp = timestamp
+            self.message = message
+        }
+
+        func send(_ request: URLRequest) async throws -> HTTPResponse {
+            guard request.httpMethod == "GET", request.url?.path == "/v1/inbox" else {
+                throw SmokeTestFailure.failed("unexpected Kairos request")
+            }
+            return json(200, ["conversations": [[
+                "id": "conversation-1", "author_handle": "@prospect", "intent": "lead",
+                "priority": 50, "status": status, "last_message_at": timestamp,
+                "platform": "youtube", "latest_message": message,
+            ]]])
+        }
+    }
+
+    static func kairosAnsweredWithoutNewMessage() async throws {
+        let fake = FakeKairos()
+        let store = try makeStore(secrets: InMemorySecretStore([.kairos: "kairos-test-key"]), transport: fake)
+        defer { try? FileManager.default.removeItem(at: store.storageURL.deletingLastPathComponent()) }
+        let first = await store.importKairosLeads()
+        try expect(first.detail == "1 new, 0 updated, 0 unchanged, 0 skipped.", "initial Kairos import failed")
+        let original = store.leads[0]
+        try expect(original.status == .new, "open conversation was not imported as new")
+
+        // Answering changes conversation status independently of the inbound timestamp.
+        await fake.set(status: "answered", message: "Do not overwrite the same-timestamp message")
+        let answered = await store.importKairosLeads()
+        try expect(answered.detail == "0 new, 1 updated, 0 unchanged, 0 skipped.", "status-only change was not counted as updated")
+        try expect(store.leads.count == 1 && store.leads[0].id == original.id, "status update duplicated the lead")
+        try expect(store.leads[0].status == .contacted, "answered lead stayed new")
+        try expect(store.leads[0].sourceUpdatedAt == original.sourceUpdatedAt && store.leads[0].lastMessage == original.lastMessage, "status update replaced message state")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: store.secrets, transport: fake)
+        try expect(reloaded.leads[0] == store.leads[0], "answered status did not persist")
+        let repeated = await reloaded.importKairosLeads()
+        try expect(repeated.detail == "0 new, 0 updated, 1 unchanged, 0 skipped.", "repeated answered import was not idempotent")
+    }
+
+    static func kairosPreservesLocalState() async throws {
+        let fake = FakeKairos()
+        let store = try makeStore(secrets: InMemorySecretStore([.kairos: "kairos-test-key"]), transport: fake)
+        defer { try? FileManager.default.removeItem(at: store.storageURL.deletingLastPathComponent()) }
+        _ = await store.importKairosLeads()
+        let original = store.leads[0]
+        await fake.set(status: "answered", timestamp: "2026-10-12T12:00:00Z", message: "Stale message")
+        let stale = await store.importKairosLeads()
+        try expect(stale.detail == "0 new, 0 updated, 1 unchanged, 0 skipped." && store.leads[0] == original, "stale conversation changed a lead")
+
+        for status in LeadStatus.allCases where status != .new {
+            var lead = original
+            lead.status = status
+            lead.notes = "Local qualification notes"
+            store.update(lead)
+            await fake.set(status: "answered")
+            let repeated = await store.importKairosLeads()
+            try expect(repeated.detail == "0 new, 0 updated, 1 unchanged, 0 skipped." && store.leads[0] == lead, "answered import regressed local \(status) state")
+
+            await fake.set(status: "answered", timestamp: "2026-10-14T12:00:00Z", message: "A newer message")
+            let newer = await store.importKairosLeads()
+            try expect(newer.detail == "0 new, 1 updated, 0 unchanged, 0 skipped.", "newer message did not update")
+            try expect(store.leads[0].lastMessage == "A newer message" && store.leads[0].sourceUpdatedAt == "2026-10-14T12:00:00Z", "newer message state missing")
+            try expect(store.leads[0].status == status && store.leads[0].notes == lead.notes, "newer message regressed local state")
+        }
+    }
 
     /// Mirrors pharos-api/src/index.ts, including D1 idempotency.
     final class FakePharos: HTTPTransport, @unchecked Sendable {

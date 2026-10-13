@@ -32,6 +32,7 @@ jobs:
       - run: /tmp/guard/bin/python scripts/check-self-hosted-secrets.py .github/workflows
 
   extension-and-worker:
+    needs: runner-secrets-guard
     runs-on: [self-hosted, ct920]
     steps:
       - uses: actions/checkout@v4

@@ -25,10 +25,12 @@ enum CSVImportTests {
             ("CSV: UTF-16 export imports", utf16Import),
             ("CSV: Windows-1252 export imports accents", windows1252Import),
             ("CSV: Windows-1252 punctuation and ligatures import", windows1252Punctuation),
+            ("CSV: Windows-1252 extended letters import", windows1252ExtendedLetters),
+            ("CSV: undefined Windows-1252 bytes are rejected", windows1252UndefinedRejected),
             ("CSV: UTF-16 without a byte-order mark imports", bareUTF16Import),
             ("CSV: binary file is rejected as unsupported text", binaryRejected),
             ("CSV: UTF-8 with a corrupt byte is rejected, not garbled", corruptUTF8Rejected),
-            ("CSV: Mac Roman file is rejected, not garbled", macRomanRejected),
+            ("CSV: Mac Roman with undefined Windows-1252 bytes is rejected", macRomanRejected),
             ("CSV: header-only file reports nothing imported", headerOnlyNotice),
             ("CSV: unrecognized headers say so", unknownHeadersNotice),
             ("CSV: Lantern CRLF export with BOM imports", baeaCRLFWithBOM),
@@ -199,6 +201,25 @@ enum CSVImportTests {
         }
     }
 
+    static func windows1252ExtendedLetters() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let names = ["Šárka", "Žaneta", "Dušan", "Dražen", "Ÿvette", "ƒ"]
+        let text = "name,email\r\n" + names.map { "\($0),lead@example.test\r\n" }.joined()
+        let url = try file("legacy-letters.csv", text.data(using: .windowsCP1252)!, in: directory)
+        try expect(try store.importCSV(from: url) == names.count, "Windows-1252 names were rejected")
+        try expect(Set(store.leads.map(\.name)) == Set(names), "Windows-1252 names were garbled")
+    }
+
+    static func windows1252UndefinedRejected() throws {
+        for byte: UInt8 in [0x81, 0x8D, 0x8F, 0x90, 0x9D] {
+            var data = Data("name,email\n".utf8)
+            data.append(byte)
+            data.append(Data("name,lead@example.test\n".utf8))
+            try expectUnsupportedText("undefined.csv", data, "undefined Windows-1252 byte \(byte)")
+        }
+    }
+
     private static func expectUnsupportedText(_ name: String, _ data: Data, _ what: String) throws {
         let (store, directory) = try freshStore()
         let url = try file(name, data, in: directory)
@@ -223,7 +244,9 @@ enum CSVImportTests {
     }
 
     static func macRomanRejected() throws {
-        try expectUnsupportedText("mac.csv", "name,email\rÉlise Côté,elise@example.test\r".data(using: .macOSRoman)!, "Mac Roman file")
+        // è is 0x8F in Mac Roman, undefined in Windows-1252. Other Mac Roman
+        // text can also be valid Windows-1252 and cannot reliably be rejected.
+        try expectUnsupportedText("mac.csv", "name,email\rÉlise Lefèvre,elise@example.test\r".data(using: .macOSRoman)!, "Mac Roman file")
     }
 
     static func headerOnlyNotice() throws {
