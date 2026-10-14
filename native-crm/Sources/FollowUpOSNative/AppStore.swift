@@ -123,7 +123,7 @@ final class AppStore: ObservableObject {
             if let http = response as? HTTPURLResponse {
                 showNotice("\(target.label) preflight returned HTTP \(http.statusCode). No data was sent.")
             } else { showNotice("\(target.label) responded without an HTTP status.") }
-        } catch { showNotice("\(target.label) preflight failed: \(error.localizedDescription)") }
+        } catch { showNotice("\(target.label) preflight failed: \(message(for: error))") }
     }
 
     // MARK: - Connectors (API keys, status, PHAROS push, Twenty push)
@@ -484,32 +484,32 @@ final class AppStore: ObservableObject {
 
     private var pharosConfigured: Bool { !endpoint(for: .pharos).isEmpty && hasKey(.pharos) }
 
-    /// Runs when the app opens: if pulling is on and PHAROS is set up, pull now and keep pulling.
+    /// Runs when the app opens: if Auto-Pilot is on and PHAROS is set up, pull now and keep pulling.
     func pullLeadsOnLaunch() async {
-        guard workspace.autoPullLeads, pharosConfigured else { return }
+        guard workspace.autoPilotEnabled, pharosConfigured else { return }
         await pullLeads()
         startPullLoop()
     }
 
-    /// "Start pulling": saves the choice, pulls now, then every `leadPullInterval` while the app is open.
+    /// "Start Auto-Pilot": saves the choice, pulls now, then every `leadPullInterval` while the app is open.
     func startPulling() async {
         guard pharosConfigured else {
-            showNotice("Save the PHAROS endpoint and key before starting to pull leads.")
+            showNotice("Save the PHAROS endpoint and key before enabling Auto-Pilot.")
             return
         }
-        workspace.autoPullLeads = true
+        workspace.autoPilotEnabled = true
         persist()
         await pullLeads()
         startPullLoop()
     }
 
-    /// "Stop pulling": saves the choice and stops the periodic pull. Leads already pulled stay.
+    /// "Stop Auto-Pilot": saves the choice and stops the periodic pull. Leads already pulled stay.
     func stopPulling() {
         pullLoop?.cancel()
         pullLoop = nil
         isPullingLeads = false
-        workspace.autoPullLeads = false
-        persist(message: "Stopped pulling leads.")
+        workspace.autoPilotEnabled = false
+        persist(message: "Auto-Pilot disabled.")
     }
 
     private func startPullLoop() {
@@ -519,10 +519,9 @@ final class AppStore: ObservableObject {
             while !Task.isCancelled {
                 guard let interval = self?.leadPullInterval else { break }
                 try? await Task.sleep(for: interval)
-                guard !Task.isCancelled, let self, self.workspace.autoPullLeads, self.pharosConfigured else { break }
+                guard !Task.isCancelled, let self, self.workspace.autoPilotEnabled, self.pharosConfigured else { break }
                 await self.pullLeads()
             }
-            // Ended on its own (key or endpoint removed): show pulling as off. A cancel means stop or restart handled it.
             if !Task.isCancelled { self?.isPullingLeads = false }
         }
     }
@@ -773,8 +772,8 @@ final class AppStore: ObservableObject {
     func update(_ opportunity: Opportunity) { replace(&workspace.opportunities, with: opportunity); persist(message: "Opportunity saved.") }
     func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
 
-    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added.") }
-    func update(_ task: CRMTask) { replace(&workspace.tasks, with: task); persist(message: "Task saved.") }
+    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminders() } }
+    func update(_ task: CRMTask) { replace(&workspace.tasks, with: task); persist(message: "Task saved."); Task { await scheduleTaskReminders() } }
     func delete(_ task: CRMTask) { workspace.tasks.removeAll { $0.id == task.id }; persist(message: "Task deleted.") }
 
     func add(_ note: CRMNote) { workspace.notes.insert(note, at: 0); persist(message: "Note added.") }
@@ -1090,6 +1089,34 @@ final class AppStore: ObservableObject {
         }
         showNotice(scheduled == 0 ? "No due follow-ups to remind you about." : "Scheduled \(scheduled) local reminder\(scheduled == 1 ? "" : "s").")
         return scheduled
+    }
+
+    /// Schedules local macOS notifications for tasks with future due dates.
+    /// Requests notification authorization once; scheduled tasks fire on their due date at 9 AM.
+    func scheduleTaskReminders() async {
+        let center = UNUserNotificationCenter.current()
+        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+        guard granted else { return }
+
+        var scheduled = 0
+        for task in workspace.tasks where task.status != .done, let dueDateStr = task.dueDate, !dueDateStr.isEmpty {
+            guard let dueDate = CalendarCRM.date(from: dueDateStr), dueDate > .now else { continue }
+            var calendar = Calendar.current
+            var components = calendar.dateComponents([.year, .month, .day], from: dueDate)
+            components.hour = 9
+            components.minute = 0
+            guard let triggerDate = calendar.date(from: components) else { continue }
+
+            let content = UNMutableNotificationContent()
+            content.title = "Task: \(task.title)"
+            content.body = task.details.isEmpty ? "Review the task details." : task.details.prefix(200).description
+            content.sound = .default
+
+            let trigger = UNCalendarNotificationTrigger(dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: triggerDate), repeats: false)
+            let request = UNNotificationRequest(identifier: "contextward-task-\(task.id.uuidString)", content: content, trigger: trigger)
+            try? await center.add(request)
+            scheduled += 1
+        }
     }
 
     func importCSV(from url: URL) throws -> Int {

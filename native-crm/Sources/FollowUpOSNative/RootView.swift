@@ -211,6 +211,9 @@ struct MainWorkspaceView: View {
             }
             .background(CRMTheme.paper)
         }
-        .task { await store.pullLeadsOnLaunch() }
+        .task {
+            await store.pullLeadsOnLaunch()
+            await store.scheduleTaskReminders()
+        }
     }
 }

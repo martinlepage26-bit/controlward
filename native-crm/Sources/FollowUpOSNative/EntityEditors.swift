@@ -44,10 +44,22 @@ struct ContactEditor: View {
                 TextField("Email", text: $draft.email)
                 TextField("Phone", text: $draft.phone)
             }
+            Section("Relationships") {
+                Picker("Company", selection: companyBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("Lead", selection: leadBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.leads) { Text($0.name).tag(Optional($0.id)) }
+                }
+            }
         }
         .environmentObject(store)
     }
 
+    private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
+    private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
     private func save() {
         guard !draft.displayName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         existing ? store.update(draft) : store.add(draft)
@@ -138,6 +150,24 @@ struct TaskEditor: View {
                 DatePicker("Due date", selection: dueDateBinding, displayedComponents: .date)
                 TextEditor(text: $draft.details).frame(minHeight: 90)
             }
+            Section("Relationships") {
+                Picker("Contact", selection: contactBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.contacts) { Text($0.displayName).tag(Optional($0.id)) }
+                }
+                Picker("Company", selection: companyBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("Opportunity", selection: opportunityBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.opportunities) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("Lead", selection: leadBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.leads) { Text($0.name).tag(Optional($0.id)) }
+                }
+            }
         }
         .environmentObject(store)
     }
@@ -145,6 +175,10 @@ struct TaskEditor: View {
     private var dueDateBinding: Binding<Date> {
         Binding(get: { CalendarCRM.date(from: draft.dueDate) ?? .now }, set: { draft.dueDate = CalendarCRM.dayString($0) })
     }
+    private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
+    private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
+    private var opportunityBinding: Binding<UUID?> { Binding(get: { draft.opportunityID }, set: { draft.opportunityID = $0 }) }
+    private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
     private func save() { guard !draft.title.isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
 }
 
