@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var industry = Industries.all[0]
     @State private var confirmReset = false
     @State private var keyDrafts: [SyncTarget: String] = [:]
+    @State private var autoPilotEnabled = false
 
     private func keyBinding(_ target: SyncTarget) -> Binding<String> {
         Binding(get: { keyDrafts[target] ?? "" }, set: { keyDrafts[target] = $0 })
@@ -50,6 +51,18 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
+                }
+                .crmCard()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Automation").font(.headline)
+                    Text("When enabled, automations run automatically on lead state changes and follow-up date triggers. External syncs (PHAROS, Twenty, Gap Analysis) still require explicit preview and confirmation.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Toggle("Auto-Pilot", isOn: $autoPilotEnabled)
+                        .onChange(of: autoPilotEnabled) { _, enabled in
+                            store.workspace.autoPilotEnabled = enabled
+                            store.persist(message: enabled ? "Auto-Pilot enabled." : "Auto-Pilot disabled.")
+                        }
                 }
                 .crmCard()
 
@@ -114,6 +127,7 @@ struct SettingsView: View {
         .onAppear {
             name = store.business.name
             industry = store.business.industry
+            autoPilotEnabled = store.workspace.autoPilotEnabled
         }
         .confirmationDialog("Reset Contextward?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Back up and erase everything", role: .destructive) {
