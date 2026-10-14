@@ -20,6 +20,7 @@ struct NativeSmokeTests {
         let gapsPassed = await GapAnalysisTests.run()
         let kairosPassed = await KairosTests.run()
         let discoveryPassed = await DiscoveryTests.run()
+        let gtmPassed = GTMTests.run()
         let csvPassed = CSVImportTests.run()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("followupos-tests-\(UUID().uuidString)", isDirectory: true)
@@ -209,6 +210,7 @@ struct NativeSmokeTests {
         try expect(kairosPassed, "Kairos tests failed")
         try expect(discoveryPassed, "discovery tests failed")
         try expect(csvPassed, "CSV import tests failed")
+        try expect(gtmPassed, "account intelligence tests failed")
     }
 
     private static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {

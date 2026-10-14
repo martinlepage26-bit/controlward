@@ -14,12 +14,17 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/Security.swift" \
   "${SOURCE_ROOT}/Integrations.swift" \
   "${SOURCE_ROOT}/Discovery.swift" \
+  "${SOURCE_ROOT}/GTMModels.swift" \
+  "${SOURCE_ROOT}/AccountIdentity.swift" \
+  "${SOURCE_ROOT}/AccountScoring.swift" \
+  "${SOURCE_ROOT}/GTMEvents.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/SecurityTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/IntegrationTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadInboxTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GapAnalysisTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/KairosTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/GTMTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/CSVImportTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"

@@ -77,6 +77,7 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct PersistentWorkspace: Codable, Equatable, Sendable {
+    var accountIntelligence = GTMWorkspace()
     var business = BusinessProfile()
     var leads: [Lead] = []
     var contacts: [Contact] = []
@@ -112,6 +113,12 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        accountIntelligence = try container.decodeIfPresent(GTMWorkspace.self, forKey: .accountIntelligence) ?? GTMWorkspace()
+        guard accountIntelligence.schemaVersion == 1,
+              accountIntelligence.profiles.allSatisfy({ $0.criteria.count == 4 }),
+              accountIntelligence.assessments.allSatisfy({ $0.evidence.count == 4 }) else {
+            throw DecodingError.dataCorruptedError(forKey: .accountIntelligence, in: container, debugDescription: "Unsupported or malformed account intelligence workspace.")
+        }
         business = try container.decodeIfPresent(BusinessProfile.self, forKey: .business) ?? BusinessProfile()
         leads = try container.decodeIfPresent([Lead].self, forKey: .leads) ?? []
         contacts = try container.decodeIfPresent([Contact].self, forKey: .contacts) ?? []
@@ -138,6 +145,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case accountIntelligence
         case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview, leadInboxCursor, autoPullLeads, leadInboxEpoch, dismissedLeadSources, autoPilotEnabled
     }
 }

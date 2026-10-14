@@ -109,6 +109,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case pipeline = "Pipeline"
     case operations = "Operations"
+    case intelligence = "Account intelligence"
     case integrations = "Integrations"
     case contacts = "Contacts"
     case companies = "Companies"
@@ -126,6 +127,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
         case .overview: "square.grid.2x2"
         case .pipeline: "rectangle.3.group"
         case .operations: "arrow.triangle.branch"
+        case .intelligence: "scope"
         case .integrations: "square.3.layers.3d"
         case .contacts: "person.2"
         case .companies: "building.2"
@@ -198,6 +200,7 @@ struct MainWorkspaceView: View {
                 case .overview: OverviewView()
                 case .pipeline: PipelineView()
                 case .operations: IntegratedOpsView()
+                case .intelligence: AccountIntelligenceView()
                 case .integrations: IntegrationCenterView()
                 case .contacts: DirectoryView(kind: .contacts)
                 case .companies: DirectoryView(kind: .companies)

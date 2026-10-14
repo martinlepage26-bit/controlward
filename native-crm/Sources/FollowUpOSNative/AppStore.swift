@@ -1502,6 +1502,18 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Commit a complete GTM transaction to disk before publishing it to the UI.
+    /// A failed import/task write cannot leave a partial in-memory success.
+    func commitGTM(_ mutation: (inout PersistentWorkspace) throws -> Void) throws {
+        guard case .ready = recoveryState else { throw GTMError.invalid("Workspace recovery is required before saving.") }
+        var next = workspace
+        try mutation(&next)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try SecureFiles.writePrivate(try encoder.encode(next), to: storageURL)
+        workspace = next
+    }
+
     /// Saves or throws. Used before acking pulled leads, so an ack never outruns the disk.
     private func persistOrThrow() throws {
         guard case .ready = recoveryState else {
