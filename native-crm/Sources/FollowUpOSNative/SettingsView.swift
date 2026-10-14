@@ -56,12 +56,18 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Automation").font(.headline)
-                    Text("When enabled, automations run automatically on lead state changes and follow-up date triggers. External syncs (PHAROS, Twenty, Gap Analysis) still require explicit preview and confirmation.")
+                    Text("When enabled, Contextward checks the configured PHAROS lead inbox at startup and every five minutes while open, then runs local rules on imported leads. It never sends outreach or pushes records. Turn it off to stop background pulls.")
                         .font(.callout).foregroundStyle(.secondary)
                     Toggle("Auto-Pilot", isOn: $autoPilotEnabled)
                         .onChange(of: autoPilotEnabled) { _, enabled in
-                            store.workspace.autoPilotEnabled = enabled
-                            store.persist(message: enabled ? "Auto-Pilot enabled." : "Auto-Pilot disabled.")
+                            if enabled {
+                                Task {
+                                    await store.startPulling()
+                                    autoPilotEnabled = store.workspace.autoPilotEnabled
+                                }
+                            } else {
+                                store.stopPulling()
+                            }
                         }
                 }
                 .crmCard()

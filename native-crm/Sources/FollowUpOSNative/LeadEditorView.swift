@@ -79,11 +79,51 @@ struct LeadEditorView: View {
                         }
                     }
 
+                    SectionLabel(text: "Relationship context")
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                        GridRow {
+                            Picker("Company", selection: companyBinding) {
+                                Text("Unlinked").tag(UUID?.none)
+                                ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) }
+                            }
+                            Picker("Contact", selection: contactBinding) {
+                                Text("Unlinked").tag(UUID?.none)
+                                ForEach(store.contacts) { Text($0.displayName).tag(Optional($0.id)) }
+                            }
+                        }
+                    }
+                    if let signal = store.signals.first(where: { $0.leadID == draft.id }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("RESEARCH EVIDENCE").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                            Text("Research priority \(signal.priority)/100 · fit \(signal.fitScore) · buyer intent \(signal.intentScore == 0 ? "unknown" : String(signal.intentScore))")
+                                .font(.caption.monospacedDigit())
+                            Text(signal.evidence).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        .padding(12).background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 8))
+                    }
+
                     if isNew {
                         Picker("Initial status", selection: statusBinding) {
                             ForEach(LeadStatus.allCases.filter(\.isOpen)) { Text($0.label).tag($0) }
                         }
                     } else {
+                        HStack {
+                            SectionLabel(text: "Linked context")
+                            Spacer()
+                            Button(store.opportunities.contains(where: { $0.leadID == draft.id }) ? "Open opportunity" : "Create opportunity") {
+                                let opportunity = store.createOpportunity(from: draft)
+                                store.notice = "Opportunity ready in the \(opportunity.stage.label) stage."
+                            }
+                        }
+                        ForEach(store.notes.filter { $0.contactID == draft.contactID || $0.companyID == draft.companyID || $0.opportunityID == store.opportunities.first(where: { $0.leadID == draft.id })?.id }) { note in
+                            Label(note.title, systemImage: "note.text").font(.callout)
+                        }
+                        ForEach(store.audits.filter { $0.leadID == draft.id || $0.contactID == draft.contactID || $0.companyID == draft.companyID }) { audit in
+                            Label("Lantern · \(audit.name) · FR/EN gap \(audit.languageGap.formatted(.number.precision(.fractionLength(1))))", systemImage: "checkmark.seal").font(.callout)
+                        }
+                        ForEach(store.tasks.filter { $0.leadID == draft.id || $0.contactID == draft.contactID || $0.companyID == draft.companyID }) { task in
+                            Label("\(task.title) · \(task.status.label) · \(CalendarCRM.display(task.dueDate))", systemImage: "checklist").font(.callout)
+                        }
                         if draft.status.isOpen {
                             VStack(alignment: .leading, spacing: 7) {
                                 Text("NEXT FOLLOW-UP").font(.caption.weight(.bold)).foregroundStyle(.secondary)
@@ -264,6 +304,9 @@ struct LeadEditorView: View {
         )
     }
 
+    private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
+    private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
+
     private func saveAndClose() {
         let trimmed = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -272,6 +315,7 @@ struct LeadEditorView: View {
         }
         draft.name = trimmed
         if isNew { store.add(draft) } else { store.update(draft) }
+        store.linkLead(draft.id, companyID: draft.companyID, contactID: draft.contactID)
         dismiss()
     }
 

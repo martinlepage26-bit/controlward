@@ -120,6 +120,10 @@ struct OpportunityEditor: View {
                     Text("Unassigned").tag(UUID?.none)
                     ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) }
                 }
+                Picker("Lead", selection: leadBinding) {
+                    Text("Unlinked").tag(UUID?.none)
+                    ForEach(store.leads) { Text($0.name).tag(Optional($0.id)) }
+                }
                 TextEditor(text: $draft.notes).frame(minHeight: 70)
             }
         }
@@ -131,6 +135,7 @@ struct OpportunityEditor: View {
     }
     private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
     private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
+    private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
     private func save() { guard !draft.name.isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
 }
 
@@ -147,7 +152,9 @@ struct TaskEditor: View {
             Section("Task") {
                 TextField("Title", text: $draft.title)
                 Picker("Status", selection: $draft.status) { ForEach(TaskStatus.allCases) { Text($0.label).tag($0) } }
-                DatePicker("Due date", selection: dueDateBinding, displayedComponents: .date)
+                DatePicker("Reminder date and time", selection: dueDateBinding, displayedComponents: [.date, .hourAndMinute])
+                Text("Sends a local macOS notification at this time. It does not email or message anyone.")
+                    .font(.caption).foregroundStyle(.secondary)
                 TextEditor(text: $draft.details).frame(minHeight: 90)
             }
             Section("Relationships") {
@@ -173,13 +180,27 @@ struct TaskEditor: View {
     }
 
     private var dueDateBinding: Binding<Date> {
-        Binding(get: { CalendarCRM.date(from: draft.dueDate) ?? .now }, set: { draft.dueDate = CalendarCRM.dayString($0) })
+        Binding(
+            get: {
+                if let value = draft.reminderAt, let date = ISO8601DateFormatter().date(from: value) { return date }
+                if let due = CalendarCRM.date(from: draft.dueDate) { return Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: due) ?? due }
+                return Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: .now) ?? .now
+            },
+            set: { draft.dueDate = CalendarCRM.dayString($0); draft.reminderAt = $0.ISO8601Format() }
+        )
     }
     private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
     private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
     private var opportunityBinding: Binding<UUID?> { Binding(get: { draft.opportunityID }, set: { draft.opportunityID = $0 }) }
     private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
-    private func save() { guard !draft.title.isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
+    private func save() {
+        guard !draft.title.isEmpty else { return }
+        // Persist the displayed default too; otherwise a new task can appear dated
+        // in the editor while still having no reminder instant in storage.
+        if draft.reminderAt == nil { dueDateBinding.wrappedValue = dueDateBinding.wrappedValue }
+        existing ? store.update(draft) : store.add(draft)
+        dismiss()
+    }
 }
 
 struct NoteEditor: View {

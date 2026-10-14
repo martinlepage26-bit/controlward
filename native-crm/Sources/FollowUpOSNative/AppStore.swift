@@ -24,6 +24,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var busyTargets: Set<SyncTarget> = []
     /// Dry-run result that must exist before a Twenty push is allowed.
     @Published private(set) var twentyPreview: TwentyPlan?
+    @Published private(set) var pharosPreviewFingerprint: String?
 
     let storageURL: URL
     let secrets: SecretStore
@@ -34,14 +35,20 @@ final class AppStore: ObservableObject {
     var syncLogSink: ((String) -> Void)?
     private var noticeTask: Task<Void, Never>?
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore = KeychainSecretStore(), transport: HTTPTransport = URLSessionTransport()) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport()) {
         self.storageURL = storageURL
-        self.secrets = secrets
+        let selectedSecrets: SecretStore
+#if CONTEXTWARD_ACCEPTANCE
+        selectedSecrets = secrets ?? InMemorySecretStore()
+#else
+        selectedSecrets = secrets ?? KeychainSecretStore()
+#endif
+        self.secrets = selectedSecrets
         self.transport = transport
         let loaded = Self.load(from: storageURL)
         self.workspace = loaded.workspace
         self.recoveryState = loaded.recovery
-        self.savedKeys = Set(SyncTarget.keyed.filter { secrets.exists($0) })
+        self.savedKeys = Set(SyncTarget.keyed.filter { selectedSecrets.exists($0) })
         if FileManager.default.fileExists(atPath: storageURL.path) {
             try? SecureFiles.ensurePrivateDirectory(storageURL.deletingLastPathComponent())
             try? SecureFiles.restrict(storageURL)
@@ -195,7 +202,9 @@ final class AppStore: ObservableObject {
     }
 
     private func message(for error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        if let integration = error as? IntegrationError { return integration.errorDescription ?? "The integration request failed." }
+        if let localized = error as? LocalizedError, let description = localized.errorDescription { return String(description.prefix(180)) }
+        return "The integration request failed. Check the endpoint and try again."
     }
 
     /// Authenticated check. PHAROS: health plus key check. Twenty: authenticated GET.
@@ -228,10 +237,26 @@ final class AppStore: ObservableObject {
     /// Pushes the current exchange snapshot to the PHAROS backend. The Idempotency-Key
     /// is derived from record content, so re-sending unchanged data is deduplicated server-side.
     @discardableResult
-    func syncToPharos() async -> SyncJob {
+    func previewPharosPush() -> String {
+        let fingerprint = ExchangeFingerprint.idempotencyKey(for: exchange)
+        pharosPreviewFingerprint = fingerprint
+        showNotice("PHAROS preview ready. Review the snapshot summary, then confirm the push.")
+        return fingerprint
+    }
+
+    @discardableResult
+    func syncToPharos(confirmedFingerprint: String? = nil) async -> SyncJob {
         let snapshot = exchange
         let key = ExchangeFingerprint.idempotencyKey(for: snapshot)
         var job = SyncJob(target: .pharos, status: "sending", idempotencyKey: key)
+        guard let preview = pharosPreviewFingerprint, preview == key, confirmedFingerprint == preview else {
+            job.status = "failed"
+            job.error = "Preview the current snapshot and confirm before pushing."
+            showNotice(job.error ?? "Preview and confirm before pushing.")
+            if pharosPreviewFingerprint != key { pharosPreviewFingerprint = nil }
+            return job
+        }
+        pharosPreviewFingerprint = nil
         workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.pharos); defer { busyTargets.remove(.pharos) }
         do {
@@ -240,8 +265,8 @@ final class AppStore: ObservableObject {
             let receipt = try await client.push(try encoder.encode(snapshot), idempotencyKey: key)
             job.status = "synced"
             job.detail = receipt.duplicate == true
-                ? "Already stored (same Idempotency-Key); receipt \(receipt.receipt ?? "n/a")."
-                : "Stored; receipt \(receipt.receipt ?? "n/a")."
+                ? "Already stored (same Idempotency-Key)."
+                : "Stored successfully."
             recordHealth(.pharos, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)) stored by the backend.")
             Self.syncLog.notice("pharos push ok duplicate=\(receipt.duplicate == true, privacy: .public)")
         } catch {
@@ -756,8 +781,71 @@ final class AppStore: ObservableObject {
     }
 
     func add(_ lead: Lead) {
+        if let sourceID = lead.sourceID, !sourceID.isEmpty,
+           workspace.leads.contains(where: { $0.sourceID == sourceID }) {
+            showNotice("This source record is already in the pipeline.")
+            return
+        }
         workspace.leads.insert(lead, at: 0)
         persist(message: "\(lead.name) added.")
+        if workspace.autoPilotEnabled { _ = runAutomations() }
+    }
+
+    func linkLead(_ id: UUID, companyID: UUID?, contactID: UUID?) {
+        guard var lead = workspace.leads.first(where: { $0.id == id }) else { return }
+        lead.companyID = companyID
+        lead.contactID = contactID
+        if let companyID, let company = workspace.companies.first(where: { $0.id == companyID }) { lead.company = company.name }
+        replace(&workspace.leads, with: lead)
+        for index in workspace.signals.indices where workspace.signals[index].leadID == id {
+            workspace.signals[index].companyID = companyID
+            workspace.signals[index].contactID = contactID
+        }
+        persist(message: "Lead relationships saved.")
+    }
+
+    @discardableResult
+    func createOpportunity(from lead: Lead) -> Opportunity {
+        if let existing = workspace.opportunities.first(where: { $0.leadID == lead.id }) { return existing }
+        let opportunity = Opportunity(name: lead.service.isEmpty ? lead.name : "\(lead.name) — \(lead.service)", amount: lead.quoteAmount, stage: .lead, contactID: lead.contactID, companyID: lead.companyID, leadID: lead.id, notes: "Created from the lead pipeline.")
+        add(opportunity)
+        return opportunity
+    }
+
+    @discardableResult
+    func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID {
+        if let existing = workspace.leads.first(where: { $0.sourceID == candidate.sourceID }) {
+            showNotice("Already in pipeline: \(existing.name).")
+            return existing.id
+        }
+        var lead = Lead.blank()
+        lead.name = candidate.name
+        lead.company = candidate.name
+        lead.phone = candidate.phone ?? ""
+        lead.email = candidate.email ?? ""
+        lead.service = candidate.category
+        lead.sourceID = candidate.sourceID
+        lead.notes = candidate.evidence
+        lead.createdAt = candidate.capturedAt
+        workspace.leads.insert(lead, at: 0)
+
+        var signal = Signal()
+        signal.title = "Public prospect: \(candidate.name)"
+        signal.source = .imported
+        signal.status = .captured
+        signal.fitScore = candidate.researchPriority
+        signal.intentScore = 0
+        signal.priority = candidate.researchPriority
+        signal.leadID = lead.id
+        signal.companyID = lead.companyID
+        signal.contactID = lead.contactID
+        signal.sourceID = candidate.sourceID
+        signal.evidence = candidate.evidence
+        signal.nextAction = candidate.readyForHumanReview ? "Review public evidence and decide whether this is a suitable prospect." : "Review this public business record before pursuing it."
+        workspace.signals.insert(signal, at: 0)
+        workspace.activity.insert(ActivityEvent(kind: "discovery", message: "Added one public business record to the review pipeline.", sourceID: lead.id), at: 0)
+        persist(message: "\(candidate.name) added for human review.")
+        return lead.id
     }
 
     func add(_ contact: Contact) { workspace.contacts.insert(contact, at: 0); persist(message: "Contact added.") }
@@ -772,9 +860,19 @@ final class AppStore: ObservableObject {
     func update(_ opportunity: Opportunity) { replace(&workspace.opportunities, with: opportunity); persist(message: "Opportunity saved.") }
     func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
 
-    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminders() } }
-    func update(_ task: CRMTask) { replace(&workspace.tasks, with: task); persist(message: "Task saved."); Task { await scheduleTaskReminders() } }
-    func delete(_ task: CRMTask) { workspace.tasks.removeAll { $0.id == task.id }; persist(message: "Task deleted.") }
+    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminder(for: task) } }
+    func update(_ task: CRMTask) { replace(&workspace.tasks, with: task); persist(message: "Task saved."); Task { await scheduleTaskReminder(for: task) } }
+    func delete(_ task: CRMTask) {
+        workspace.tasks.removeAll { $0.id == task.id }
+#if !CONTEXTWARD_ACCEPTANCE
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["contextward-task-\(task.id.uuidString)"])
+#else
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["contextward-task-\(task.id.uuidString)"])
+        }
+#endif
+        persist(message: "Task deleted.")
+    }
 
     func add(_ note: CRMNote) { workspace.notes.insert(note, at: 0); persist(message: "Note added.") }
     func update(_ note: CRMNote) { replace(&workspace.notes, with: note); persist(message: "Note saved.") }
@@ -1068,9 +1166,20 @@ final class AppStore: ObservableObject {
         persist(message: "Finding marked resolved.")
     }
 
-    /// Schedules local macOS notifications for currently due follow-ups.
+    /// Schedules local macOS notifications for upcoming follow-ups.
     /// It never sends email, SMS, or CRM messages.
     func scheduleDueFollowUpReminders() async -> Int {
+#if CONTEXTWARD_ACCEPTANCE
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            return await scheduleDueFollowUpRemindersInApp()
+        }
+        return 0
+#else
+        return await scheduleDueFollowUpRemindersInApp()
+#endif
+    }
+
+    private func scheduleDueFollowUpRemindersInApp() async -> Int {
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
         guard granted else {
@@ -1078,44 +1187,79 @@ final class AppStore: ObservableObject {
             return 0
         }
         var scheduled = 0
-        for lead in dueLeads {
+        let old = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix("contextward-followup-") }
+        if !old.isEmpty { center.removePendingNotificationRequests(withIdentifiers: old) }
+        for lead in workspace.leads where lead.status.isOpen {
+            guard let due = CalendarCRM.date(from: lead.nextFollowUp),
+                  Calendar.current.startOfDay(for: due) >= Calendar.current.startOfDay(for: .now) else { continue }
+            var components = Calendar.current.dateComponents([.year, .month, .day], from: due)
+            components.hour = 9
+            components.minute = 0
+            guard let fireAt = Calendar.current.date(from: components), fireAt > .now else { continue }
             let content = UNMutableNotificationContent()
             content.title = "Follow up with \(lead.name)"
-            content.body = lead.lastMessage.isEmpty ? "Review the record and choose the next appropriate action." : "Review the last follow-up and decide the next action."
+            content.body = "Review the relationship record and decide the next action."
             content.sound = .default
-            let request = UNNotificationRequest(identifier: "contextward-followup-\(lead.id.uuidString)", content: content, trigger: nil)
-            try? await center.add(request)
-            scheduled += 1
+            let request = UNNotificationRequest(identifier: "contextward-followup-\(lead.id.uuidString)", content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
+            do { try await center.add(request); scheduled += 1 }
+            catch { showNotice("macOS could not schedule a local follow-up reminder.") }
         }
-        showNotice(scheduled == 0 ? "No due follow-ups to remind you about." : "Scheduled \(scheduled) local reminder\(scheduled == 1 ? "" : "s").")
+        showNotice(scheduled == 0 ? "No upcoming lead follow-ups could be scheduled." : "Scheduled \(scheduled) local follow-up reminder\(scheduled == 1 ? "" : "s") for 9 AM.")
         return scheduled
     }
 
-    /// Schedules local macOS notifications for tasks with future due dates.
-    /// Requests notification authorization once; scheduled tasks fire on their due date at 9 AM.
+    /// Keeps one local reminder per open task and restores reminders after relaunch.
     func scheduleTaskReminders() async {
-        let center = UNUserNotificationCenter.current()
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted else { return }
+        for task in workspace.tasks { await scheduleTaskReminder(for: task) }
+    }
 
-        var scheduled = 0
-        for task in workspace.tasks where task.status != .done, let dueDateStr = task.dueDate, !dueDateStr.isEmpty {
-            guard let dueDate = CalendarCRM.date(from: dueDateStr), dueDate > .now else { continue }
-            var calendar = Calendar.current
-            var components = calendar.dateComponents([.year, .month, .day], from: dueDate)
+    private func scheduleTaskReminder(for task: CRMTask) async {
+#if CONTEXTWARD_ACCEPTANCE
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            await scheduleTaskReminderInApp(for: task)
+        }
+        return
+#else
+        await scheduleTaskReminderInApp(for: task)
+#endif
+    }
+
+    private func scheduleTaskReminderInApp(for task: CRMTask) async {
+        let identifier = "contextward-task-\(task.id.uuidString)"
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        guard task.status != .done else { return }
+
+        let fireAt: Date?
+        if let reminderAt = task.reminderAt, let instant = ISO8601DateFormatter().date(from: reminderAt) {
+            fireAt = instant
+        } else if let dateString = task.dueDate, let dueDate = CalendarCRM.date(from: dateString) {
+            var components = Calendar.current.dateComponents([.year, .month, .day], from: dueDate)
             components.hour = 9
             components.minute = 0
-            guard let triggerDate = calendar.date(from: components) else { continue }
+            fireAt = Calendar.current.date(from: components)
+        } else {
+            fireAt = nil
+        }
+        guard let fireAt, fireAt > .now else { return }
 
+        do {
+            let settings = await center.notificationSettings()
+            if settings.authorizationStatus == .notDetermined { _ = try await center.requestAuthorization(options: [.alert, .sound]) }
+            let finalSettings = await center.notificationSettings()
+            guard finalSettings.authorizationStatus == .authorized || finalSettings.authorizationStatus == .provisional else {
+                showNotice("Enable Contextward notifications in System Settings to receive task reminders.")
+                return
+            }
             let content = UNMutableNotificationContent()
             content.title = "Task: \(task.title)"
-            content.body = task.details.isEmpty ? "Review the task details." : task.details.prefix(200).description
+            content.body = "Open Contextward to review this task."
             content.sound = .default
-
-            let trigger = UNCalendarNotificationTrigger(dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: triggerDate), repeats: false)
-            let request = UNNotificationRequest(identifier: "contextward-task-\(task.id.uuidString)", content: content, trigger: trigger)
-            try? await center.add(request)
-            scheduled += 1
+            let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
+            try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)))
+            showNotice("Local task reminder scheduled for \(fireAt.formatted(date: .abbreviated, time: .shortened)).")
+        } catch {
+            showNotice("macOS could not schedule this local task reminder.")
         }
     }
 

@@ -19,6 +19,7 @@ struct NativeSmokeTests {
         let leadInboxPassed = await LeadInboxTests.run()
         let gapsPassed = await GapAnalysisTests.run()
         let kairosPassed = await KairosTests.run()
+        let discoveryPassed = await DiscoveryTests.run()
         let csvPassed = CSVImportTests.run()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("followupos-tests-\(UUID().uuidString)", isDirectory: true)
@@ -206,6 +207,7 @@ struct NativeSmokeTests {
         try expect(leadInboxPassed, "lead inbox tests failed")
         try expect(gapsPassed, "gap analysis tests failed")
         try expect(kairosPassed, "Kairos tests failed")
+        try expect(discoveryPassed, "discovery tests failed")
         try expect(csvPassed, "CSV import tests failed")
     }
 

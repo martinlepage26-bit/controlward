@@ -13,7 +13,7 @@ enum LeadInboxTests {
             ("Lead inbox: cursor persists across relaunch; not advanced when ack fails", cursorPersistence),
             ("Lead inbox: 401 surfaces on the job and leaves the cursor untouched", unauthorized),
             ("Lead inbox: no keys or PII in activity, jobs, health, notices, or logs", noKeysOrPII),
-            ("Lead inbox: auto pull on open only when enabled and configured", autoPull),
+            ("Lead inbox: Auto-Pilot defaults off and pulls on open only when enabled", autoPull),
             ("Lead inbox: a retraction removes the lead and its signal, counts only", retraction),
             ("Lead inbox: nothing is acked when the workspace cannot be saved", noAckWithoutSave),
             ("Lead inbox: phone match never links a lead with a different email", phoneConflict),
@@ -263,8 +263,14 @@ enum LeadInboxTests {
         disabled.stopPulling()
         await disabled.pullLeadsOnLaunch()
         try expect(disabled.leads.isEmpty, "auto pull ran while disabled")
-        let enabled = try makeStore(fake)
-        try expect(enabled.workspace.autoPullLeads, "auto pull should default to on")
+        let enabledDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("contextward-inbox-enabled-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: enabledDirectory, withIntermediateDirectories: true)
+        let enabledURL = enabledDirectory.appendingPathComponent("workspace.json")
+        var savedWorkspace = PersistentWorkspace()
+        savedWorkspace.autoPilotEnabled = true
+        try JSONEncoder().encode(savedWorkspace).write(to: enabledURL)
+        let enabled = try makeStore(fake, storageURL: enabledURL)
+        enabled.setEndpoint(pharosURL, for: .pharos)
         await enabled.pullLeadsOnLaunch()
         try expect(enabled.leads.count == 1, "auto pull did not run when enabled and configured")
         enabled.stopPulling()
@@ -376,13 +382,13 @@ enum LeadInboxTests {
         store.stopPulling()
         try expect(!store.isPullingLeads, "stop did not turn pulling off")
         await store.startPulling()
-        try expect(store.isPullingLeads && store.workspace.autoPullLeads, "start did not turn pulling on and save it")
+        try expect(store.isPullingLeads && store.workspace.autoPilotEnabled, "start did not turn pulling on and save it")
         try expect(store.leads.count == 1, "start did not pull right away")
         fake.add("ident_b", email: "b@example.test", first: "B", last: "Two")
         try await Task.sleep(for: .milliseconds(400))
         try expect(store.leads.count == 2, "interval pull did not bring in the later lead")
         store.stopPulling()
-        try expect(!store.isPullingLeads && !store.workspace.autoPullLeads, "stop did not turn pulling off and save it")
+        try expect(!store.isPullingLeads && !store.workspace.autoPilotEnabled, "stop did not turn pulling off and save it")
         let requestsAtStop = fake.pullSinceValues.count
         fake.add("ident_c", email: "c@example.test", first: "C", last: "Three")
         try await Task.sleep(for: .milliseconds(300))

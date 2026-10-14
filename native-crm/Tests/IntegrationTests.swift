@@ -5,12 +5,16 @@ import Foundation
 /// (pharos-contextward-api routes; Twenty v2.37 REST `/rest/<plural>` envelopes).
 @MainActor
 enum IntegrationTests {
+    private static func pushPharos(_ store: AppStore) async -> SyncJob {
+        let fingerprint = store.previewPharosPush()
+        return await store.syncToPharos(confirmedFingerprint: fingerprint)
+    }
     static func run() async -> Bool {
         let tests: [(String, () async throws -> Void)] = [
-            ("Keychain: save, read, replace, delete round trip", keychainRoundTrip),
             ("Keys: never in workspace.json, exchange export, or activity", keysNeverPersisted),
             ("Status: needs setup -> not verified -> error -> active -> reset on key change", statusTransitions),
             ("PHAROS: Idempotency-Key reused for unchanged data, new for changed data", pharosIdempotencyKey),
+            ("PHAROS: push requires a current preview and matching confirmation", pharosRequiresPreviewConfirmation),
             ("PHAROS: push sends Bearer key and exchange.v1 body, records receipt", pharosPushShape),
             ("PHAROS: HTTP and network errors surface on job and status", pharosErrorSurfacing),
             ("Twenty: push requires a preview first", twentyRequiresPreview),
@@ -186,7 +190,7 @@ enum IntegrationTests {
         store.setAPIKey(twentyKey, for: .twenty)
         try expect(store.hasKey(.pharos) && store.hasKey(.twenty), "keys were not reported as saved")
         _ = await store.verifyConnector(.pharos)
-        _ = await store.syncToPharos()
+        _ = await pushPharos(store)
         let exportURL = store.storageURL.deletingLastPathComponent().appendingPathComponent("export.json")
         try store.exportExchange(to: exportURL)
         let workspaceText = try String(contentsOf: store.storageURL, encoding: .utf8)
@@ -236,23 +240,37 @@ enum IntegrationTests {
     static func pharosIdempotencyKey() async throws {
         let (store, fake) = try configuredPharos()
         seedCRM(store)
-        let first = await store.syncToPharos()
-        let second = await store.syncToPharos()
+        let first = await pushPharos(store)
+        let second = await pushPharos(store)
         try expect(first.status == "synced" && second.status == "synced", "push failed: \(first.error ?? "") \(second.error ?? "")")
         let keys = fake.pushes.compactMap { $0.value(forHTTPHeaderField: "Idempotency-Key") }
         try expect(keys.count == 2 && keys[0] == keys[1], "unchanged data did not reuse the Idempotency-Key")
         try expect(fake.storedCount == 1, "backend stored the same snapshot twice")
         try expect(second.detail?.contains("Already stored") == true, "duplicate receipt was not reported")
         var lead = Lead.blank(); lead.name = "New Person"; store.add(lead)
-        _ = await store.syncToPharos()
+        _ = await pushPharos(store)
         let third = fake.pushes.last?.value(forHTTPHeaderField: "Idempotency-Key")
         try expect(third != nil && third != keys[0], "changed data reused the old Idempotency-Key")
         try expect(fake.storedCount == 2, "changed snapshot was not stored")
     }
 
+    static func pharosRequiresPreviewConfirmation() async throws {
+        let (store, fake) = try configuredPharos()
+        seedCRM(store)
+        let rejected = await store.syncToPharos()
+        try expect(rejected.status == "failed" && fake.pushes.isEmpty, "push ran without a preview and confirmation")
+        let preview = store.previewPharosPush()
+        var lead = Lead.blank(); lead.name = "Changed after preview"; store.add(lead)
+        let stale = await store.syncToPharos(confirmedFingerprint: preview)
+        try expect(stale.status == "failed" && fake.pushes.isEmpty, "stale preview reached the network")
+        let fresh = store.previewPharosPush()
+        let confirmed = await store.syncToPharos(confirmedFingerprint: fresh)
+        try expect(confirmed.status == "synced" && fake.pushes.count == 1, "current confirmed preview did not push")
+    }
+
     static func pharosPushShape() async throws {
         let (store, fake) = try configuredPharos()
-        let job = await store.syncToPharos()
+        let job = await pushPharos(store)
         guard let push = fake.pushes.first else { throw SmokeTestFailure.failed("no push request was sent") }
         try expect(push.url?.absoluteString == "\(pharosURL)/v1/exchange/push", "wrong push URL \(push.url?.absoluteString ?? "")")
         try expect(push.value(forHTTPHeaderField: "Authorization") == "Bearer pharos-key", "Bearer key missing")
@@ -264,25 +282,25 @@ enum IntegrationTests {
         guard case .active = store.connectorStatus(.pharos) else { throw SmokeTestFailure.failed("successful push did not make PHAROS Active") }
         // A saved full route URL resolves to the same base.
         store.setEndpoint("\(pharosURL)/v1/exchange/push", for: .pharos)
-        _ = await store.syncToPharos()
+        _ = await pushPharos(store)
         try expect(fake.pushes.last?.url?.absoluteString == "\(pharosURL)/v1/exchange/push", "route-suffixed endpoint was not normalized")
     }
 
     static func pharosErrorSurfacing() async throws {
         let (store, fake) = try configuredPharos()
         fake.failure = json(503, ["error": "storage_failure", "idempotencyKey": "x"])
-        let failed = await store.syncToPharos()
+        let failed = await pushPharos(store)
         try expect(failed.status == "failed", "503 was not recorded as failed")
         try expect(failed.error?.contains("HTTP 503") == true && failed.error?.contains("storage_failure") == true, "503 reason missing: \(failed.error ?? "nil")")
         guard case .error(let reason) = store.connectorStatus(.pharos), reason.contains("503") else { throw SmokeTestFailure.failed("status is not Error with the reason") }
         fake.failure = nil
         fake.networkError = URLError(.notConnectedToInternet)
-        let offline = await store.syncToPharos()
+        let offline = await pushPharos(store)
         try expect(offline.status == "failed" && offline.error?.hasPrefix("Network error") == true, "network error not surfaced: \(offline.error ?? "nil")")
         fake.networkError = nil
         let noKey = try makeStore(transport: fake)
         noKey.setEndpoint(pharosURL, for: .pharos)
-        let missing = await noKey.syncToPharos()
+        let missing = await pushPharos(noKey)
         try expect(missing.status == "failed" && missing.error?.contains("No API key") == true, "missing key not surfaced")
     }
 

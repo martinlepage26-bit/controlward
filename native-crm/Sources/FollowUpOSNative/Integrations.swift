@@ -146,14 +146,19 @@ enum IntegrationError: LocalizedError, Equatable {
         case .invalidEndpoint: "The endpoint is not a valid http(s) URL."
         case .http(let status, let code, let context):
             "\(context) returned HTTP \(status)\(code.map { " (\($0))" } ?? "")\(status == 401 || status == 403 ? ": the API key was rejected" : "")."
-        case .transport(let message): "Network error: \(message)"
-        case .unexpected(let message): "Unexpected response: \(message)"
+        case .transport: "Network error. Check the connection and endpoint, then try again."
+        case .unexpected(let message): "Unexpected response: \(String(message.prefix(120)))"
         }
     }
 
     static func from(_ response: HTTPResponse, context: String) -> IntegrationError {
         let object = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
-        let code = (object?["error"] as? String).map { String($0.prefix(60)) }
+        let candidate = object?["error"] as? String
+        let safeCode = candidate.flatMap { value -> String? in
+            guard value.count <= 40, value.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil else { return nil }
+            return value
+        }
+        let code = safeCode
         return .http(status: response.status, code: code, context: context)
     }
 }

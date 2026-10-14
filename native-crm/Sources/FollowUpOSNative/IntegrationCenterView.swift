@@ -8,6 +8,8 @@ struct IntegrationCenterView: View {
     @State private var gapsEndpoint = ""
     @State private var kairosEndpoint = ""
     @State private var showExchangeImporter = false
+    @State private var confirmPharosPush = false
+    @State private var confirmTwentyPush = false
     private var checks: [IntegrationCheck] {
         [
             IntegrationCheck(name: "Native workspace", detail: "SwiftUI app and atomic local JSON persistence", state: .ready, symbol: "checkmark.circle.fill"),
@@ -82,17 +84,32 @@ struct IntegrationCenterView: View {
                     HStack {
                         Button("Verify") { Task { await store.verifyConnector(.pharos) } }
                             .buttonStyle(.bordered)
-                        Button("Sync to Pharos", systemImage: "arrow.up.circle") { Task { await store.syncToPharos() } }
-                            .buttonStyle(.borderedProminent)
+                        Button("Preview push") { _ = store.previewPharosPush() }
+                            .buttonStyle(.bordered)
                             .disabled(isNeedsSetup(.pharos))
+                        Button("Confirm and send", systemImage: "arrow.up.circle") { confirmPharosPush = true }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isNeedsSetup(.pharos) || store.pharosPreviewFingerprint == nil)
                         if store.busyTargets.contains(.pharos) { ProgressView().controlSize(.small) }
                         Spacer()
                         lastJobText(.pharos)
                     }
                     .disabled(store.busyTargets.contains(.pharos))
+                    if store.pharosPreviewFingerprint != nil {
+                        Text("Preview ready: current exchange snapshot (\(store.exchange.leads.count) leads, \(store.exchange.contacts.count) contacts, \(store.exchange.companies.count) companies, \(store.exchange.opportunities.count) opportunities, \(store.exchange.tasks.count) tasks). Any change requires a new preview.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 .crmCard()
                 .padding(.horizontal, 28)
+                .confirmationDialog("Send this exchange snapshot to PHAROS?", isPresented: $confirmPharosPush, titleVisibility: .visible) {
+                    Button("Send snapshot", role: .destructive) {
+                        Task { await store.syncToPharos(confirmedFingerprint: store.pharosPreviewFingerprint) }
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("This sends the previewed record and activity snapshot to the configured PHAROS backend.")
+                }
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionLabel(text: "Kairos lead inbox")
@@ -169,7 +186,7 @@ struct IntegrationCenterView: View {
                             .buttonStyle(.bordered)
                         Button("Preview push") { store.previewTwentyPush() }
                             .buttonStyle(.bordered)
-                        Button("Push to Twenty", systemImage: "arrow.up.circle") { Task { await store.pushToTwenty() } }
+                        Button("Push to Twenty", systemImage: "arrow.up.circle") { confirmTwentyPush = true }
                             .buttonStyle(.borderedProminent)
                             .disabled(store.twentyPreview == nil || isNeedsSetup(.twenty))
                         if store.busyTargets.contains(.twenty) { ProgressView().controlSize(.small) }
@@ -185,6 +202,12 @@ struct IntegrationCenterView: View {
                 }
                 .crmCard()
                 .padding(.horizontal, 28)
+                .confirmationDialog("Apply this preview to Twenty?", isPresented: $confirmTwentyPush, titleVisibility: .visible) {
+                    Button("Apply to Twenty", role: .destructive) { Task { await store.pushToTwenty() } }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text(store.twentyPreview.map { "Create \($0.creates), update \($0.updates), unchanged \($0.unchangedTotal). No records will be deleted." } ?? "Preview the push first.")
+                }
 
                 VStack(alignment: .leading, spacing: 9) {
                     SectionLabel(text: "Sync contract")

@@ -51,6 +51,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var email = ""
     var phone = ""
     var company = ""
+    var companyID: UUID?
+    var contactID: UUID?
     var service = ""
     var quoteAmount: Double?
     var status: LeadStatus = .new
@@ -97,8 +99,8 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     var lastSecurityReview: String?
     /// Last PHAROS lead-inbox sequence number that was applied and acked.
     var leadInboxCursor: Int?
-    /// Pull leads from the PHAROS lead inbox when the app opens (needs the PHAROS endpoint and key).
-    var autoPullLeads = true
+    /// Legacy background-pull preference retained only for backward-compatible decoding.
+    var autoPullLeads = false
     /// When enabled, automations run on lead state changes and due-date triggers. External syncs still require preview and confirmation.
     var autoPilotEnabled = false
     /// Epoch of the inbox the cursor belongs to; a different epoch resets the cursor.
@@ -129,7 +131,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
         savedViews = try container.decodeIfPresent([SavedView].self, forKey: .savedViews) ?? SavedView.defaults
         lastSecurityReview = try container.decodeIfPresent(String.self, forKey: .lastSecurityReview)
         leadInboxCursor = try container.decodeIfPresent(Int.self, forKey: .leadInboxCursor)
-        autoPullLeads = try container.decodeIfPresent(Bool.self, forKey: .autoPullLeads) ?? true
+        autoPullLeads = try container.decodeIfPresent(Bool.self, forKey: .autoPullLeads) ?? false
         leadInboxEpoch = try container.decodeIfPresent(String.self, forKey: .leadInboxEpoch)
         dismissedLeadSources = try container.decodeIfPresent([String].self, forKey: .dismissedLeadSources) ?? []
         autoPilotEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoPilotEnabled) ?? false
@@ -294,6 +296,9 @@ struct BilingualAudit: Codable, Identifiable, Equatable, Sendable {
     var transcripts: [BAEATranscript] = []
     var findings = ""
     var remediation = ""
+    var leadID: UUID?
+    var contactID: UUID?
+    var companyID: UUID?
     var methodologyVersion = "Lantern v1.0 (BAEA-compatible)"
     var createdAt = Date.now.ISO8601Format()
 
@@ -376,6 +381,7 @@ struct Opportunity: Codable, Identifiable, Equatable, Sendable {
     var closeDate: String?
     var contactID: UUID?
     var companyID: UUID?
+    var leadID: UUID?
     var notes = ""
     var createdAt = Date.now.ISO8601Format()
 }
@@ -392,6 +398,8 @@ struct CRMTask: Codable, Identifiable, Equatable, Sendable {
     var details = ""
     var status: TaskStatus = .todo
     var dueDate: String?
+    /// Scheduled local reminder instant in ISO-8601; dueDate remains the display/grouping date.
+    var reminderAt: String?
     var contactID: UUID?
     var companyID: UUID?
     var opportunityID: UUID?

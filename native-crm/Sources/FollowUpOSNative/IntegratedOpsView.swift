@@ -244,13 +244,25 @@ struct BilingualAuditEditor: View {
         VStack(spacing: 0) {
             HStack { Button("Cancel") { dismiss() }; Spacer(); Text(existing ? "Edit Lantern audit" : "New Lantern audit").font(.headline); Spacer(); Button("Save") { save() }.buttonStyle(.borderedProminent) }.padding(16).background(CRMTheme.ink).foregroundStyle(.white)
             Form {
-                Section("Audit identity") { TextField("Audit name", text: $draft.name); TextField("Client", text: $draft.client); TextField("Methodology version", text: $draft.methodologyVersion); Stepper("French sample: \(draft.sampleSizeFR)", value: $draft.sampleSizeFR, in: 0...500); Stepper("English sample: \(draft.sampleSizeEN)", value: $draft.sampleSizeEN, in: 0...500) }
+                Section("Audit identity") {
+                    TextField("Audit name", text: $draft.name)
+                    TextField("Client", text: $draft.client)
+                    TextField("Methodology version", text: $draft.methodologyVersion)
+                    Picker("Lead", selection: leadBinding) { Text("Unlinked").tag(UUID?.none); ForEach(store.leads) { Text($0.name).tag(Optional($0.id)) } }
+                    Picker("Contact", selection: contactBinding) { Text("Unlinked").tag(UUID?.none); ForEach(store.contacts) { Text($0.displayName).tag(Optional($0.id)) } }
+                    Picker("Company", selection: companyBinding) { Text("Unlinked").tag(UUID?.none); ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) } }
+                    Stepper("French sample: \(draft.sampleSizeFR)", value: $draft.sampleSizeFR, in: 0...500)
+                    Stepper("English sample: \(draft.sampleSizeEN)", value: $draft.sampleSizeEN, in: 0...500)
+                }
                 ScoreSection(title: "French", score: $draft.french)
                 ScoreSection(title: "English", score: $draft.english)
                 Section("Findings and remediation") { TextEditor(text: $draft.findings).frame(minHeight: 70).overlay(alignment: .topLeading) { if draft.findings.isEmpty { Text("Findings / quoted evidence").foregroundStyle(.secondary).padding(8) } }; TextEditor(text: $draft.remediation).frame(minHeight: 70).overlay(alignment: .topLeading) { if draft.remediation.isEmpty { Text("Remediation priority").foregroundStyle(.secondary).padding(8) } } }
             }.formStyle(.grouped)
         }.frame(width: 600, height: 680)
     }
+    private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
+    private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
+    private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
     private func save() { guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
 }
 

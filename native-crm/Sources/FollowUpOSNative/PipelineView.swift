@@ -13,6 +13,8 @@ struct PipelineView: View {
     @State private var filter: PipelineFilter = .open
     @State private var editor: LeadEditorContext?
     @State private var importError: String?
+    @State private var showDiscovery = false
+    @State private var selectedOpportunity: Opportunity?
 
     private var filtered: [Lead] {
         store.filteredLeads(filter: filter, search: search)
@@ -34,6 +36,10 @@ struct PipelineView: View {
                     } label: {
                         Label("Import CSV", systemImage: "square.and.arrow.down")
                     }
+                    Button { showDiscovery = true } label: {
+                        Label("Find prospects", systemImage: "globe.americas")
+                    }
+                    .buttonStyle(.bordered)
                     Button {
                         editor = LeadEditorContext(lead: .blank(), isNew: true)
                     } label: {
@@ -97,6 +103,36 @@ struct PipelineView: View {
                         }
                     }
                 }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionLabel(text: "Opportunity stages")
+                    Text("Move each opportunity by editing its stage. Closed won/lost records stay visible in their stage.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(OpportunityStage.allCases) { stage in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack { Text(stage.label).font(.headline); Spacer(); Text("\(store.opportunities.filter { $0.stage == stage }.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                                ForEach(store.opportunities.filter { $0.stage == stage }) { opportunity in
+                                    Button { selectedOpportunity = opportunity } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(opportunity.name).font(.callout.weight(.semibold)).lineLimit(2)
+                                            Text(opportunity.amount.map { $0.formatted(.currency(code: "CAD").precision(.fractionLength(0))) } ?? "Amount not set")
+                                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                            if let companyID = opportunity.companyID, let company = store.companies.first(where: { $0.id == companyID }) {
+                                                Text(company.name).font(.caption).foregroundStyle(.secondary)
+                                            }
+                                        }.frame(maxWidth: .infinity, alignment: .leading).padding(8).background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 7))
+                                    }.buttonStyle(.plain)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay { RoundedRectangle(cornerRadius: 8).stroke(CRMTheme.border) }
+                        }
+                    }
+                }
             }
             .frame(maxWidth: 980)
             .padding(28)
@@ -106,6 +142,8 @@ struct PipelineView: View {
             LeadEditorView(lead: context.lead, isNew: context.isNew)
                 .environmentObject(store)
         }
+        .sheet(isPresented: $showDiscovery) { DiscoveryView().environmentObject(store) }
+        .sheet(item: $selectedOpportunity) { OpportunityEditor(opportunity: $0).environmentObject(store) }
         .alert("CSV import failed", isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
