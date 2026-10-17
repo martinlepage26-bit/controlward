@@ -15,9 +15,13 @@ struct PipelineView: View {
     @State private var importError: String?
     @State private var showDiscovery = false
     @State private var selectedOpportunity: Opportunity?
+    @State private var dueOnly = false
+    @State private var projectRecord: WorkspaceRecord?
 
     private var filtered: [Lead] {
-        store.filteredLeads(filter: filter, search: search)
+        store.filteredLeads(filter: filter, search: search).filter { lead in
+            !dueOnly || (lead.status.isOpen && lead.nextFollowUp.map { $0 <= CalendarCRM.dayString() } == true)
+        }
     }
 
     var body: some View {
@@ -67,8 +71,7 @@ struct PipelineView: View {
                     } else {
                         VStack(spacing: 8) {
                             ForEach(store.dueLeads) { lead in
-                                LeadRow(lead: lead, urgent: true)
-                                    .onTapGesture { open(lead) }
+                                Button { open(lead) } label: { LeadRow(lead: lead, urgent: true) }.buttonStyle(.plain)
                             }
                         }
                     }
@@ -79,6 +82,7 @@ struct PipelineView: View {
                     HStack(spacing: 10) {
                         TextField("Search leads…", text: $search)
                             .textFieldStyle(.roundedBorder)
+                        Toggle("Due only", isOn: $dueOnly).toggleStyle(.checkbox)
                         Picker("Filter", selection: $filter) {
                             ForEach(PipelineFilter.allCases) { Text($0.rawValue).tag($0) }
                         }
@@ -97,8 +101,8 @@ struct PipelineView: View {
                     } else {
                         LazyVStack(spacing: 8) {
                             ForEach(filtered) { lead in
-                                LeadRow(lead: lead)
-                                    .onTapGesture { open(lead) }
+                                Button { open(lead) } label: { LeadRow(lead: lead) }.buttonStyle(.plain)
+                                    .contextMenu { Button("Project links and capture") { projectRecord = store.allWorkspaceRecords.first { $0.kind == "leads" && $0.recordID == lead.id } } }
                             }
                         }
                     }
@@ -108,6 +112,7 @@ struct PipelineView: View {
                     SectionLabel(text: "Opportunity stages")
                     Text("Move each opportunity by editing its stage. Closed won/lost records stay visible in their stage.")
                         .font(.caption).foregroundStyle(.secondary)
+                    ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: 10) {
                         ForEach(OpportunityStage.allCases) { stage in
                             VStack(alignment: .leading, spacing: 8) {
@@ -123,21 +128,24 @@ struct PipelineView: View {
                                             }
                                         }.frame(maxWidth: .infinity, alignment: .leading).padding(8).background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 7))
                                     }.buttonStyle(.plain)
+                                        .contextMenu { Button("Project links and capture") { projectRecord = store.allWorkspaceRecords.first { $0.kind == "opportunities" && $0.recordID == opportunity.id } } }
                                 }
                                 Spacer(minLength: 0)
                             }
                             .padding(10)
-                            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                            .frame(width: 190).frame(minHeight: 150, alignment: .topLeading)
                             .background(.background, in: RoundedRectangle(cornerRadius: 8))
                             .overlay { RoundedRectangle(cornerRadius: 8).stroke(CRMTheme.border) }
                         }
                     }
+                    }.scrollIndicators(.visible)
                 }
             }
             .frame(maxWidth: 980)
             .padding(28)
         }
         .navigationTitle("Pipeline")
+        .sheet(item: $projectRecord) { RecordProjectSheet(record: $0) }
         .sheet(item: $editor) { context in
             LeadEditorView(lead: context.lead, isNew: context.isNew)
                 .environmentObject(store)

@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
-APP_BUNDLE="${PROJECT_ROOT}/native-crm/dist/Contextward.app"
+APP_BUNDLE="${PROJECT_ROOT}/native-crm/dist/ControlWard.app"
 RELEASE_DIR="${PROJECT_ROOT}/native-crm/release"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${PROJECT_ROOT}/native-crm/Resources/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${PROJECT_ROOT}/native-crm/Resources/Info.plist")"
-ARCHIVE="${RELEASE_DIR}/Contextward-${VERSION}-${BUILD}-macOS.zip"
+ARCHIVE="${RELEASE_DIR}/ControlWard-${VERSION}-${BUILD}-macOS.zip"
 
 "${PROJECT_ROOT}/bin/build-native-app"
 codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
@@ -19,7 +19,7 @@ shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
 unpacked="$(mktemp -d "${TMPDIR:-/tmp}/contextward-release.XXXXXX")"
 trap 'rm -rf "${unpacked}"' EXIT
 ditto -x -k "${ARCHIVE}" "${unpacked}"
-codesign --verify --deep --strict --verbose=2 "${unpacked}/Contextward.app"
+codesign --verify --deep --strict --verbose=2 "${unpacked}/ControlWard.app"
 
 print "Release archive: ${ARCHIVE}"
 print "SHA-256: $(cut -d ' ' -f 1 "${ARCHIVE}.sha256")"

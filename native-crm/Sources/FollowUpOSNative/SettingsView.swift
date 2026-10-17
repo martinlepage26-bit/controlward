@@ -17,8 +17,8 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(spacing: 8) {
-                    ContextwardLogo(size: 132)
-                    Text("Contextward")
+                    ControlWardLogo(size: 132)
+                    Text("ControlWard")
                         .font(.title.weight(.heavy))
                         .foregroundStyle(CRMTheme.ink)
                     Text("PHAROS CRM")
@@ -56,7 +56,7 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Automation").font(.headline)
-                    Text("When enabled, Contextward checks the configured PHAROS lead inbox at startup and every five minutes while open, then runs local rules on imported leads. It never sends outreach or pushes records. Turn it off to stop background pulls.")
+                    Text("When enabled, ControlWard checks the configured PHAROS lead inbox at startup and every five minutes while open, then runs local rules on imported leads. It never sends outreach or pushes records. Turn it off to stop background pulls.")
                         .font(.callout).foregroundStyle(.secondary)
                     Toggle("Auto-Pilot", isOn: $autoPilotEnabled)
                         .onChange(of: autoPilotEnabled) { _, enabled in
@@ -118,11 +118,13 @@ struct SettingsView: View {
                 }
                 .crmCard()
 
+                WorkspaceRecoveryControls()
+
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Danger zone").font(.headline).foregroundStyle(CRMTheme.rust)
-                    Text("Erase every lead, follow-up, business setting, and privacy-review date. A timestamped backup is saved first.")
+                    Text("Erase the local CRM workspace after saving a timestamped backup. Project Control and Email Aggregator keep their separate data and sign-in sessions.")
                         .foregroundStyle(.secondary)
-                    Button("Reset all data", role: .destructive) { confirmReset = true }
+                    Button("Reset CRM data", role: .destructive) { confirmReset = true }
                 }
                 .crmCard()
             }
@@ -135,14 +137,14 @@ struct SettingsView: View {
             industry = store.business.industry
             autoPilotEnabled = store.workspace.autoPilotEnabled
         }
-        .confirmationDialog("Reset Contextward?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Back up and erase everything", role: .destructive) {
+        .confirmationDialog("Reset the local CRM workspace?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Back up and erase CRM data", role: .destructive) {
                 do { try store.resetAll(confirmed: true) }
                 catch { store.notice = "Reset stopped; nothing was erased: \(error.localizedDescription)" }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This deletes the business profile and every lead. A timestamped, owner-only backup is written to the data folder first.")
+            Text("This deletes local CRM records and settings after writing an owner-only backup. Manage project data and email sessions in their own sections.")
         }
     }
 
@@ -152,7 +154,7 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.title = "Select native-crm/data/workspace.json"
-        panel.message = "Contextward copies this file once, verifies the copy, and keeps the original as a backup."
+        panel.message = "ControlWard copies this file once, verifies the copy, and keeps the original as a backup."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try store.importLegacyWorkspace(from: url) }
         catch { store.notice = "Legacy import failed: \(error.localizedDescription)" }

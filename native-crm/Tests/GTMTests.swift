@@ -2,7 +2,7 @@ import Foundation
 
 @MainActor
 enum GTMTests {
-    static let now = Date(timeIntervalSince1970: 1_792_000_000)
+    nonisolated static let now = Date(timeIntervalSince1970: 1_792_000_000)
     static var checks = 0
     static func expect(_ value: @autoclosure () throws -> Bool, _ message: String) throws {
         checks += 1

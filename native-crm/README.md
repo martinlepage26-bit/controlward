@@ -1,6 +1,6 @@
-# Contextward for macOS
+# ControlWard for macOS
 
-This is the native, persistent macOS workspace for Contextward, the PHAROS
+This is the native, persistent macOS workspace for ControlWard, the PHAROS
 relationship and operations system. It uses SwiftUI/AppKit, stores its JSON data in
 an owner-only folder (see Data location), and does not start Docker, a browser, or a
 localhost server.
@@ -34,13 +34,13 @@ provider credentials remain outside the native workspace.
 
 ```bash
 ./bin/test-native-app
-./bin/build-native-app
+CONTEXTWARD_SIGN_IDENTITY=- ./bin/build-native-app
 ```
 
-The signed production bundle is created at:
+The locally signed bundle is created at:
 
 ```text
-native-crm/dist/Contextward.app
+native-crm/dist/ControlWard.app
 ```
 
 The bundle intentionally remains in this workspace to comply with the managed
@@ -48,13 +48,14 @@ Mac host boundary. `bin/build-native-app` uses the installed Developer ID
 Application identity when available and otherwise falls back to an ad-hoc local
 signature. Both paths enable the hardened runtime and App Sandbox
 (`Resources/Contextward.entitlements`: sandbox, user-selected read-write files,
-and outbound network access). The current Mac build is Developer ID signed;
-notarization is a separate distribution step and is not claimed here.
+and outbound network access). An explicit `CONTEXTWARD_SIGN_IDENTITY=-` build signs locally without inspecting
+Keychain identities. Notarization is a separate distribution step and is not
+claimed here.
 
 Create a versioned, checksum-bearing ZIP without modifying workspace data:
 
 ```bash
-./bin/package-native-app
+CONTEXTWARD_SIGN_IDENTITY=- ./bin/package-native-app
 ```
 
 Release artifacts are written below `native-crm/release/`, which is excluded
@@ -99,3 +100,11 @@ CSV text accepts UTF-8, UTF-16 and Windows-1252, including the defined extended
 letters and punctuation. Undefined Windows-1252 bytes and likely mixed/corrupt
 UTF-8 are rejected. Legacy encodings can share valid byte sequences; export Mac
 Roman or other legacy files as CSV UTF-8 to avoid ambiguous character decoding.
+
+## Unified desktop
+
+See [ControlWard workflows](../docs/controlward.md) for Projects, Email Aggregator,
+mail metadata imports, cross-section links, reviewed capture and backup/restore.
+The release bundles Project Control resources from a pinned commit;
+`./bin/vendor-project-control --check` verifies every allowed file hash.
+`./bin/test-workspace-modules` exercises real WebKit rendering and isolation.

@@ -1,8 +1,13 @@
-# Contextward
+# ControlWard
 
-Contextward is a local-first macOS relationship and operations workspace for
-PHAROS. It combines a native SwiftUI CRM, governed external connectors, a
-Twenty app extension, and a small Cloudflare Worker/D1 edge service.
+ControlWard combines ContextWard's native macOS CRM, the bundled Project Control
+dashboard, and Email Aggregator in one desktop home. GAP remains a read-only
+research source. Review mail metadata, link records to projects and capture
+selected evidence into the project inbox with explicit confirmation.
+
+See [the section-by-section guide](docs/controlward.md), [product direction](PRODUCT.md)
+and [design system](DESIGN.md). The hosted email app is still a synthetic-mail
+prototype; real mailbox OAuth and a production GAP connection are not included.
 
 ## What is operational
 
@@ -25,20 +30,19 @@ Twenty app extension, and a small Cloudflare Worker/D1 edge service.
 
 ```bash
 ./bin/test-native-app
-./bin/build-native-app
-open native-crm/dist/Contextward.app
+CONTEXTWARD_SIGN_IDENTITY=- ./bin/build-native-app
+open native-crm/dist/ControlWard.app
 ```
 
-The persistent Desktop shortcut is:
-
-```text
-~/Desktop/Contextward.app -> native-crm/dist/Contextward.app
-```
+For an isolated synthetic preview with no Keychain access or persistent browser
+sessions, run `./bin/preview-controlward`. It creates a separate temporary app
+and dataset. The release preserves the existing ContextWard bundle ID and data
+location; it does not rename or migrate the owner's files.
 
 Create a verified release archive with:
 
 ```bash
-./bin/package-native-app
+CONTEXTWARD_SIGN_IDENTITY=- ./bin/package-native-app
 ```
 
 See [`native-crm/README.md`](native-crm/README.md) for data paths, migration,
@@ -67,8 +71,8 @@ the live flow (native app, `pharos-contextward-api` Worker, lead inbox, or
 Project Control intake) depends on it. The extension code is kept, not deleted,
 for a possible future pickup, and extension CI remains in place as scaffold
 validation only. Local setup and the persistent Lima-based development
-environment are documented in [`SETUP.md`](SETUP.md). The native app does not
-require Twenty, Docker, a browser, or a localhost server to run.
+environment are documented in [`SETUP.md`](SETUP.md). The native app does not require Twenty, Docker or a localhost server. Embedded
+modules use macOS WebKit; Email Aggregator needs network access.
 
 ## Release gates
 

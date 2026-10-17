@@ -65,8 +65,8 @@ enum WorkspaceMigration {
         case destinationExists, unreadableLegacy, hashMismatch
         var errorDescription: String? {
             switch self {
-            case .destinationExists: "A Contextward workspace already exists in the app data folder. Migration only runs once and never overwrites data."
-            case .unreadableLegacy: "The selected file is not a Contextward workspace.json."
+            case .destinationExists: "A ControlWard workspace already exists in the app data folder. Migration only runs once and never overwrites data."
+            case .unreadableLegacy: "The selected file is not a compatible workspace.json."
             case .hashMismatch: "The copied workspace did not match the original. Nothing was changed."
             }
         }

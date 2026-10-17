@@ -18,6 +18,11 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/AccountIdentity.swift" \
   "${SOURCE_ROOT}/AccountScoring.swift" \
   "${SOURCE_ROOT}/GTMEvents.swift" \
+  "${SOURCE_ROOT}/WorkspaceModulePolicy.swift" \
+  "${SOURCE_ROOT}/ControlWardModels.swift" \
+  "${SOURCE_ROOT}/ControlWardStore.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/SecurityTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/IntegrationTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadInboxTests.swift" \

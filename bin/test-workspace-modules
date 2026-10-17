@@ -1,0 +1,26 @@
+#!/bin/zsh
+set -euo pipefail
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
+BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/webkit-tests"
+TEST_BINARY="${BUILD_ROOT}/ControlWardWebKitTests"
+mkdir -p "${BUILD_ROOT}"
+swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
+  "${SOURCE_ROOT}/Models.swift" \
+  "${SOURCE_ROOT}/AppStore.swift" \
+  "${SOURCE_ROOT}/Security.swift" \
+  "${SOURCE_ROOT}/Integrations.swift" \
+  "${SOURCE_ROOT}/Discovery.swift" \
+  "${SOURCE_ROOT}/GTMModels.swift" \
+  "${SOURCE_ROOT}/AccountIdentity.swift" \
+  "${SOURCE_ROOT}/AccountScoring.swift" \
+  "${SOURCE_ROOT}/GTMEvents.swift" \
+  "${SOURCE_ROOT}/WorkspaceModulePolicy.swift" \
+  "${SOURCE_ROOT}/ControlWardModels.swift" \
+  "${SOURCE_ROOT}/ControlWardStore.swift" \
+  "${SOURCE_ROOT}/WorkspaceWebController.swift" \
+  "${SOURCE_ROOT}/ProjectModuleBridge.swift" \
+  "${PROJECT_ROOT}/native-crm/WebKitTests/ModuleRenderingTests.swift" \
+  -o "${TEST_BINARY}"
+"${TEST_BINARY}" "${SOURCE_ROOT}/Resources/ProjectControl/project-control.html"

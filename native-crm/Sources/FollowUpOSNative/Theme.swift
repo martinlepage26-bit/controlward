@@ -4,7 +4,7 @@ enum CRMTheme {
     static let ink = Color(red: 0.106, green: 0.141, blue: 0.188)
     static let paper = Color(red: 0.969, green: 0.961, blue: 0.941)
     static let amber = Color(red: 0.910, green: 0.639, blue: 0.239)
-    static let amberDark = Color(red: 0.780, green: 0.522, blue: 0.165)
+    static let amberDark = Color(red: 0.529, green: 0.341, blue: 0.071)
     static let slate = Color(red: 0.357, green: 0.392, blue: 0.447)
     static let steel = Color(red: 0.243, green: 0.424, blue: 0.557)
     static let moss = Color(red: 0.298, green: 0.478, blue: 0.369)
@@ -28,10 +28,9 @@ struct SectionLabel: View {
     let text: String
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.caption.weight(.bold))
-            .tracking(0.6)
-            .foregroundStyle(CRMTheme.slate)
+        Text(text)
+            .font(.headline)
+            .foregroundStyle(CRMTheme.ink)
     }
 }
 

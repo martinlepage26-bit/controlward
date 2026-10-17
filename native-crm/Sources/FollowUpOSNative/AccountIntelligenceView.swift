@@ -8,13 +8,15 @@ struct AccountIntelligenceView: View {
     @State private var companyID: UUID?
     @State private var newProfile = false
     @State private var message: String?
+    @State private var search = ""
+    @State private var eligibleOnly = false
 
     private var profile: GTMProfile? { store.gtm.profiles.first { $0.id == profileID } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Account intelligence").font(.largeTitle.bold())
-            Text("Find the right organizations, explain their activity, and prepare a human review.").foregroundStyle(.secondary)
+            Text("Account intelligence").font(.title2.bold())
+            Text("Review account fit, evidence and the next action.").foregroundStyle(.secondary)
             HStack {
                 Picker("Offer", selection: $profileID) {
                     Text("Choose an offer").tag(UUID?.none)
@@ -25,11 +27,12 @@ struct AccountIntelligenceView: View {
                 Button("Import evidence JSON") { importEvidence() }.disabled(profile == nil)
             }
             if let message { Text(message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
+            TextField("Find an account by name or domain", text: $search).textFieldStyle(.roundedBorder)
             if let profile {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     TabView {
                         HSplitView {
-                            List(store.companies, selection: $companyID) { company in
+                            List(store.companies.filter { search.isEmpty || "\($0.name) \($0.domain)".localizedCaseInsensitiveContains(search) }, selection: $companyID) { company in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(company.name).fontWeight(.semibold)
                                     Text(company.domain.isEmpty ? "Identity needs evidence" : company.domain).font(.caption).foregroundStyle(.secondary)
@@ -61,10 +64,18 @@ struct AccountIntelligenceView: View {
     }
 
     private func segment(profile: GTMProfile, now: Date) -> some View {
-        let previews = store.gtmPreview(profileID: profile.id, now: now)
+        let previews = store.gtmPreview(profileID: profile.id, now: now).filter { snapshot in
+            let company = store.companies.first { $0.id == snapshot.companyID }
+            return (!eligibleOnly || snapshot.queue.eligible) && (search.isEmpty || "\(company?.name ?? "") \(company?.domain ?? "")".localizedCaseInsensitiveContains(search))
+        }
         let links = store.gtm.taskLinks.filter { $0.profileID == profile.id }
         let completed = links.filter { link in store.tasks.contains { $0.id == link.taskID && $0.status == .done } }.count
         return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Toggle("Eligible accounts only", isOn: $eligibleOnly)
+                Spacer()
+                Button("Export visible segment") { exportSegment(previews, profile: profile, now: now) }
+            }
             HStack {
                 Text("\(previews.filter { $0.queue.eligible }.count) eligible · \(links.count) reviews created · \(completed) completed").font(.headline)
                 Spacer()
@@ -94,6 +105,16 @@ struct AccountIntelligenceView: View {
 
     private func perform(_ operation: () throws -> String) {
         do { message = try operation() } catch { message = error.localizedDescription }
+    }
+
+    private func exportSegment(_ snapshots: [GTMScoreSnapshot], profile: GTMProfile, now: Date) {
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.json]; panel.nameFieldStringValue = "controlward-account-segment.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        perform {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(snapshots).write(to: url, options: .atomic); try SecureFiles.restrict(url)
+            return "Exported \(snapshots.count) visible rules-based assessments for \(profile.name). These scores are not predictive probabilities."
+        }
     }
 
     private func importEvidence() {

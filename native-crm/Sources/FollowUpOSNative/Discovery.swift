@@ -52,7 +52,7 @@ enum DiscoverySearchError: LocalizedError {
         case .unavailable(504): "The public map search timed out. Try a smaller radius."
         case .unavailable: "The public map search is temporarily unavailable. Try again later."
         case .responseTooLarge: "The search returned too much data. Reduce the search radius."
-        case .malformed: "The public map search returned data Contextward could not read."
+        case .malformed: "The public map search returned data ControlWard could not read."
         }
     }
 }
@@ -78,7 +78,7 @@ struct DiscoveryClient: Sendable {
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 12
-        request.setValue("Contextward/1.0 (public prospect search)", forHTTPHeaderField: "User-Agent")
+        request.setValue("ControlWard/1.0 (public prospect search)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
         let formAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
         request.httpBody = "data=\(query.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? "")".data(using: .utf8)
@@ -126,7 +126,7 @@ struct DiscoveryClient: Sendable {
         guard let url = components.url else { throw DiscoverySearchError.invalidLocation }
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
-        request.setValue("Contextward/1.0 (public prospect search)", forHTTPHeaderField: "User-Agent")
+        request.setValue("ControlWard/1.0 (public prospect search)", forHTTPHeaderField: "User-Agent")
         let response: HTTPResponse
         do { response = try await transport.send(request) } catch { throw DiscoverySearchError.unavailable(0) }
         guard response.body.count <= Self.maxResponseBytes else { throw DiscoverySearchError.responseTooLarge }
