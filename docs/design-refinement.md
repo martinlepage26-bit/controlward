@@ -31,3 +31,8 @@ limits explicit. Remove decorative status dots and use counts or actual states.
 
 The result is an implemented workspace, not a new branding concept. Verification
 and release details are in controlward.md and the accompanying evidence report.
+
+The final screen review caught embedded content requesting a pane taller than
+the window. The detail pane now measures the available area and bounds its
+content to it. Project Control, hosted email and native sections were rechecked
+in the synthetic preview; the titlebar and sidebar footer remain visible.
