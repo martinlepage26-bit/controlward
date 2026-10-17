@@ -187,27 +187,32 @@ struct MainWorkspaceView: View {
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
-            Group {
-                switch navigation.section ?? .overview {
-                case .overview: OverviewView()
-                case .projects: WorkspaceModuleView(controller: modules.controller(for: .projects))
-                case .email: MailWorkspaceView()
-                case .activity: WorkspaceActivityView()
-                case .pipeline: PipelineView()
-                case .operations: IntegratedOpsView()
-                case .intelligence: AccountIntelligenceView()
-                case .integrations: IntegrationCenterView()
-                case .contacts: directory(.contacts)
-                case .companies: directory(.companies)
-                case .opportunities: directory(.opportunities)
-                case .tasks: directory(.tasks)
-                case .notes: directory(.notes)
-                case .views: SavedViewsView()
-                case .security: SecurityView()
-                case .settings: SettingsView()
+            // Embedded content must size within the pane rather than enlarge the
+            // native split view beyond the window and overlap its titlebar.
+            GeometryReader { geometry in
+                Group {
+                    switch navigation.section ?? .overview {
+                    case .overview: OverviewView()
+                    case .projects: WorkspaceModuleView(controller: modules.controller(for: .projects))
+                    case .email: MailWorkspaceView()
+                    case .activity: WorkspaceActivityView()
+                    case .pipeline: PipelineView()
+                    case .operations: IntegratedOpsView()
+                    case .intelligence: AccountIntelligenceView()
+                    case .integrations: IntegrationCenterView()
+                    case .contacts: directory(.contacts)
+                    case .companies: directory(.companies)
+                    case .opportunities: directory(.opportunities)
+                    case .tasks: directory(.tasks)
+                    case .notes: directory(.notes)
+                    case .views: SavedViewsView()
+                    case .security: SecurityView()
+                    case .settings: SettingsView()
+                    }
                 }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .background(CRMTheme.paper)
             }
-            .background(CRMTheme.paper)
         }
         .environmentObject(modules)
         .environmentObject(navigation)
