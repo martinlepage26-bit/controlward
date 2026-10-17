@@ -20,6 +20,8 @@ private let securityLenses = [
 struct SecurityView: View {
     @EnvironmentObject private var store: AppStore
     @State private var expanded: UUID?
+    @State private var showResolved = false
+    @State private var highOnly = false
 
     private var recordsWithContact: Int { store.leads.filter { !$0.email.isEmpty || !$0.phone.isEmpty }.count }
     private var recordsWithNotes: Int { store.leads.filter { !$0.notes.isEmpty || !$0.history.isEmpty }.count }
@@ -79,7 +81,8 @@ struct SecurityView: View {
                         SectionLabel(text: "Local exposure findings")
                         Text("These are workspace hygiene findings only. No external scan or security claim is being made.")
                             .font(.caption).foregroundStyle(.secondary)
-                        ForEach(store.exposureFindings.filter { !$0.resolved }) { finding in
+                        HStack { Toggle("Show resolved", isOn: $showResolved); Toggle("High severity only", isOn: $highOnly) }
+                        ForEach(store.exposureFindings.filter { (showResolved || !$0.resolved) && (!highOnly || $0.severity == .high) }) { finding in
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: finding.severity == .high ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
                                     .foregroundStyle(finding.severity == .high ? CRMTheme.rust : CRMTheme.amberDark)
@@ -88,7 +91,10 @@ struct SecurityView: View {
                                     Text("\(finding.lens) · \(finding.detail)").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Button("Resolve") { store.resolve(finding) }.buttonStyle(.bordered)
+                                Button(store.workspace.controlWard.remediationTasks[finding.id] == nil ? "Create review task" : "Task recorded") {
+                                    do { try store.createSecurityReviewTask(finding.id) } catch { store.notice = error.localizedDescription }
+                                }.disabled(store.workspace.controlWard.remediationTasks[finding.id] != nil)
+                                Button(finding.resolved ? "Resolved" : "Resolve") { store.resolve(finding) }.buttonStyle(.bordered).disabled(finding.resolved)
                             }
                             .padding(10)
                             .background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 8))

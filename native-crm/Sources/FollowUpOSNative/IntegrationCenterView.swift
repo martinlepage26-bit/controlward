@@ -19,7 +19,7 @@ struct IntegrationCenterView: View {
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
             connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),
             connectorCheck(.pharos, name: "PHAROS backend", purpose: "Pushes the exchange snapshot to the PHAROS backend on your action.", symbol: "lock.shield"),
-            connectorCheck(.gaps, name: "Gap analysis", purpose: "Reads ranked market gaps from gap-analysis.govern-ai.ca as signals. Read-only.", symbol: "scope"),
+            connectorCheck(.gaps, name: "Gap analysis", purpose: "Reads market gaps from the configured Supabase project as signals. Read-only.", symbol: "scope"),
         ]
     }
 
@@ -42,6 +42,8 @@ struct IntegrationCenterView: View {
                     Text("One operating surface, with explicit boundaries for every connected system.").foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 28)
+
+                UnifiedModuleConnections().padding(.horizontal, 28)
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionLabel(text: "Adapter endpoints")
@@ -113,7 +115,7 @@ struct IntegrationCenterView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionLabel(text: "Kairos lead inbox")
-                    Text("Reads up to 200 recent Kairos conversations and imports only those classified as leads. Handles and the latest inbound message are saved in this Mac’s Contextward workspace. Ignored conversations are skipped. Import is manual; Contextward never sends replies or publishes content to Kairos.")
+                    Text("Reads up to 200 recent Kairos conversations and imports only those classified as leads. Handles and the latest inbound message are saved in this Mac’s ControlWard workspace. Ignored conversations are skipped. Import is manual; ControlWard never sends replies or publishes content to Kairos.")
                         .font(.callout).foregroundStyle(.secondary)
                     HStack {
                         Button("Verify") { Task { await store.verifyConnector(.kairos) } }
@@ -151,7 +153,7 @@ struct IntegrationCenterView: View {
                         lastJobText(.leadgen)
                     }
                     Text(store.isPullingLeads
-                         ? "Pulling: checks now and every 5 minutes while Contextward is open, and resumes when it reopens."
+                         ? "Pulling: checks now and every 5 minutes while ControlWard is open, and resumes when it reopens."
                          : "Stopped: no leads are pulled until you start again or press Pull now.")
                         .font(.caption).foregroundStyle(store.isPullingLeads ? .green : .secondary)
                 }
@@ -211,7 +213,7 @@ struct IntegrationCenterView: View {
 
                 VStack(alignment: .leading, spacing: 9) {
                     SectionLabel(text: "Sync contract")
-                    Text("Contextward exports a reviewable exchange snapshot before any external adapter is allowed to write. The native app never stores provider secrets in workspace data and does not silently publish or synchronize records.")
+                    Text("ControlWard exports a reviewable exchange snapshot before any external adapter is allowed to write. The native app never stores provider secrets in workspace data and does not silently publish or synchronize records.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

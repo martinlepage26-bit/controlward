@@ -2,10 +2,17 @@ import SwiftUI
 
 @main
 struct FollowUpOSApp: App {
-    @StateObject private var store = AppStore()
+    @StateObject private var store = makeStore()
+
+    @MainActor private static func makeStore() -> AppStore {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        PreviewFixture.prepareIfRequested()
+#endif
+        return AppStore()
+    }
 
     var body: some Scene {
-        WindowGroup("Contextward") {
+        WindowGroup("ControlWard") {
             RootView()
                 .environmentObject(store)
                 .frame(minWidth: 940, minHeight: 680)

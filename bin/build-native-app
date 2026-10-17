@@ -4,12 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
 PACKAGE_ROOT="${PROJECT_ROOT}/native-crm"
-APP_BUNDLE="${PACKAGE_ROOT}/dist/Contextward.app"
+APP_BUNDLE="${PACKAGE_ROOT}/dist/ControlWard.app"
 CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
-if [[ "${APP_BUNDLE}" != "${PROJECT_ROOT}/native-crm/dist/Contextward.app" ]]; then
+if [[ "${APP_BUNDLE}" != "${PROJECT_ROOT}/native-crm/dist/ControlWard.app" ]]; then
   print -u2 "Refusing unexpected app-bundle target: ${APP_BUNDLE}"
   exit 1
 fi
@@ -23,7 +23,9 @@ if [[ "${ACTUAL_SWIFT}" != "${EXPECTED_SWIFT}" ]]; then
   exit 1
 fi
 
+"${PROJECT_ROOT}/bin/vendor-project-control" --check
 "${PROJECT_ROOT}/bin/test-native-app"
+"${PROJECT_ROOT}/bin/test-workspace-modules"
 swift build -c release --package-path "${PACKAGE_ROOT}"
 BIN_DIR="$(swift build -c release --show-bin-path --package-path "${PACKAGE_ROOT}")"
 
@@ -58,7 +60,10 @@ chmod 755 "${MACOS_DIR}/FollowUpOSNative"
 # otherwise falls back to an ad-hoc signature for local builds.
 ENTITLEMENTS="${PACKAGE_ROOT}/Resources/Contextward.entitlements"
 SIGN_IDENTITY="${CONTEXTWARD_SIGN_IDENTITY:-Developer ID Application: Martin Lepage (MN5D79D862)}"
-if security find-identity -v -p codesigning | grep -qF "\"${SIGN_IDENTITY}\""; then
+if [[ "${SIGN_IDENTITY}" == "-" ]]; then
+  # Explicit local builds must not inspect the owner's signing identities.
+  codesign --force --options runtime --entitlements "${ENTITLEMENTS}" --timestamp=none --sign - "${APP_BUNDLE}"
+elif security find-identity -v -p codesigning | grep -qF "\"${SIGN_IDENTITY}\""; then
   codesign --force --options runtime --entitlements "${ENTITLEMENTS}" --timestamp --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"
 else
   print "Signing identity not found; using ad-hoc signature."

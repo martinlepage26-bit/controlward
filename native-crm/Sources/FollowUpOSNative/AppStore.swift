@@ -352,7 +352,7 @@ final class AppStore: ObservableObject {
     // MARK: - Kairos inbox
 
     /// Imports only lead-intent conversations on explicit user action. This is read-only
-    /// against Kairos; message bodies remain in the local Contextward workspace.
+    /// against Kairos; message bodies remain in the local ControlWard workspace.
     @discardableResult
     func importKairosLeads() async -> SyncJob {
         var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.inbox.v1")
@@ -1020,7 +1020,7 @@ final class AppStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(exchange).write(to: url, options: .atomic)
         try? SecureFiles.restrict(url)
-        workspace.activity.insert(ActivityEvent(kind: "export", message: "Exported Contextward exchange snapshot."), at: 0)
+        workspace.activity.insert(ActivityEvent(kind: "export", message: "Exported ControlWard exchange snapshot."), at: 0)
         persist(message: "Exchange snapshot exported.")
     }
 
@@ -1213,7 +1213,7 @@ final class AppStore: ObservableObject {
         for task in workspace.tasks { await scheduleTaskReminder(for: task) }
     }
 
-    private func scheduleTaskReminder(for task: CRMTask) async {
+    func scheduleTaskReminder(for task: CRMTask) async {
 #if CONTEXTWARD_ACCEPTANCE
         if Bundle.main.bundleURL.pathExtension == "app" {
             await scheduleTaskReminderInApp(for: task)
@@ -1248,12 +1248,12 @@ final class AppStore: ObservableObject {
             if settings.authorizationStatus == .notDetermined { _ = try await center.requestAuthorization(options: [.alert, .sound]) }
             let finalSettings = await center.notificationSettings()
             guard finalSettings.authorizationStatus == .authorized || finalSettings.authorizationStatus == .provisional else {
-                showNotice("Enable Contextward notifications in System Settings to receive task reminders.")
+                showNotice("Enable ControlWard notifications in System Settings to receive task reminders.")
                 return
             }
             let content = UNMutableNotificationContent()
             content.title = "Task: \(task.title)"
-            content.body = "Open Contextward to review this task."
+            content.body = "Open ControlWard to review this task."
             content.sound = .default
             let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
             try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)))
@@ -1505,6 +1505,11 @@ final class AppStore: ObservableObject {
     /// Commit a complete GTM transaction to disk before publishing it to the UI.
     /// A failed import/task write cannot leave a partial in-memory success.
     func commitGTM(_ mutation: (inout PersistentWorkspace) throws -> Void) throws {
+        try commitWorkspace(mutation)
+    }
+
+    /// Publish local workflow changes only after the complete transaction is durable.
+    func commitWorkspace(_ mutation: (inout PersistentWorkspace) throws -> Void) throws {
         guard case .ready = recoveryState else { throw GTMError.invalid("Workspace recovery is required before saving.") }
         var next = workspace
         try mutation(&next)
@@ -1512,6 +1517,8 @@ final class AppStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(next), to: storageURL)
         workspace = next
+        twentyPreview = nil
+        pharosPreviewFingerprint = nil
     }
 
     /// Saves or throws. Used before acking pulled leads, so an ack never outruns the disk.

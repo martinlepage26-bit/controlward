@@ -77,6 +77,7 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct PersistentWorkspace: Codable, Equatable, Sendable {
+    var controlWard = ControlWardWorkspace()
     var accountIntelligence = GTMWorkspace()
     var business = BusinessProfile()
     var leads: [Lead] = []
@@ -113,6 +114,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        controlWard = try container.decodeIfPresent(ControlWardWorkspace.self, forKey: .controlWard) ?? ControlWardWorkspace()
         accountIntelligence = try container.decodeIfPresent(GTMWorkspace.self, forKey: .accountIntelligence) ?? GTMWorkspace()
         guard accountIntelligence.schemaVersion == 1,
               accountIntelligence.profiles.allSatisfy({ $0.criteria.count == 4 }),
@@ -145,6 +147,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case controlWard
         case accountIntelligence
         case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview, leadInboxCursor, autoPullLeads, leadInboxEpoch, dismissedLeadSources, autoPilotEnabled
     }
@@ -431,6 +434,7 @@ struct SavedView: Codable, Identifiable, Equatable, Sendable {
     var name: String
     var objectName: String
     var filter: String
+    var search: String? = nil
 
     static let defaults = [
         SavedView(name: "All contacts", objectName: "Contacts", filter: "all"),

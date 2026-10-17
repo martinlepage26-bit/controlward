@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+// Local, disposable D1 only. Requires a checked-out Project Control Worker with npm ci completed.
+import {spawn} from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import net from 'node:net';
+const root = path.resolve(import.meta.dirname, '..');
+const source = process.argv[2];
+if (!source) throw new Error('Usage: bin/test-connected-workspace /path/to/project-control');
+const worker = path.join(path.resolve(source), 'worker');
+const wrangler = path.join(worker, 'node_modules/wrangler/bin/wrangler.js');
+const endpoint = 'http://127.0.0.1:8879';
+const children = new Set();
+function run(command, args, cwd, env = {}, quiet = false) {
+  const child = spawn(command, args, {cwd, detached: true, env: {...process.env, WRANGLER_SEND_METRICS:'false', ...env}, stdio:['ignore','pipe','pipe']});
+  children.add(child);
+  for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { if (!quiet) process.stdout.write(data); });
+  child.done = new Promise((resolve,reject) => { child.once('error',reject); child.once('exit',code=>{children.delete(child); code===0?resolve():reject(new Error('Local test process failed with exit '+code));}); });
+  child.done.catch(()=>{}); return child;
+}
+(async()=>{
+  let temp;
+  try {
+    await fs.access(wrangler);
+    const check=net.createServer(); await new Promise((resolve,reject)=>{check.once('error',reject);check.listen(8879,'127.0.0.1',resolve);});
+    await new Promise(resolve=>check.close(resolve));
+    temp=await fs.mkdtemp(path.join(os.tmpdir(),'controlward-d1-'));
+    await run(process.execPath,[wrangler,'d1','migrations','apply','project-control','--local','--persist-to',temp],worker,{},true).done;
+    const server=run(process.execPath,[wrangler,'dev','--local','--ip','127.0.0.1','--port','8879','--inspector-port','0','--persist-to',temp,'--var','BOOTSTRAP_SECRET:controlward-test-only'],worker,{},true);
+    let ready=false;
+    for(let i=0;i<100;i++) {
+      if(!children.has(server)) throw new Error('Disposable Worker exited early');
+      try{if((await fetch(endpoint+'/api/health')).ok){ready=true;break;}}catch{}
+      await new Promise(r=>setTimeout(r,200));
+    }
+    if(!ready) throw new Error('Disposable Worker did not become ready');
+    await run(path.join(root,'bin/test-workspace-modules'),[],root,{CONTROLWARD_TEST_WORKER:endpoint}).done;
+    console.log('Connected WebKit capture verified against disposable D1; no transport shim.');
+  } catch(error) { console.error(error.message); process.exitCode=1; }
+  finally {
+    for(const child of children) { try{process.kill(-child.pid,'SIGTERM');}catch{} }
+    await Promise.race([Promise.allSettled([...children].map(c=>c.done)),new Promise(r=>setTimeout(r,2500))]);
+    for(const child of children) { try{process.kill(-child.pid,'SIGKILL');}catch{} }
+    if(temp) await fs.rm(temp,{recursive:true,force:true});
+  }
+})();

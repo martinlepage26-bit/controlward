@@ -63,7 +63,7 @@ struct KeychainSecretStore: SecretStore {
         guard update == errSecItemNotFound else { throw SecretStoreError.keychain(update) }
         var item = query(target)
         item[kSecValueData as String] = data
-        item[kSecAttrLabel as String] = "Contextward \(target.label) API key"
+        item[kSecAttrLabel as String] = "ControlWard \(target.label) API key"
         let add = SecItemAdd(item as CFDictionary, nil)
         guard add == errSecSuccess else { throw SecretStoreError.keychain(add) }
     }
@@ -142,7 +142,7 @@ enum IntegrationError: LocalizedError, Equatable {
         switch self {
         case .missingEndpoint: "No endpoint URL is saved."
         case .missingKey: "No API key is saved in the Keychain."
-        case .elevatedKeyNotAllowed: "Supabase secret keys cannot be used in Contextward. Save the project's publishable key instead."
+        case .elevatedKeyNotAllowed: "Supabase secret keys cannot be used in ControlWard. Save the project's publishable key instead."
         case .invalidEndpoint: "The endpoint is not a valid http(s) URL."
         case .http(let status, let code, let context):
             "\(context) returned HTTP \(status)\(code.map { " (\($0))" } ?? "")\(status == 401 || status == 403 ? ": the API key was rejected" : "")."
@@ -219,7 +219,7 @@ struct KairosInbox: Decodable, Sendable {
     var conversations: [KairosConversation]
 }
 
-/// Read-only client for the Kairos account API. Contextward calls only GET /v1/me
+/// Read-only client for the Kairos account API. ControlWard calls only GET /v1/me
 /// and GET /v1/inbox; it never approves or sends replies or publishes posts.
 struct KairosClient: Sendable {
     static let defaultEndpoint = "https://kairos.govern-ai.ca"
@@ -721,7 +721,7 @@ struct TwentyPlan: Equatable, Sendable {
     }
 }
 
-/// Maps Contextward records to Twenty standard objects (Twenty v2 field names).
+/// Maps ControlWard records to Twenty standard objects (Twenty v2 field names).
 enum TwentyMapper {
     static let currencyCode = "CAD"
 

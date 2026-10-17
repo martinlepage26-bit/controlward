@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-struct ContextwardLogo: View {
+struct ControlWardLogo: View {
     var size: CGFloat
 
     var body: some View {
@@ -11,22 +11,19 @@ struct ContextwardLogo: View {
             .interpolation(.high)
             .scaledToFit()
             .frame(width: size, height: size)
-            .accessibilityLabel("Contextward logo")
+            .accessibilityLabel("ControlWard logo")
     }
 
     /// The .app build copies SwiftPM's resource bundle into Contents/Resources.
     /// `Bundle.module` does not look there and falls back to the absolute .build
     /// path, which the App Sandbox blocks (and traps on), so check the app first.
     private static let logoURL: URL? = {
-        if let bundled = Bundle.main.url(forResource: "FollowUpOSNative_FollowUpOSNative", withExtension: "bundle"),
-           let resources = Bundle(url: bundled) {
-            return resources.url(forResource: "logoContextWard", withExtension: "png")
-        }
-        return Bundle.module.url(forResource: "logoContextWard", withExtension: "png")
+        AppResources.bundle?.url(forResource: "logoContextWard", withExtension: "png")
     }()
 }
 
 struct RootView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
@@ -47,12 +44,12 @@ struct RootView: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 11)
                     .background(CRMTheme.ink, in: Capsule())
-                    .shadow(radius: 12, y: 4)
+
                     .padding(.bottom, 20)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.easeOut(duration: 0.18), value: store.notice)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.notice)
         .background(CRMTheme.paper)
         .tint(CRMTheme.amberDark)
         .preferredColorScheme(.light)
@@ -69,15 +66,15 @@ struct OnboardingView: View {
             Spacer()
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 5) {
-                    ContextwardLogo(size: 86)
+                    ControlWardLogo(size: 86)
                     HStack(spacing: 0) {
-                        Text("Context")
+                        Text("Control")
                             .foregroundStyle(CRMTheme.ink)
-                        Text("ward")
+                        Text("Ward")
                             .foregroundStyle(CRMTheme.amberDark)
                     }
                     .font(.system(size: 32, weight: .heavy, design: .rounded))
-                    Text("A native CRM for customer details, follow-ups, and a healthier pipeline.")
+                    Text("Relationships, email intake, market signals, and project decisions in one desktop workspace.")
                         .foregroundStyle(.secondary)
                 }
 
@@ -107,6 +104,9 @@ struct OnboardingView: View {
 
 enum WorkspaceSection: String, CaseIterable, Identifiable {
     case overview = "Overview"
+    case projects = "Projects"
+    case email = "Email"
+    case activity = "Activity"
     case pipeline = "Pipeline"
     case operations = "Operations"
     case intelligence = "Account intelligence"
@@ -125,6 +125,9 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .overview: "square.grid.2x2"
+        case .projects: "rectangle.3.group.bubble"
+        case .email: "envelope"
+        case .activity: "clock.arrow.circlepath"
         case .pipeline: "rectangle.3.group"
         case .operations: "arrow.triangle.branch"
         case .intelligence: "scope"
@@ -143,17 +146,18 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 
 struct MainWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var selection: WorkspaceSection? = .overview
+    @StateObject private var modules = WorkspaceModules()
+    @StateObject private var navigation = WorkspaceNavigation()
 
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 9) {
-                        ContextwardLogo(size: 30)
+                        ControlWardLogo(size: 30)
                         HStack(spacing: 0) {
-                        Text("Context")
-                        Text("ward").foregroundStyle(CRMTheme.amber)
+                        Text("Control")
+                        Text("Ward").foregroundStyle(CRMTheme.amberDark)
                         }
                     }
                     .font(.system(size: 21, weight: .heavy, design: .rounded))
@@ -165,29 +169,17 @@ struct MainWorkspaceView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 18)
 
-                List(WorkspaceSection.allCases, selection: $selection) { section in
+                List(WorkspaceSection.allCases, selection: $navigation.section) { section in
                     Label(section.rawValue, systemImage: section.symbol)
+                        .foregroundStyle(navigation.section == section ? CRMTheme.ink : CRMTheme.slate)
                         .tag(section)
                 }
                 .listStyle(.sidebar)
 
-                VStack(spacing: 6) {
-                    ContextwardLogo(size: 78)
-                    Text("Contextward")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(CRMTheme.ink)
-                    Text("PHAROS CRM")
-                        .font(.caption2.weight(.semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(CRMTheme.amberDark)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-
                 VStack(alignment: .leading, spacing: 5) {
-                    Label("Stored locally", systemImage: "internaldrive")
+                    Label("CRM stored locally", systemImage: "internaldrive")
                         .font(.caption.weight(.semibold))
-                    Text("No browser or local server")
+                    Text("PHAROS · ControlWard")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -196,17 +188,20 @@ struct MainWorkspaceView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
             Group {
-                switch selection ?? .pipeline {
+                switch navigation.section ?? .overview {
                 case .overview: OverviewView()
+                case .projects: WorkspaceModuleView(controller: modules.controller(for: .projects))
+                case .email: MailWorkspaceView()
+                case .activity: WorkspaceActivityView()
                 case .pipeline: PipelineView()
                 case .operations: IntegratedOpsView()
                 case .intelligence: AccountIntelligenceView()
                 case .integrations: IntegrationCenterView()
-                case .contacts: DirectoryView(kind: .contacts)
-                case .companies: DirectoryView(kind: .companies)
-                case .opportunities: DirectoryView(kind: .opportunities)
-                case .tasks: DirectoryView(kind: .tasks)
-                case .notes: DirectoryView(kind: .notes)
+                case .contacts: directory(.contacts)
+                case .companies: directory(.companies)
+                case .opportunities: directory(.opportunities)
+                case .tasks: directory(.tasks)
+                case .notes: directory(.notes)
                 case .views: SavedViewsView()
                 case .security: SecurityView()
                 case .settings: SettingsView()
@@ -214,9 +209,18 @@ struct MainWorkspaceView: View {
             }
             .background(CRMTheme.paper)
         }
+        .environmentObject(modules)
+        .environmentObject(navigation)
         .task {
             await store.pullLeadsOnLaunch()
             await store.scheduleTaskReminders()
         }
+    }
+
+    private func directory(_ kind: DirectoryKind) -> some View {
+        DirectoryView(kind: kind,
+                      initialFilter: navigation.directoryKind == kind.rawValue ? navigation.directoryFilter : .all,
+                      initialSearch: navigation.directoryKind == kind.rawValue ? navigation.directorySearch : "")
+            .id("\(kind.rawValue)-\(navigation.requestID)")
     }
 }

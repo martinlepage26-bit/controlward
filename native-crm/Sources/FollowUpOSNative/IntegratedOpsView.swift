@@ -13,12 +13,12 @@ struct IntegratedOpsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Operations").font(.title2.weight(.bold))
-                    Text("Signals, routing, follow-up continuity, and bilingual evidence.").foregroundStyle(.secondary)
+                    Text("Review signals, route follow-ups and compare bilingual audits.").foregroundStyle(.secondary)
                 }
-                Spacer()
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .leading)], alignment: .leading, spacing: 8) {
                 Button("Capture signal", systemImage: "dot.radiowaves.left.and.right") { showSignal = true }
                     .buttonStyle(.borderedProminent)
                 Button("Import LeadGen", systemImage: "arrow.down.doc") { showImporter = true }
@@ -31,6 +31,7 @@ struct IntegratedOpsView: View {
                     .buttonStyle(.bordered)
                 Button("Export exchange", systemImage: "square.and.arrow.up") { showExporter = true }
                     .buttonStyle(.bordered)
+                }
             }
             .padding(28)
 
@@ -99,10 +100,17 @@ struct ExchangeDocument: FileDocument {
 private struct SignalQueueView: View {
     @EnvironmentObject private var store: AppStore
     @State private var selected: Signal?
+    @State private var projectRecord: WorkspaceRecord?
+    @State private var search = ""
+    @State private var includeRetired = false
 
     var body: some View {
         List {
             Section {
+                HStack {
+                    TextField("Search signals and GAP evidence", text: $search).textFieldStyle(.roundedBorder)
+                    Toggle("Include retired", isOn: $includeRetired)
+                }
                 HStack(spacing: 12) {
                     OpsMetric(value: "\(store.activeSignals.count)", label: "active", symbol: "dot.radiowaves.left.and.right")
                     OpsMetric(value: "\(store.qualifiedSignals.count)", label: "qualified / routed", symbol: "arrow.triangle.branch")
@@ -127,7 +135,7 @@ private struct SignalQueueView: View {
                 if store.signals.isEmpty {
                     ContentUnavailableView("No signals yet", systemImage: "dot.radiowaves.left.and.right", description: Text("Capture a lead, referral, event, or audit finding to start the routing loop."))
                 }
-                ForEach(store.signals) { signal in
+                ForEach(store.signals.filter { (includeRetired || $0.sourceActive != false) && (search.isEmpty || "\($0.title) \($0.evidence)".localizedCaseInsensitiveContains(search)) }) { signal in
                     Button { selected = signal } label: {
                         HStack(spacing: 12) {
                             Image(systemName: signal.status == .routed ? "checkmark.circle.fill" : "circle.dotted").foregroundStyle(signal.status == .routed ? .green : CRMTheme.amberDark)
@@ -142,6 +150,10 @@ private struct SignalQueueView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Project links and capture") { projectRecord = store.allWorkspaceRecords.first { $0.kind == "signals" && $0.recordID == signal.id } }
+                            .disabled(signal.sourceActive == false)
+                    }
                 }
             }
             Section("Recent automation activity") {
@@ -153,6 +165,7 @@ private struct SignalQueueView: View {
         }
         .listStyle(.inset)
         .sheet(item: $selected) { SignalEditor(signal: $0).environmentObject(store) }
+        .sheet(item: $projectRecord) { RecordProjectSheet(record: $0) }
     }
 }
 

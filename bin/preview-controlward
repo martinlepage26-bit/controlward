@@ -1,0 +1,21 @@
+#!/bin/zsh
+set -euo pipefail
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+PACKAGE_ROOT="${PROJECT_ROOT}/native-crm"
+swift build --package-path "${PACKAGE_ROOT}" -Xswiftc -DCONTEXTWARD_ACCEPTANCE
+BIN_DIR="$(swift build --show-bin-path --package-path "${PACKAGE_ROOT}")"
+PREVIEW_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/controlward-preview-XXXXXX")"
+APP="${PREVIEW_ROOT}/ControlWard Preview.app"
+mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+cp "${BIN_DIR}/FollowUpOSNative" "${APP}/Contents/MacOS/FollowUpOSNative"
+cp -R "${BIN_DIR}/FollowUpOSNative_FollowUpOSNative.bundle" "${APP}/Contents/Resources/"
+cp "${PACKAGE_ROOT}/Resources/Info.plist" "${APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.pharos.controlward.preview' "${APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleName ControlWard Preview' "${APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName ControlWard Preview' "${APP}/Contents/Info.plist"
+codesign --force --timestamp=none --sign - "${APP}"
+print "Preview app: ${APP}"
+print "Synthetic data: ${PREVIEW_ROOT}/data"
+# No Keychain access; both embedded modules use ephemeral stores in this build.
+FOLLOWUPOS_DATA_DIR="${PREVIEW_ROOT}/data" CONTROLWARD_PREVIEW=synthetic "${APP}/Contents/MacOS/FollowUpOSNative"
