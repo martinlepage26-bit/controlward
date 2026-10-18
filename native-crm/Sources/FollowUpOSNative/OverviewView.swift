@@ -528,6 +528,6 @@ struct SettingsPanel: View {
 /// True when the Overview is showing synthetic records (preview build or synthetic mail import).
 enum PreviewData {
     @MainActor static func isShowing(_ store: AppStore) -> Bool {
-        ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] != nil || store.mail.contains { $0.synthetic }
+        ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] == "synthetic" || store.mail.contains { $0.synthetic }
     }
 }
