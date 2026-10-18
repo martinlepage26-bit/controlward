@@ -134,9 +134,9 @@ def payload_matches(payload: bytes, root: Path, source_rel: str, pixels: int) ->
     if actual.size != (pixels, pixels):
         return False, f"slot is {actual.size[0]}x{actual.size[1]}, expected {pixels}x{pixels}"
     expected = expected_image(root, source_rel, pixels)
-    if actual.size != expected.size:
-        return False, f"source {source_rel} became {expected.size}"
-    if list(actual.get_flattened_data()) != list(expected.get_flattened_data()):
+    actual = actual.convert("RGBA")
+    expected = expected.convert("RGBA")
+    if actual.mode != expected.mode or actual.size != expected.size or actual.tobytes() != expected.tobytes():
         return False, f"pixels do not match {source_rel}"
     return True, source_rel
 
