@@ -23,19 +23,22 @@ LEGACY_SHA256 = "42601112016a0b77b7ee22a2ebdd4761b1abf7be93a27ca9a93730e64a22623
 ICON_STEM = "ControlWard"
 ICON_FILENAME = ICON_STEM + ".icns"
 
-# iconutil's ten-slot iconset, in the order iconutil writes them.
-REQUIRED_SIZES = (
-    ("icp4", 16, "icon_16x16.png"),
-    ("ic11", 32, "icon_16x16@2x.png"),
-    ("icp5", 32, "icon_32x32.png"),
-    ("ic12", 64, "icon_32x32@2x.png"),
-    ("ic07", 128, "icon_128x128.png"),
-    ("ic13", 256, "icon_128x128@2x.png"),
-    ("ic08", 256, "icon_256x256.png"),
-    ("ic14", 512, "icon_256x256@2x.png"),
-    ("ic09", 512, "icon_512x512.png"),
-    ("ic10", 1024, "icon_512x512@2x.png"),
+# iconutil's ten slots. Slots whose source PNG is a different size are
+# LANCZOS-downscaled from that source (the approved 1024 icon).
+# key, pixels, iconset name, source path relative to the repo root.
+SLOTS = (
+    ("icp4", 16, "icon_16x16.png", "design/controlward/controlward-icon-small-16.png"),
+    ("ic11", 32, "icon_16x16@2x.png", "design/controlward/controlward-icon-small-32.png"),
+    ("icp5", 32, "icon_32x32.png", "design/controlward/controlward-icon-small-32.png"),
+    ("ic12", 64, "icon_32x32@2x.png", "design/controlward/controlward-icon-small-64.png"),
+    ("ic07", 128, "icon_128x128.png", "design/controlward/controlward-icon-1024.png"),
+    ("ic13", 256, "icon_128x128@2x.png", "design/controlward/controlward-icon-1024.png"),
+    ("ic08", 256, "icon_256x256.png", "design/controlward/controlward-icon-1024.png"),
+    ("ic14", 512, "icon_256x256@2x.png", "design/controlward/controlward-icon-512.png"),
+    ("ic09", 512, "icon_512x512.png", "design/controlward/controlward-icon-512.png"),
+    ("ic10", 1024, "icon_512x512@2x.png", "design/controlward/controlward-icon-1024.png"),
 )
+REQUIRED_SIZES = tuple((key, pixels, label) for key, pixels, label, _source in SLOTS)
 
 SKIP_DIRS = {
     ".git",
@@ -78,6 +81,38 @@ def png_size(data: bytes) -> tuple[int, int] | None:
     if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
         return None
     return struct.unpack(">II", data[16:24])
+
+
+def expected_image(root: Path, source_rel: str, pixels: int):
+    """Approved artwork for one slot. Smaller sizes of the 1024 icon are downscaled."""
+    from PIL import Image
+
+    image = Image.open(root / source_rel).convert("RGBA")
+    if image.size != (pixels, pixels):
+        image = image.resize((pixels, pixels), Image.Resampling.LANCZOS)
+    return image
+
+
+def payload_matches(payload: bytes, root: Path, source_rel: str, pixels: int) -> tuple[bool, str]:
+    """Pixel-compare an icns PNG chunk with the approved source for that slot."""
+    from PIL import Image
+    import io
+
+    source = root / source_rel
+    if not source.is_file():
+        return False, f"missing source {source_rel}"
+    try:
+        actual = Image.open(io.BytesIO(payload)).convert("RGBA")
+    except Exception as exc:
+        return False, f"slot PNG could not be read ({exc})"
+    if actual.size != (pixels, pixels):
+        return False, f"slot is {actual.size[0]}x{actual.size[1]}, expected {pixels}x{pixels}"
+    expected = expected_image(root, source_rel, pixels)
+    if actual.size != expected.size:
+        return False, f"source {source_rel} became {expected.size}"
+    if list(actual.get_flattened_data()) != list(expected.get_flattened_data()):
+        return False, f"pixels do not match {source_rel}"
+    return True, source_rel
 
 
 def list_icon_sizes(path: Path) -> list[str]:
@@ -166,7 +201,7 @@ def check(root: Path) -> list[str]:
         return errors
 
     by_key = {key: payload for key, payload in chunks}
-    for key, pixels, label in REQUIRED_SIZES:
+    for key, pixels, label, source_rel in SLOTS:
         payload = by_key.get(key)
         if payload is None:
             errors.append(f"{ICON_FILENAME} is missing {label} ({key}, {pixels}x{pixels})")
@@ -176,6 +211,10 @@ def check(root: Path) -> list[str]:
             errors.append(
                 f"{ICON_FILENAME} {label} ({key}) is {size}, expected png {pixels}x{pixels}"
             )
+            continue
+        matches, detail = payload_matches(payload, root, source_rel, pixels)
+        if not matches:
+            errors.append(f"{ICON_FILENAME} {label} ({key}) {detail}")
 
     errors.extend(_scan_legacy_references(root))
     return errors

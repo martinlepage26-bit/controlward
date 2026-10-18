@@ -101,9 +101,20 @@ class AppIconCheckTests(unittest.TestCase):
         self.assertEqual(errors, [], "\n".join(errors))
         listing = guard.list_icon_sizes(icon_path)
         self.assertEqual(len([line for line in listing if line.startswith("ic") and "png" in line]), 10)
-        parsed = {key: guard.png_size(payload) for key, payload in guard.parse_icns(icon_path.read_bytes())}
-        for key, pixels, _label in guard.REQUIRED_SIZES:
-            self.assertEqual(parsed[key], (pixels, pixels))
+        parsed = dict(guard.parse_icns(icon_path.read_bytes()))
+        self.assertEqual(len(guard.SLOTS), 10)
+        for key, pixels, label, source_rel in guard.SLOTS:
+            size = guard.png_size(parsed[key])
+            self.assertEqual(size, (pixels, pixels), label)
+            matches, detail = guard.payload_matches(parsed[key], ROOT, source_rel, pixels)
+            self.assertTrue(matches, f"{label}: {detail}")
+
+    def test_wrong_pixels_do_not_match_approved_source(self):
+        white = _png(16, b"\xff\xff\xff\xff" * 256)
+        source = "design/controlward/controlward-icon-small-16.png"
+        matches, detail = guard.payload_matches(white, ROOT, source, 16)
+        self.assertFalse(matches, detail)
+        self.assertIn("do not match", detail)
 
 
 if __name__ == "__main__":

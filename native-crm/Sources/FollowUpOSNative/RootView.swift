@@ -18,7 +18,7 @@ struct ControlWardLogo: View {
     /// `Bundle.module` does not look there and falls back to the absolute .build
     /// path, which the App Sandbox blocks (and traps on), so check the app first.
     private static let logoURL: URL? = {
-        AppResources.bundle?.url(forResource: "logoContextWard", withExtension: "png")
+        AppResources.bundle?.url(forResource: "controlward-mark", withExtension: "png")
     }()
 }
 

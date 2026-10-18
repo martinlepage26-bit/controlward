@@ -12,7 +12,7 @@ let package = Package(
         .executableTarget(
             name: "FollowUpOSNative",
             path: "Sources/FollowUpOSNative",
-            resources: [.process("Resources/logoContextWard.png"), .copy("Resources/ProjectControl")]
+            resources: [.process("Resources/controlward-mark.png"), .copy("Resources/ProjectControl")]
         ),
     ]
 )
