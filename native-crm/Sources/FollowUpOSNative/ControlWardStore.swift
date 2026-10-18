@@ -12,25 +12,7 @@ extension AppStore {
 
     @discardableResult
     func importMailMetadata(_ data: Data) throws -> Int {
-        let incoming = try MailMetadataImport.decode(data)
-        var count = 0
-        try commitWorkspace { next in
-            for message in incoming {
-                let existing = next.controlWard.mail.firstIndex {
-                    $0.sourceID == message.sourceID && $0.accountID == message.accountID && $0.synthetic == message.synthetic
-                }
-                if let index = existing {
-                    // Imported metadata can refresh; owner routing and identity stay local.
-                    var updated = message
-                    let previous = next.controlWard.mail[index]
-                    updated.id = previous.id; updated.reviewed = previous.reviewed
-                    updated.contactID = previous.contactID; updated.companyID = previous.companyID; updated.taskID = previous.taskID
-                    next.controlWard.mail[index] = updated
-                } else { next.controlWard.mail.append(message); count += 1 }
-            }
-            next.activity.insert(ActivityEvent(kind: "mail_import", message: "Imported mail metadata: \(count) new, \(incoming.count - count) refreshed."), at: 0)
-        }
-        return count
+        try mergeMail(try MailMetadataImport.decode(data), activity: "Imported mail metadata")
     }
 
     func reviewMail(_ id: UUID, reviewed: Bool, contactID: UUID?, companyID: UUID?) throws {

@@ -45,6 +45,8 @@ struct IntegrationCenterView: View {
 
                 UnifiedModuleConnections().padding(.horizontal, 28)
 
+                MailAccountsSection().padding(.horizontal, 28)
+
                 VStack(alignment: .leading, spacing: 12) {
                     SectionLabel(text: "Adapter endpoints")
                     Text("Endpoints are saved as non-secret configuration. Credentials in a URL (user:pass@ or token parameters) are removed before saving. API keys live in the macOS Keychain and are set in Settings. Every external write is an explicit action.")

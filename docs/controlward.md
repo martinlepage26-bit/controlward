@@ -45,7 +45,8 @@ The hosted module points to <https://email-aggregator-ext-ol5f.bolt.host/>. The
 inspected source is `martinlepageai-ux/email-aggregator` at
 `0c1b72c213c3f02164c2d508d7befc2f35f24e68`. Its current sign-in screen labels it a
 prototype; provider OAuth/mailbox synchronization is not implemented in the
-inspected source. No credentials or provider mailbox contents were used in QA.
+inspected source. ControlWard's own live Gmail metadata intake is native (see
+`native-crm/README.md`, Live mail intake) and does not use this hosted app. No credentials or provider mailbox contents were used in QA.
 
 The local inbox imports `controlward.mail.v1` JSON or the existing Project Control
 synthetic Email Aggregator fixture. Unknown fields such as body text and tokens

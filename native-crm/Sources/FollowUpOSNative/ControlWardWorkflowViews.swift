@@ -192,6 +192,7 @@ struct MailWorkspaceView: View {
                 Button("Import metadata") { importMail() }.buttonStyle(.borderedProminent)
             }.padding(.horizontal, 22).padding(.top, 20)
             Picker("Email workspace", selection: $tab) { Text("Local review inbox").tag(0); Text("Email Aggregator").tag(1) }.pickerStyle(.segmented).padding(.horizontal, 22)
+            if tab == 0 { MailIntakeStatusBar().padding(.horizontal, 22) }
             if let message { Text(message).font(.caption).padding(.horizontal, 22) }
             if tab == 1 { WorkspaceModuleView(controller: modules.controller(for: .email)) }
             else {

@@ -7,7 +7,8 @@ selected evidence into the project inbox with explicit confirmation.
 
 See [the section-by-section guide](docs/controlward.md), [product direction](PRODUCT.md)
 and [design system](DESIGN.md). The hosted email app is still a synthetic-mail
-prototype; real mailbox OAuth and a production GAP connection are not included.
+prototype. Native live mail intake (Gmail metadata, read-only OAuth) is described in
+[native-crm/README.md](native-crm/README.md#live-mail-intake); a production GAP connection is not included.
 
 ## What is operational
 
