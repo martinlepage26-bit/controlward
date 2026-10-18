@@ -13,10 +13,10 @@ struct CWSidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                ControlWardLogo(size: 30)
+                ControlWardLogo(size: 40)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("ControlWard").font(.system(size: 15, weight: .semibold)).lineLimit(1).fixedSize().foregroundStyle(.white)
-                    Text("PHAROS CRM").font(.system(size: 7.5, weight: .medium)).tracking(1.5).foregroundStyle(.white.opacity(0.7))
+                    Text("ControlWard").font(.system(size: 17, weight: .semibold)).lineLimit(1).fixedSize().foregroundStyle(.white)
+                    Text("PHAROS CRM").font(.system(size: 8.5, weight: .medium)).tracking(1.5).foregroundStyle(.white.opacity(0.7))
                 }
             }
             .padding(10).frame(maxWidth: .infinity, alignment: .leading)
@@ -31,7 +31,7 @@ struct CWSidebar: View {
                         Button { navigation.show(section) } label: {
                             HStack(spacing: 11) {
                                 Image(systemName: section.symbol).frame(width: 18).foregroundStyle(selected ? CWPalette.goldIcon : .white.opacity(0.85))
-                                Text(section.rawValue).foregroundStyle(.white).lineLimit(1)
+                                Text(section.rawValue).foregroundStyle(.white).fixedSize()
                                 Spacer()
                             }
                             .font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 6.5)
@@ -47,7 +47,7 @@ struct CWSidebar: View {
                 HStack(spacing: 10) {
                     Image(systemName: "globe").foregroundStyle(.white.opacity(0.85))
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(store.business.name).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
+                        Text(store.business.name).font(.system(size: 10.5, weight: .medium)).fixedSize(horizontal: false, vertical: true)
                         Text(store.business.industry).font(.system(size: 9.5)).foregroundStyle(.white.opacity(0.7))
                     }.foregroundStyle(.white)
                     Spacer()

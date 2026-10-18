@@ -66,7 +66,8 @@ struct OverviewSnapshot: Equatable, Sendable {
         }
 
         func trend<T>(_ items: [T], _ date: (T) -> Date?) -> [Double] {
-            guard !items.isEmpty else { return [] }
+            // Fewer than 2 dated records is not a trend: the view draws a flat line.
+            guard items.compactMap(date).count >= 2 else { return [] }
             return weeklyCounts(items.compactMap(date), weeks: weeks, now: now)
         }
 
@@ -106,7 +107,7 @@ struct OverviewSnapshot: Equatable, Sendable {
     }
 
     static func cumulativeValue(_ open: [Opportunity], weeks: Int, now: Date) -> [Double] {
-        guard open.contains(where: { $0.amount != nil }) else { return [] }
+        guard open.filter({ $0.amount != nil }).count >= 2 else { return [] }
         var buckets = Array(repeating: 0.0, count: weeks)
         for opp in open {
             guard let amount = opp.amount else { continue }
@@ -140,6 +141,18 @@ struct OverviewSnapshot: Equatable, Sendable {
     static func initials(_ name: String) -> String {
         let letters = name.split(whereSeparator: \.isWhitespace).prefix(2).compactMap(\.first)
         return letters.isEmpty ? "?" : String(letters).uppercased()
+    }
+
+    /// The first name to greet with, or nil when the account name is not a person's name
+    /// (empty, the same as the short login name, or containing digits, underscores or dots).
+    static func greetingName(fullName: String, userName: String) -> String? {
+        let first = firstName(fullName)
+        guard !first.isEmpty,
+              fullName.trimmingCharacters(in: .whitespaces).lowercased() != userName.lowercased(),
+              first.lowercased() != userName.lowercased(),
+              first.allSatisfy({ $0.isLetter || $0 == "-" || $0 == "'" }),
+              first.first?.isUppercase == true else { return nil }
+        return first
     }
 
     static func firstName(_ name: String) -> String {

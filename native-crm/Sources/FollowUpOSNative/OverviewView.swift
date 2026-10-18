@@ -1,30 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// Colours sampled from the approved mockup (water-visual-fidelity.md).
-enum CWPalette {
-    static func hex(_ v: UInt32) -> Color { Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255) }
-    static let canvas = hex(0xF7F6F4)
-    static let card = hex(0xFEFEFE)
-    static let sidebarTop = hex(0x0F273A)
-    static let sidebarBottom = hex(0x0A2234)
-    static let selectedFill = hex(0x3C3B36)
-    static let bronze = hex(0x774C14)
-    static let goldLight = hex(0xB98A3E)
-    static let goldIcon = hex(0xCFB381)
-    static let teal = hex(0x31B1C3)
-    static let ink = hex(0x051736)
-    static let gray = hex(0x6B7280)
-    static let tabSelected = hex(0x081E32)
-    static let green = hex(0x0DA97A)
-    static let blue = hex(0x177EF4)
-    static let red = hex(0xE5484D)
-    static let mint = hex(0xA0E9D1)
-    static let progress = hex(0x01A680)
-    static let stage: [OpportunityStage: Color] = [.lead: hex(0x177EF4), .qualified: hex(0xDF9B2E), .proposal: hex(0x0DA97A), .negotiation: hex(0x8043E3), .won: hex(0x0F9EBB)]
-    static let bronzeGradient = LinearGradient(colors: [hex(0x9A6A28), bronze], startPoint: .top, endPoint: .bottom)
-}
-
 struct CWCard: ViewModifier {
     var padding: CGFloat = 14
     func body(content: Content) -> some View {
@@ -49,23 +25,25 @@ struct NebulaBanner: View {
     var body: some View {
         Canvas { ctx, size in
             ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .linearGradient(
-                Gradient(colors: [CWPalette.hex(0x1B3550), CWPalette.hex(0x557882), CWPalette.hex(0x24405A)]),
-                startPoint: CGPoint(x: size.width, y: 0), endPoint: CGPoint(x: size.width * 0.4, y: size.height)))
-            for (x, y, r, c) in [(0.75, 0.25, 0.35, 0xA9D8E8), (0.9, 0.6, 0.3, 0xF0C98A), (0.6, 0.5, 0.25, 0x6FA7C9)] as [(Double, Double, Double, UInt32)] {
+                Gradient(colors: [CWPalette.nebulaDeep, CWPalette.nebulaMid, CWPalette.nebulaHaze]),
+                startPoint: CGPoint(x: size.width, y: 0), endPoint: CGPoint(x: size.width * 0.35, y: size.height)))
+            let glows: [(Double, Double, Double, Color, Double)] = [
+                (0.72, 0.30, 0.32, CWPalette.nebulaGlowCool, 0.8), (0.92, 0.55, 0.24, CWPalette.nebulaGlowWarm, 0.6), (0.55, 0.45, 0.28, CWPalette.nebulaGlowBlue, 0.75), (0.80, 0.40, 0.10, .white, 0.55)]
+            for (x, y, r, color, alpha) in glows {
                 let center = CGPoint(x: size.width * x, y: size.height * y)
                 let radius = size.width * r
                 ctx.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
-                         with: .radialGradient(Gradient(colors: [CWPalette.hex(c).opacity(0.55), .clear]), center: center, startRadius: 0, endRadius: radius))
+                         with: .radialGradient(Gradient(colors: [color.opacity(alpha), .clear]), center: center, startRadius: 0, endRadius: radius))
             }
             var rng = SeededRandom(seed: 17)
-            for _ in 0..<420 {
+            for _ in 0..<700 {
                 let p = CGPoint(x: rng.next() * size.width, y: rng.next() * size.height)
                 let s = rng.next() < 0.93 ? 1.0 : 2.2
                 ctx.fill(Path(ellipseIn: CGRect(x: p.x, y: p.y, width: s, height: s)), with: .color(.white.opacity(0.35 + rng.next() * 0.6)))
             }
         }
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.12), .init(color: .black, location: 0.62)], startPoint: .leading, endPoint: .trailing))
-        .mask(LinearGradient(colors: [.black, .black, .clear], startPoint: .top, endPoint: .bottom))
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.18), .init(color: .black, location: 0.42)], startPoint: .leading, endPoint: .trailing))
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.7), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
         .accessibilityHidden(true)
     }
 }
@@ -88,7 +66,7 @@ struct Sparkline: View {
             if pts.count > 1 {
                 ZStack {
                     Path { p in p.move(to: CGPoint(x: pts[0].x, y: geo.size.height)); pts.forEach { p.addLine(to: $0) }; p.addLine(to: CGPoint(x: pts.last!.x, y: geo.size.height)) }
-                        .fill(LinearGradient(colors: [color.opacity(0.35), color.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                        .fill(LinearGradient(colors: [color.opacity(0.45), color.opacity(0.04)], startPoint: .top, endPoint: .bottom))
                     Path { p in p.addLines(pts) }.stroke(color, lineWidth: 1.6)
                 }
             } else {
@@ -149,12 +127,20 @@ struct PanelHeader: View {
     var action: String?
     var run: () -> Void = {}
     var body: some View {
+        // Keep the full title and button text: when both don't fit on one line, the button drops below.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) { titleRow; Spacer(minLength: 4); button }
+            VStack(alignment: .leading, spacing: 6) { titleRow; button }
+        }
+    }
+    private var titleRow: some View {
         HStack(spacing: 7) {
             CWMiniMark()
-            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(CWPalette.ink).lineLimit(1).minimumScaleFactor(0.75)
-            Spacer(minLength: 4)
-            if let action { Button(action, action: run).buttonStyle(BronzeButtonStyle()) }
+            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(CWPalette.ink).fixedSize()
         }
+    }
+    @ViewBuilder private var button: some View {
+        if let action { Button(action, action: run).buttonStyle(BronzeButtonStyle()) }
     }
 }
 
@@ -178,7 +164,7 @@ struct OverviewView: View {
     var body: some View {
         let s = snapshot
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 hero
                 if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { searchResults }
                 HStack(spacing: 14) {
@@ -188,8 +174,8 @@ struct OverviewView: View {
                     kpi("waveform.path.ecg", "Follow-ups", s.followUps, color: CWPalette.red, dot: s.followUpsOverdue > 0 ? CWPalette.red : CWPalette.gray)
                 }
                 HStack(alignment: .top, spacing: 14) {
-                    nextActions(s).frame(minWidth: 320, maxWidth: .infinity, minHeight: 180, alignment: .top)
-                    pipelineOverview(s).frame(minWidth: 380, maxWidth: .infinity, minHeight: 180, alignment: .top)
+                    nextActions(s).frame(minWidth: 320, maxWidth: .infinity, minHeight: 140, alignment: .top)
+                    pipelineOverview(s).frame(minWidth: 380, maxWidth: .infinity, minHeight: 140, alignment: .top)
                 }.fixedSize(horizontal: false, vertical: true)
                 HStack(alignment: .top, spacing: 14) {
                     ProjectsPanel(snapshot: projects, error: projectError) { navigation.show(.projects) }
@@ -200,7 +186,7 @@ struct OverviewView: View {
             }
             .padding(.horizontal, 20).padding(.bottom, 20)
         }
-        .background(alignment: .top) { NebulaBanner().frame(height: 210) }
+        .background(alignment: .top) { NebulaBanner().frame(height: 250) }
         .background(CWPalette.canvas)
         .sheet(item: $record) { RecordProjectSheet(record: $0) }
         .task { await loadProjects() }
@@ -215,19 +201,25 @@ struct OverviewView: View {
         let now = Date.now
         var cal = Calendar(identifier: .gregorian); cal.timeZone = Self.toronto
         let style = Date.FormatStyle(date: .complete, time: .omitted, locale: Locale(identifier: "en_CA"), timeZone: Self.toronto)
-        let first = OverviewSnapshot.firstName(NSFullUserName())
+        let first = OverviewSnapshot.greetingName(fullName: NSFullUserName(), userName: NSUserName()) ?? ""
         return HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(OverviewSnapshot.greeting(hour: cal.component(.hour, from: now)))\(first.isEmpty ? "" : ", \(first)").")
                     .font(.system(size: 28, weight: .semibold)).foregroundStyle(CWPalette.ink)
                 Text("Here is what needs your attention today.").font(.system(size: 14)).foregroundStyle(CWPalette.ink.opacity(0.7))
+                if PreviewData.isShowing(store) {
+                    Label("Preview data: synthetic records, not your workspace", systemImage: "eyedropper.halffull")
+                        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 8).padding(.vertical, 3).background(CWPalette.red, in: Capsule())
+                        .accessibilityLabel("Preview data")
+                }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
                 Text(now.formatted(style)).font(.system(size: 12, weight: .medium))
                 Text("\(store.business.name)  ·  \(store.business.industry)").font(.system(size: 10.5))
             }.foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 2).padding(.top, 6)
-        }.padding(.top, 18).padding(.bottom, 6)
+        }.padding(.top, 6).padding(.bottom, 2)
     }
 
     private var searchResults: some View {
@@ -248,7 +240,7 @@ struct OverviewView: View {
             Image(systemName: symbol).font(.system(size: 22, weight: .regular)).foregroundStyle(CWPalette.bronze.opacity(0.85)).frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(label.uppercased()).font(.system(size: 9, weight: .medium)).tracking(0.4).foregroundStyle(CWPalette.gray).lineLimit(1).minimumScaleFactor(0.8)
-                Text(m.value).font(.system(size: 21, weight: .semibold)).foregroundStyle(CWPalette.ink).monospacedDigit()
+                Text(m.value).font(.system(size: 26, weight: .semibold)).foregroundStyle(CWPalette.ink).monospacedDigit()
                 HStack(spacing: 4) {
                     if arrow { Image(systemName: "arrow.up").font(.system(size: 9, weight: .bold)).foregroundStyle(CWPalette.green) }
                     else if let dot { Circle().fill(dot).frame(width: 7, height: 7) }
@@ -311,11 +303,11 @@ struct OverviewView: View {
                 ForEach(s.pipeline) { column in
                     VStack(alignment: .leading, spacing: 6) {
                         Rectangle().fill(CWPalette.stage[column.stage] ?? .gray).frame(height: 3)
-                        HStack { Text(column.stage.label).font(.system(size: 10.5, weight: .semibold)); Spacer(); Text("\(column.items.count)").font(.system(size: 10)).foregroundStyle(CWPalette.gray) }
+                        HStack(spacing: 2) { Text(column.stage.label).font(.system(size: 10.5, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7); Spacer(); Text("\(column.items.count)").font(.system(size: 10)).foregroundStyle(CWPalette.gray) }
                             .padding(.horizontal, 7)
                         ForEach(column.items.prefix(3)) { opp in
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(opp.name).font(.system(size: 10, weight: .semibold)).lineLimit(2)
+                                Text(opp.name).font(.system(size: 10, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                                 if let amount = opp.amount { Text(OverviewSnapshot.currency(amount)).font(.system(size: 10)) }
                                 if let company = store.companies.first(where: { $0.id == opp.companyID })?.name { Text(company).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray) }
                             }.padding(7).frame(maxWidth: .infinity, alignment: .leading)
@@ -384,7 +376,7 @@ struct ProjectsPanel: View {
                 Divider()
             }
             Spacer(minLength: 0)
-        }.frame(maxWidth: .infinity, minHeight: 230, alignment: .top).cwCard(12)
+        }.frame(maxWidth: .infinity, minHeight: 200, alignment: .top).cwCard(12)
     }
 }
 
@@ -392,7 +384,7 @@ struct StatusPill: View {
     var text: String
     var body: some View {
         let s = text.lowercased()
-        let (bg, fg): (Color, Color) = s == "active" ? (CWPalette.mint, CWPalette.hex(0x0B7A57)) : s == "planning" ? (CWPalette.hex(0xFDE3C4), CWPalette.hex(0xA35B12)) : s == "completed" ? (CWPalette.hex(0xD6E6FB), CWPalette.hex(0x1E5BB8)) : (Color.black.opacity(0.06), CWPalette.gray)
+        let (bg, fg): (Color, Color) = s == "active" ? (CWPalette.mint, CWPalette.activeText) : s == "planning" ? (CWPalette.planningFill, CWPalette.planningText) : s == "completed" ? (CWPalette.completedFill, CWPalette.completedText) : (Color.black.opacity(0.06), CWPalette.gray)
         Text(text.capitalized).font(.system(size: 9, weight: .semibold)).foregroundStyle(fg).padding(.horizontal, 6).padding(.vertical, 2).background(bg, in: RoundedRectangle(cornerRadius: 4))
     }
 }
@@ -425,7 +417,7 @@ struct LeadsPanel: View {
                         Avatar(name: lead.name, color: [CWPalette.goldLight, CWPalette.blue, CWPalette.teal][abs(lead.name.hashValue) % 3])
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
-                                Text(lead.name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                                Text(lead.name).font(.system(size: 11, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                                 if lead.status == .new { Text("NEW").font(.system(size: 7.5, weight: .bold)).padding(.horizontal, 3).background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 3)) }
                             }
                             if !lead.company.isEmpty { Text(lead.company).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray) }
@@ -439,7 +431,7 @@ struct LeadsPanel: View {
                 Divider()
             }
             Spacer(minLength: 0)
-        }.frame(maxWidth: .infinity, minHeight: 230, alignment: .top).cwCard(12)
+        }.frame(maxWidth: .infinity, minHeight: 200, alignment: .top).cwCard(12)
     }
 }
 
@@ -468,7 +460,7 @@ struct EmailPanel: View {
                             Circle().fill(m.reviewed ? .clear : CWPalette.blue).frame(width: 5, height: 5).padding(.top, 12)
                             Avatar(name: m.sender, color: CWPalette.teal)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(m.sender).font(.system(size: 10.5, weight: .semibold)).lineLimit(1)
+                                Text(m.sender).font(.system(size: 10.5, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                                 Text(m.subject).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray).lineLimit(1)
                             }
                             Spacer()
@@ -478,7 +470,7 @@ struct EmailPanel: View {
                 }
             }
             Spacer(minLength: 0)
-        }.frame(maxWidth: .infinity, minHeight: 230, alignment: .top).cwCard(12)
+        }.frame(maxWidth: .infinity, minHeight: 200, alignment: .top).cwCard(12)
     }
 }
 
@@ -489,11 +481,11 @@ struct SettingsPanel: View {
     @State private var industry = ""
     @AppStorage(AutoPilot.storageKey) private var autoPilot = AutoPilot.defaultEnabled
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             PanelHeader(title: "Settings")
             VStack(alignment: .leading, spacing: 5) {
                 Text("Workspace settings").font(.system(size: 10.5, weight: .semibold))
-                Text("Manage the business identity used across the CRM.").font(.system(size: 9)).foregroundStyle(CWPalette.gray)
+                Text("Manage the business identity used across the CRM.").font(.system(size: 9)).foregroundStyle(CWPalette.gray).fixedSize(horizontal: false, vertical: true)
                 TextField("Workspace name", text: $name).textFieldStyle(.roundedBorder).font(.system(size: 10))
                 HStack {
                     Text("Industry").font(.system(size: 10))
@@ -502,24 +494,24 @@ struct SettingsPanel: View {
                 HStack { Spacer(); Button("Save changes") { store.saveBusiness(BusinessProfile(name: name, industry: industry)) }
                     .buttonStyle(BronzeButtonStyle())
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
-            }.padding(8).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
+            }.padding(7).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
             VStack(alignment: .leading, spacing: 4) {
                 Toggle(isOn: Binding(get: { store.automationRules.contains { $0.enabled } },
                                      set: { on in store.automationRules.forEach { store.setAutomation($0, enabled: on) } })) {
                     Text("Automation").font(.system(size: 10.5, weight: .semibold))
                 }.toggleStyle(.switch).controlSize(.mini).tint(CWPalette.green)
-                Text("Runs local rules only (tasks, signal routing). Never sends outreach.").font(.system(size: 9)).foregroundStyle(CWPalette.gray)
+                Text("Runs local rules only (tasks, signal routing). Never sends outreach.").font(.system(size: 9)).foregroundStyle(CWPalette.gray).fixedSize(horizontal: false, vertical: true)
                 Toggle("Auto-Pilot (every five minutes while open)", isOn: $autoPilot).toggleStyle(.checkbox).font(.system(size: 9.5))
-            }.padding(8).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
+            }.padding(7).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
             VStack(alignment: .leading, spacing: 4) {
                 Text("API keys").font(.system(size: 10.5, weight: .semibold))
-                Text("Keys are stored in the macOS Keychain and are write-only here. \(store.savedKeys.count) saved.").font(.system(size: 9)).foregroundStyle(CWPalette.gray)
+                Text("Keys are stored in the macOS Keychain and are write-only here. \(store.savedKeys.count) saved.").font(.system(size: 9)).foregroundStyle(CWPalette.gray).fixedSize(horizontal: false, vertical: true)
                 HStack { Spacer(); Button { navigation.show(.settings) } label: { Label("Manage keys", systemImage: "key") }
                     .buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(CWPalette.bronze).padding(.horizontal, 8).padding(.vertical, 4)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(CWPalette.bronze)) }
-            }.padding(8).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
+            }.padding(7).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
         }
-        .frame(maxWidth: .infinity, minHeight: 230, alignment: .top).cwCard(12)
+        .frame(maxWidth: .infinity, minHeight: 200, alignment: .top).cwCard(12)
         .onAppear { name = store.business.name; industry = store.business.industry }
         .task(id: autoPilot) {
             // Gated off unless the user ticks Auto-Pilot. runAutomations() is local-only.
@@ -530,5 +522,12 @@ struct SettingsPanel: View {
                 _ = store.runAutomations()
             }
         }
+    }
+}
+
+/// True when the Overview is showing synthetic records (preview build or synthetic mail import).
+enum PreviewData {
+    @MainActor static func isShowing(_ store: AppStore) -> Bool {
+        ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] != nil || store.mail.contains { $0.synthetic }
     }
 }

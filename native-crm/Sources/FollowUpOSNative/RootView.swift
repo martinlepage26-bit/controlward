@@ -152,7 +152,7 @@ struct MainWorkspaceView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            CWSidebar().frame(width: 196)
+            CWSidebar().frame(width: 212)
             VStack(spacing: 0) {
                 CWTopBar(search: $search)
             // Embedded content must size within the pane rather than enlarge the

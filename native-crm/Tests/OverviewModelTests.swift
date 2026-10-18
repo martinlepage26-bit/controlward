@@ -2,8 +2,11 @@ import Foundation
 
 @MainActor
 enum OverviewModelTests {
+    static var count = 0
     static func expect(_ value: Bool, _ message: String) throws {
         guard value else { throw SmokeTestFailure.failed(message) }
+        count += 1
+        print("PASS  Overview: \(message)")
     }
 
     static func run() -> Bool {
@@ -46,7 +49,14 @@ enum OverviewModelTests {
             try expect(OverviewSnapshot.greeting(hour: 8) == "Good morning" && OverviewSnapshot.greeting(hour: 14) == "Good afternoon" && OverviewSnapshot.greeting(hour: 21) == "Good evening", "greeting")
             try expect(OverviewSnapshot.initials("Martin Lepage") == "ML" && OverviewSnapshot.initials("") == "?", "initials")
             try expect(OverviewSnapshot.firstName("Martin Lepage") == "Martin", "first name")
-            print("Overview model tests passed")
+            try expect(OverviewSnapshot.greetingName(fullName: "Martin Lepage", userName: "pharos_ai") == "Martin", "real name greets by first name")
+            try expect(OverviewSnapshot.greetingName(fullName: "pharos_ai", userName: "pharos_ai") == nil, "login name is not a first name")
+            try expect(OverviewSnapshot.greetingName(fullName: "pharos ai", userName: "pharos_ai") == nil, "lowercase account name is not a first name")
+            try expect(OverviewSnapshot.greetingName(fullName: "", userName: "x") == nil, "empty name has no greeting name")
+            try expect(OverviewSnapshot.greetingName(fullName: "admin2", userName: "x") == nil, "digits are not a first name")
+            let single = OverviewSnapshot.make(opportunities: [Opportunity(name: "One", amount: 10, stage: .lead)], tasks: [], leads: [], companies: [], today: today, now: now)
+            try expect(single.openOpportunities.trend.isEmpty && single.estimatedValue.trend.isEmpty, "fewer than 2 records draws a flat sparkline, not a trend")
+            print("Overview model tests: \(count)/\(count) passed")
             return true
         } catch {
             print("Overview model tests failed: \(error)")

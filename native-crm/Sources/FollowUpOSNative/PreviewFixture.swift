@@ -4,6 +4,15 @@ import Foundation
 /// Compiled only into the isolated preview, never the release app.
 @MainActor enum PreviewFixture {
     static func prepareIfRequested() {
+        if ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] == "empty",
+           let path = ProcessInfo.processInfo.environment["FOLLOWUPOS_DATA_DIR"], path.contains("controlward-preview-"),
+           !FileManager.default.fileExists(atPath: StorageLocation.workspaceFile.path) {
+            // A named workspace with no records, to show the real empty states.
+            var w = PersistentWorkspace()
+            w.business.name = "Empty review workspace"; w.business.industry = "Consulting"
+            try? SecureFiles.writePrivate(JSONEncoder().encode(w), to: StorageLocation.workspaceFile)
+            return
+        }
         guard ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] == "synthetic",
               let path = ProcessInfo.processInfo.environment["FOLLOWUPOS_DATA_DIR"],
               path.contains("controlward-preview-"),
