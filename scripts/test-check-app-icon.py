@@ -109,6 +109,30 @@ class AppIconCheckTests(unittest.TestCase):
             matches, detail = guard.payload_matches(parsed[key], ROOT, source_rel, pixels)
             self.assertTrue(matches, f"{label}: {detail}")
 
+    def test_undeclared_source_resource_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            resources = root / "native-crm" / "Sources" / "FollowUpOSNative" / "Resources"
+            resources.mkdir(parents=True)
+            (resources / "controlward-mark.png").write_bytes(b"png")
+            (resources / "controlward-mark.svg").write_text("<svg/>")
+            (root / "native-crm" / "Package.swift").write_text(
+                'resources: [.process("Resources/controlward-mark.png")]\n'
+            )
+            errors = guard.undeclared_source_resources(root)
+        self.assertEqual(
+            errors,
+            ["Resources/controlward-mark.svg is neither declared as a resource nor excluded in native-crm/Package.swift"],
+        )
+
+    def test_mark_svg_is_excluded_because_the_logo_loads_png(self):
+        package = (ROOT / "native-crm" / "Package.swift").read_text()
+        self.assertIn('exclude: ["Resources/controlward-mark.svg"]', package)
+        self.assertIn('Resources/controlward-mark.png', package)
+        logo = (ROOT / "native-crm" / "Sources" / "FollowUpOSNative" / "RootView.swift").read_text()
+        self.assertIn('forResource: "controlward-mark", withExtension: "png"', logo)
+        self.assertEqual(guard.undeclared_source_resources(ROOT), [])
+
     def test_wrong_pixels_do_not_match_approved_source(self):
         white = _png(16, b"\xff\xff\xff\xff" * 256)
         source = "design/controlward/controlward-icon-small-16.png"

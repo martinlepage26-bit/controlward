@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import plistlib
+import re
 import struct
 import sys
 from pathlib import Path
@@ -54,6 +55,31 @@ SKIP_DIRS = {
 
 def resources_dir(root: Path) -> Path:
     return root / "native-crm" / "Resources"
+
+
+def undeclared_source_resources(root: Path) -> list[str]:
+    """Files under the native target Resources that SwiftPM would warn about.
+
+    A file is handled when Package.swift names it in `resources` or `exclude`,
+    or names a parent directory (for example Resources/ProjectControl).
+    """
+    package = root / "native-crm" / "Package.swift"
+    source_root = root / "native-crm" / "Sources" / "FollowUpOSNative"
+    source_resources = source_root / "Resources"
+    if not package.is_file() or not source_resources.is_dir():
+        return []
+    declared = re.findall(r'"(Resources/[^"]+)"', package.read_text())
+    errors = []
+    for path in sorted(source_resources.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source_root).as_posix()
+        if any(relative == item or relative.startswith(item.rstrip("/") + "/") for item in declared):
+            continue
+        errors.append(
+            f"{relative} is neither declared as a resource nor excluded in native-crm/Package.swift"
+        )
+    return errors
 
 
 def parse_icns(data: bytes) -> list[tuple[str, bytes]]:
@@ -217,6 +243,7 @@ def check(root: Path) -> list[str]:
             errors.append(f"{ICON_FILENAME} {label} ({key}) {detail}")
 
     errors.extend(_scan_legacy_references(root))
+    errors.extend(undeclared_source_resources(root))
     return errors
 
 
