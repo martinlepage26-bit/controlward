@@ -20,6 +20,14 @@ enum OverviewModelTests {
             try expect(empty.dueThisWeek.detail == "Nothing due", "empty due-this-week detail")
             try expect(empty.pipeline.map(\.stage) == [.lead, .qualified, .proposal, .negotiation, .won], "pipeline columns order")
 
+            let longName = "Mustafa Abdul Ghafour"
+            try expect(PipelineRowLayout.nameLineLimit == 1, "pipeline lead name renders on a single line (\(longName))")
+            try expect(PipelineRowLayout.namePriority > PipelineRowLayout.accessoryPriority, "lead name outranks the NEW badge so it is not squeezed")
+            try expect(PipelineRowLayout.nameMinWidth >= 72, "lead name keeps a minimum width before truncating")
+            let meta = PipelineRowLayout.metaLine(amount: nil, status: "New", createdAt: "2026-10-09T14:00:00Z")
+            try expect(meta == "New · 2026-10-09", "created date moves to the status line, out of the name row")
+            try expect(PipelineRowLayout.metaLine(amount: "$1,200", status: "Won", createdAt: "") == "$1,200 · Won", "empty date is omitted from the status line")
+
             let company = Company(name: "Érable Studio")
             let opps = [
                 Opportunity(name: "Synthetic onboarding review", amount: 2400, stage: .proposal, companyID: company.id, createdAt: "2026-10-15T10:00:00Z"),

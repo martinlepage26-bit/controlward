@@ -417,15 +417,18 @@ struct LeadsPanel: View {
                         Avatar(name: lead.name, color: [CWPalette.goldLight, CWPalette.blue, CWPalette.teal][abs(lead.name.hashValue) % 3])
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
-                                Text(lead.name).font(.system(size: 11, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
-                                if lead.status == .new { Text("NEW").font(.system(size: 7.5, weight: .bold)).padding(.horizontal, 3).background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 3)) }
+                                Text(lead.name).font(.system(size: 11, weight: .semibold))
+                                    .lineLimit(PipelineRowLayout.nameLineLimit).truncationMode(.tail)
+                                    .frame(minWidth: PipelineRowLayout.nameMinWidth, alignment: .leading)
+                                    .layoutPriority(PipelineRowLayout.namePriority)
+                                    .help(lead.name)
+                                if lead.status == .new { Text("NEW").font(.system(size: 7.5, weight: .bold)).padding(.horizontal, 3).background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 3)).fixedSize().layoutPriority(PipelineRowLayout.accessoryPriority) }
                             }
-                            if !lead.company.isEmpty { Text(lead.company).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray) }
-                            Text([lead.quoteAmount.map(OverviewSnapshot.currency), lead.status.label].compactMap { $0 }.joined(separator: " · "))
-                                .font(.system(size: 9.5)).foregroundStyle(CWPalette.bronze)
-                        }
-                        Spacer()
-                        Text(String(lead.createdAt.prefix(10))).font(.system(size: 9)).foregroundStyle(CWPalette.gray)
+                            if !lead.company.isEmpty { Text(lead.company).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray).lineLimit(1).truncationMode(.tail) }
+                            Text(PipelineRowLayout.metaLine(amount: lead.quoteAmount.map(OverviewSnapshot.currency), status: lead.status.label, createdAt: lead.createdAt))
+                                .font(.system(size: 9.5)).foregroundStyle(CWPalette.bronze).lineLimit(1).truncationMode(.tail)
+                        }.layoutPriority(PipelineRowLayout.namePriority)
+                        Spacer(minLength: 0)
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 Divider()

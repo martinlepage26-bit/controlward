@@ -164,3 +164,18 @@ struct OverviewSnapshot: Equatable, Sendable {
         name.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
     }
 }
+
+
+/// Layout policy for lead rows in the Overview Pipeline card. The name keeps one
+/// line with tail truncation and outranks the NEW badge, which never compresses it;
+/// the created date moves to the status line so it cannot squeeze the name column.
+enum PipelineRowLayout {
+    static let nameLineLimit = 1
+    static let nameMinWidth: Double = 72
+    static let namePriority: Double = 1
+    static let accessoryPriority: Double = 0
+    static func metaLine(amount: String?, status: String, createdAt: String) -> String {
+        let date = String(createdAt.prefix(10))
+        return [amount, status, date.isEmpty ? nil : date].compactMap { $0 }.joined(separator: " · ")
+    }
+}
