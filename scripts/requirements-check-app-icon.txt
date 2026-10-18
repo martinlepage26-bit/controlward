@@ -1,0 +1,3 @@
+# scripts/check-app-icon.py compares RGBA images with mode, size, and Image.tobytes().
+# That works on Pillow 11.3.0 (Martin's Mac) and 13.0.0. get_flattened_data does not.
+Pillow>=11.3.0

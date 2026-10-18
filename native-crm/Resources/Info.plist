@@ -11,9 +11,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.pharos.contextward</string>
 	<key>CFBundleIconFile</key>
-	<string>Contextward.icns</string>
+	<string>ControlWard</string>
 	<key>CFBundleIconName</key>
-	<string>Contextward</string>
+	<string>ControlWard</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
