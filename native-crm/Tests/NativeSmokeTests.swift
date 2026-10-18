@@ -15,6 +15,7 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 struct NativeSmokeTests {
     static func main() async throws {
         guard WorkspaceModuleTests.run() else { throw SmokeTestFailure.failed("Workspace module policy tests failed") }
+        guard OverviewModelTests.run() else { throw SmokeTestFailure.failed("Overview model tests failed") }
         guard ControlWardTests.run() else { throw SmokeTestFailure.failed("ControlWard workflow tests failed") }
         let securityPassed = SecurityTests.run()
         let integrationPassed = await IntegrationTests.run()

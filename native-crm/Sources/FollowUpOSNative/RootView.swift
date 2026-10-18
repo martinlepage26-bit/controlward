@@ -148,51 +148,19 @@ struct MainWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
     @StateObject private var modules = WorkspaceModules()
     @StateObject private var navigation = WorkspaceNavigation()
+    @State private var search = ""
 
     var body: some View {
-        NavigationSplitView {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 9) {
-                        ControlWardLogo(size: 30)
-                        HStack(spacing: 0) {
-                        Text("Control")
-                        Text("Ward").foregroundStyle(CRMTheme.amberDark)
-                        }
-                    }
-                    .font(.system(size: 21, weight: .heavy, design: .rounded))
-                    Text("\(store.business.name) · \(store.business.industry)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 18)
-
-                List(WorkspaceSection.allCases, selection: $navigation.section) { section in
-                    Label(section.rawValue, systemImage: section.symbol)
-                        .foregroundStyle(navigation.section == section ? CRMTheme.ink : CRMTheme.slate)
-                        .tag(section)
-                }
-                .listStyle(.sidebar)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Label("CRM stored locally", systemImage: "internaldrive")
-                        .font(.caption.weight(.semibold))
-                    Text("PHAROS · ControlWard")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(14)
-            }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
-        } detail: {
+        HStack(spacing: 0) {
+            CWSidebar().frame(width: 196)
+            VStack(spacing: 0) {
+                CWTopBar(search: $search)
             // Embedded content must size within the pane rather than enlarge the
             // native split view beyond the window and overlap its titlebar.
             GeometryReader { geometry in
                 Group {
                     switch navigation.section ?? .overview {
-                    case .overview: OverviewView()
+                    case .overview: OverviewView(search: $search)
                     case .projects: WorkspaceModuleView(controller: modules.controller(for: .projects))
                     case .email: MailWorkspaceView()
                     case .activity: WorkspaceActivityView()
@@ -211,9 +179,11 @@ struct MainWorkspaceView: View {
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .background(CRMTheme.paper)
+                .background(CWPalette.canvas)
+            }
             }
         }
+        .background(CWPalette.canvas)
         .environmentObject(modules)
         .environmentObject(navigation)
         .task {
