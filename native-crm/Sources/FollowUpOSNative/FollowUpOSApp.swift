@@ -17,7 +17,8 @@ struct FollowUpOSApp: App {
                 .environmentObject(store)
                 .frame(minWidth: 940, minHeight: 680)
         }
-        .defaultSize(width: 1120, height: 760)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 854)
         .commands {
             CommandGroup(replacing: .newItem) { }
         }

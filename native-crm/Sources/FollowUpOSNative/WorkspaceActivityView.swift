@@ -6,6 +6,7 @@ struct WorkspaceActivityView: View {
     @State private var search = ""
     @State private var kind = "all"
     @State private var message: String?
+    @State private var tab = 0
     private var events: [ActivityEvent] {
         store.activity.filter { (kind == "all" || $0.kind == kind) && (search.isEmpty || "\($0.kind) \($0.message)".localizedCaseInsensitiveContains(search)) }
     }
@@ -20,17 +21,24 @@ struct WorkspaceActivityView: View {
                 Picker("Kind", selection: $kind) { Text("All kinds").tag("all"); ForEach(Set(store.activity.map(\.kind)).sorted(), id: \.self) { Text($0).tag($0) } }.frame(width: 230)
             }
             if let message { Text(message).font(.caption) }
-            TabView {
+            // A segmented picker, not TabView: on macOS 26 TabView puts its tabs in the window
+            // toolbar, which shifts the custom sidebar and top bar down.
+            Picker("", selection: $tab) {
+                Text("Activity · \(events.count)").tag(0)
+                Text("Project receipts · \(store.workspace.controlWard.captures.count)").tag(1)
+            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+            if tab == 0 {
                 List(events) { event in
                     VStack(alignment: .leading, spacing: 5) { Text(event.message); Text("\(event.createdAt) · \(event.kind)").font(.caption).foregroundStyle(.secondary) }.padding(.vertical, 4)
-                }.tabItem { Text("Activity · \(events.count)") }
+                }
+            } else {
                 List(store.workspace.controlWard.captures.reversed()) { receipt in
                     VStack(alignment: .leading, spacing: 5) {
                         Text(store.allWorkspaceRecords.first { $0.id == receipt.recordKey }?.title ?? "Source record removed").fontWeight(.semibold)
                         Text("Confirmed item \(receipt.itemID)").font(.callout.monospaced())
                         Text("\(receipt.register) · \(receipt.capturedAt)").font(.caption).foregroundStyle(.secondary)
                     }.padding(.vertical, 4)
-                }.tabItem { Text("Project receipts · \(store.workspace.controlWard.captures.count)") }
+                }
             }
             Text("Project decisions and the shared register's event history remain in Projects → Activity. A local receipt confirms capture, not project assignment or completion.").font(.caption).foregroundStyle(.secondary)
         }.padding(24).navigationTitle("Activity")
