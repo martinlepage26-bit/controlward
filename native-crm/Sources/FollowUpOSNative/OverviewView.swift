@@ -168,15 +168,15 @@ struct OverviewView: View {
                 hero
                 if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { searchResults }
                 HStack(spacing: 14) {
-                    kpi("chart.bar.fill", "Open opportunities", s.openOpportunities, color: CWPalette.green, dot: nil, arrow: true)
+                    kpi("chart.bar.fill", "Open opportunities", s.openOpportunities, color: CWPalette.green, dot: s.openOpportunitiesChangeIsPositive ? nil : CWPalette.gray, arrow: s.openOpportunitiesChangeIsPositive)
                     kpi("dollarsign.circle", "Est. value", s.estimatedValue, color: CWPalette.goldLight, dot: CWPalette.bronze)
                     kpi("checkmark.square", "Due this week", s.dueThisWeek, color: CWPalette.blue, dot: CWPalette.bronze)
                     kpi("waveform.path.ecg", "Follow-ups", s.followUps, color: CWPalette.red, dot: s.followUpsOverdue > 0 ? CWPalette.red : CWPalette.gray)
                 }
-                HStack(alignment: .top, spacing: 14) {
-                    nextActions(s).frame(minWidth: 320, maxWidth: .infinity, minHeight: 140, alignment: .top)
-                    pipelineOverview(s).frame(minWidth: 380, maxWidth: .infinity, minHeight: 140, alignment: .top)
-                }.fixedSize(horizontal: false, vertical: true)
+                RatioRow(leading: OverviewSnapshot.middleRowSplit, spacing: 14) {
+                    nextActions(s).frame(minHeight: 120, alignment: .top)
+                    pipelineOverview(s).frame(minHeight: 120, alignment: .top)
+                }
                 HStack(alignment: .top, spacing: 14) {
                     ProjectsPanel(snapshot: projects, error: projectError) { navigation.show(.projects) }
                     LeadsPanel()
@@ -237,14 +237,14 @@ struct OverviewView: View {
 
     private func kpi(_ symbol: String, _ label: String, _ m: OverviewSnapshot.Metric, color: Color, dot: Color?, arrow: Bool = false) -> some View {
         HStack(alignment: .center, spacing: 9) {
-            Image(systemName: symbol).font(.system(size: 22, weight: .regular)).foregroundStyle(CWPalette.bronze.opacity(0.85)).frame(width: 28)
+            Image(systemName: symbol).font(.system(size: 22, weight: .regular)).foregroundStyle(CWPalette.goldIcon).frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(label.uppercased()).font(.system(size: 9, weight: .medium)).tracking(0.4).foregroundStyle(CWPalette.gray).lineLimit(1).minimumScaleFactor(0.8)
                 Text(m.value).font(.system(size: 26, weight: .semibold)).foregroundStyle(CWPalette.ink).monospacedDigit()
                 HStack(spacing: 4) {
                     if arrow { Image(systemName: "arrow.up").font(.system(size: 9, weight: .bold)).foregroundStyle(CWPalette.green) }
                     else if let dot { Circle().fill(dot).frame(width: 7, height: 7) }
-                    Text(m.detail).font(.system(size: 10.5)).foregroundStyle(arrow ? CWPalette.green : CWPalette.ink.opacity(0.75)).lineLimit(1)
+                    Text(m.detail).font(.system(size: 10.5)).foregroundStyle(arrow ? CWPalette.green : (dot == CWPalette.gray ? CWPalette.gray : CWPalette.ink.opacity(0.75))).lineLimit(1)
                 }
             }
             Spacer(minLength: 4)
@@ -314,7 +314,7 @@ struct OverviewView: View {
                                 .background(CWPalette.card, in: RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.08), radius: 2, y: 1)
                                 .padding(.horizontal, 5)
                         }
-                    }.padding(.bottom, 6).frame(maxWidth: .infinity, minHeight: 112, alignment: .top)
+                    }.padding(.bottom, 6).frame(maxWidth: .infinity, minHeight: 92, alignment: .top)
                         .background(Color.black.opacity(0.025), in: RoundedRectangle(cornerRadius: 6))
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.06)))
                 }
@@ -529,5 +529,31 @@ struct SettingsPanel: View {
 enum PreviewData {
     @MainActor static func isShowing(_ store: AppStore) -> Bool {
         ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] == "synthetic" || store.mail.contains { $0.synthetic }
+    }
+}
+
+/// Two children side by side at a fixed width ratio (the mockup's 45/55 middle row),
+/// both stretched to the taller child's height.
+struct RatioRow: Layout {
+    var leading: CGFloat
+    var spacing: CGFloat
+    private func widths(_ total: CGFloat) -> (CGFloat, CGFloat) {
+        let usable = max(0, total - spacing)
+        return (usable * leading, usable * (1 - leading))
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let total = proposal.width ?? 900
+        let (a, b) = widths(total)
+        var h: CGFloat = 0
+        for (view, w) in zip(subviews, [a, b]) { h = max(h, view.sizeThatFits(ProposedViewSize(width: w, height: nil)).height) }
+        return CGSize(width: total, height: h)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (a, b) = widths(bounds.width)
+        var x = bounds.minX
+        for (view, w) in zip(subviews, [a, b]) {
+            view.place(at: CGPoint(x: x, y: bounds.minY), proposal: ProposedViewSize(width: w, height: bounds.height))
+            x += w + spacing
+        }
     }
 }

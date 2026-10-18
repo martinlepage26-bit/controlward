@@ -36,6 +36,11 @@ struct OverviewSnapshot: Equatable, Sendable {
     var openTaskCount: Int
     var pipeline: [StageColumn]
 
+    /// Next actions takes 45% of the middle row, Pipeline overview 55%, as in the mockup.
+    static let middleRowSplit: Double = 0.45
+    /// Green up arrow only for a real increase; 0 this week is shown neutral.
+    var openOpportunitiesChangeIsPositive: Bool { openOpportunitiesAddedThisWeek > 0 }
+
     static let pipelineStages: [OpportunityStage] = [.lead, .qualified, .proposal, .negotiation, .won]
 
     static func make(opportunities: [Opportunity], tasks: [CRMTask], leads: [Lead], companies: [Company],
