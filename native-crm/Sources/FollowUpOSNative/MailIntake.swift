@@ -65,6 +65,8 @@ enum PKCE {
 struct GoogleOAuthConfig: Sendable, Equatable {
     static let scope = "https://www.googleapis.com/auth/gmail.readonly"
     static let defaultsKey = "ControlWardGoogleOAuthClientID"
+    /// ControlWard's iOS-type installed-app client (bundle com.pharos.contextward). Public, not a secret.
+    static let defaultClientID = "522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1.apps.googleusercontent.com"
     let clientID: String
 
     /// Accepts only a Google installed-app client ID (`<n>-<hash>.apps.googleusercontent.com`). Not a secret.
@@ -364,7 +366,7 @@ final class MailIntakeController: ObservableObject {
 
     init(tokens: MailTokenStore = KeychainMailTokenStore(), transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard) {
         self.tokens = tokens; self.transport = transport; self.defaults = defaults
-        clientID = defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? ""
+        clientID = defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID
         for account in MailAccount.signIns { states[account.email] = tokens.exists(account.email) ? .idle : .notConnected }
     }
 

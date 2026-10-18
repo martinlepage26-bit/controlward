@@ -81,7 +81,9 @@ Integrations → **Mail accounts** pulls message metadata into Email → Local r
 - One-time setup: create a Google Cloud OAuth client of type **iOS** with bundle ID
   `com.pharos.contextward` (its reverse-DNS scheme is the redirect), enable the Gmail API,
   set the consent screen to External/Testing with both Google addresses as test users,
-  then paste the client ID (not secret) in Mail accounts and choose **Connect**.
+  The shipped default client ID is `522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1.apps.googleusercontent.com`
+  (redirect `com.googleusercontent.apps.522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1:/oauth2redirect`);
+  a different ID can be saved in Mail accounts. Then choose **Connect**.
   In Testing mode Google expires refresh tokens after 7 days; publish the app (or use an
   Internal Workspace app for infrafabric.io) to avoid weekly reconnects.
 

@@ -13,6 +13,7 @@ enum MailIntakeTests {
             ("Mail: live intake dedupes by source id and keeps review state", dedupe),
             ("Mail: refresh token round trips; 401 asks to reconnect", tokens),
             ("Mail: Keychain service names are per account", keychainNames),
+            ("Mail: shipped client ID is default, reversed scheme, overridable", shippedClient),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -131,6 +132,16 @@ enum MailIntakeTests {
         do { _ = try await engine.accessToken(for: "nobody@example.com"); throw SmokeTestFailure.failed("no error") } catch MailIntakeError.notConnected {}
         try tokens.delete("ml@infrafabric.io"); try expect(!tokens.exists("ml@infrafabric.io"), "delete")
         do { try tokens.write("", for: "x"); throw SmokeTestFailure.failed("empty") } catch SecretStoreError.empty {}
+    }
+    static func shippedClient() throws {
+        let suite = UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!
+        let mail = MailIntakeController(tokens: InMemoryMailTokenStore(), transport: FakeGoogle([]), defaults: suite)
+        let c = try mail.config()
+        try expect(c.clientID == "522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1.apps.googleusercontent.com", "default id")
+        try expect(c.callbackScheme == "com.googleusercontent.apps.522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1", "reversed scheme")
+        try expect(c.redirectURI == "com.googleusercontent.apps.522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1:/oauth2redirect", "redirect")
+        try mail.saveClientID(clientID)
+        try expect(try mail.config().clientID == clientID, "override")
     }
     static func keychainNames() throws {
         let k = KeychainMailTokenStore()
