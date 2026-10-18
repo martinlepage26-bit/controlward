@@ -13,6 +13,9 @@ enum MailIntakeTests {
             ("Mail: live intake dedupes by source id and keeps review state", dedupe),
             ("Mail: refresh token round trips; 401 asks to reconnect", tokens),
             ("Mail: Keychain service names are per account", keychainNames),
+            ("Mail: sign-in as a different Google account is rejected, nothing stored", mismatch),
+            ("Mail: re-intake of existing ids keeps review state, links and task", mergeKeepsState),
+            ("Mail: disconnect deletes the token and resets state", disconnect),
             ("Mail: shipped client ID is default, reversed scheme, overridable", shippedClient),
         ]
         var failures = 0
@@ -31,6 +34,7 @@ enum MailIntakeTests {
         let lock = NSLock()
         var requests: [URLRequest] = []
         var tokenStatus = 200
+        var profile = "ml@infrafabric.io"
         var messages: [[String: Any]]
         init(_ messages: [[String: Any]]) { self.messages = messages }
         func send(_ request: URLRequest) async throws -> HTTPResponse {
@@ -42,6 +46,7 @@ enum MailIntakeTests {
                 let bad: [String: Any] = ["error": "invalid_grant"]
                 return try json(tokenStatus == 200 ? ok : bad, tokenStatus)
             }
+            if url.hasSuffix("/users/me/profile") { return try json(["emailAddress": profile]) }
             if url.contains("/messages?") { let refs: [[String: Any]] = messages.map { ["id": $0["id"]!] }; return try json(["messages": refs]) }
             if let m = messages.first(where: { url.contains("/messages/\($0["id"] as! String)?") }) { return try json(m) }
             return HTTPResponse(status: 404, headers: [:], body: Data())
@@ -125,13 +130,49 @@ enum MailIntakeTests {
         let engine = MailIntakeEngine(config: try GoogleOAuthConfig(clientID: clientID), tokens: tokens, transport: fake)
         try await engine.completeSignIn(email: "ml@infrafabric.io", code: "c", verifier: "v")
         try expect(try tokens.read("ml@infrafabric.io") == "synthetic-refresh", "stored")
-        let body = String(data: fake.requests.last!.httpBody!, encoding: .utf8)!
+        let body = String(data: fake.requests.first { $0.url!.host == "oauth2.googleapis.com" }!.httpBody!, encoding: .utf8)!
         try expect(body.contains("code_verifier=v") && body.contains("grant_type=authorization_code") && !body.contains("client_secret"), "exchange form")
         fake.tokenStatus = 400
         do { _ = try await engine.accessToken(for: "ml@infrafabric.io"); throw SmokeTestFailure.failed("no error") } catch MailIntakeError.reauthorize {}
         do { _ = try await engine.accessToken(for: "nobody@example.com"); throw SmokeTestFailure.failed("no error") } catch MailIntakeError.notConnected {}
         try tokens.delete("ml@infrafabric.io"); try expect(!tokens.exists("ml@infrafabric.io"), "delete")
         do { try tokens.write("", for: "x"); throw SmokeTestFailure.failed("empty") } catch SecretStoreError.empty {}
+    }
+    static func mismatch() async throws {
+        let fake = FakeGoogle([]); fake.profile = "someone.else@gmail.com"; let tokens = InMemoryMailTokenStore()
+        let engine = MailIntakeEngine(config: try GoogleOAuthConfig(clientID: clientID), tokens: tokens, transport: fake)
+        do { try await engine.completeSignIn(email: "ml@infrafabric.io", code: "c", verifier: "v"); throw SmokeTestFailure.failed("accepted") }
+        catch MailIntakeError.accountMismatch(let actual) { try expect(actual == "someone.else@gmail.com", "actual") }
+        try expect(!tokens.exists("ml@infrafabric.io") && !tokens.exists("someone.else@gmail.com"), "token stored")
+        fake.profile = "ML@Infrafabric.io"
+        try await engine.completeSignIn(email: "ml@infrafabric.io", code: "c", verifier: "v")
+        try expect(tokens.exists("ml@infrafabric.io"), "case-insensitive match stored")
+    }
+    static func mergeKeepsState() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cw-mail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppStore(storageURL: dir.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore())
+        store.createWorkspace(name: "Synthetic", industry: "Consulting")
+        let owner = "martinlepage.ai@gmail.com"
+        let first = try JSONDecoder().decode(GmailMessageMetadata.self, from: JSONSerialization.data(withJSONObject: message("x1", to: owner))).mailMetadata(owner: owner)
+        try expect(try store.mergeMail([first], activity: "Mail intake (test)") == 1, "added")
+        let id = store.mail[0].id
+        try store.reviewMail(id, reviewed: true, contactID: nil, companyID: nil)
+        let task = try store.createMailTask(id)
+        var again = first; again.id = UUID(); again.subject = "Synthetic x1 (edited)"
+        try expect(try store.mergeMail([again], activity: "Mail intake (test)") == 0, "re-added")
+        let m = store.mail[0]
+        try expect(store.mail.count == 1 && m.id == id && m.reviewed && m.taskID == task && m.subject == "Synthetic x1 (edited)", "state lost")
+    }
+    static func disconnect() throws {
+        let tokens = InMemoryMailTokenStore(); try tokens.write("synthetic-refresh", for: MailAccount.infrafabric.email)
+        let mail = MailIntakeController(tokens: tokens, transport: FakeGoogle([]), defaults: UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!)
+        try expect(mail.state(.infrafabric) == .idle, "connected")
+        mail.disconnect(.infrafabric)
+        try expect(!tokens.exists(MailAccount.infrafabric.email) && mail.state(.infrafabric) == .notConnected, "disconnect")
+        mail.disconnect(.icloudAlias)
+        try expect(mail.state(.icloudAlias) == .notConnected, "alias")
     }
     static func shippedClient() throws {
         let suite = UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!
@@ -152,6 +193,12 @@ enum MailIntakeTests {
             let t = KeychainMailTokenStore(servicePrefix: "com.pharos.contextward.test.mail")
             try t.write("synthetic", for: "probe@example.com"); defer { try? t.delete("probe@example.com") }
             try expect(try t.read("probe@example.com") == "synthetic" && t.exists("probe@example.com"), "round trip")
+            try t.write("synthetic-2", for: "probe@example.com")
+            try expect(try t.read("probe@example.com") == "synthetic-2", "update")
+            try t.delete("probe@example.com")
+            try expect(!t.exists("probe@example.com") && (try t.read("probe@example.com")) == nil, "delete")
+            try t.delete("probe@example.com") // idempotent
+            print("INFO  Mail: real Keychain round trip + delete ran")
         }
     }
 }

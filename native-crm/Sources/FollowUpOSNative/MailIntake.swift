@@ -133,7 +133,7 @@ struct GoogleTokenResponse: Decodable, Sendable {
 
 enum MailIntakeError: LocalizedError, Equatable {
     case invalidClientID, missingClientID, notConnected, signInFailed, stateMismatch, cancelled
-    case reauthorize, http(Int), unreadable(String)
+    case reauthorize, http(Int), unreadable(String), accountMismatch(String)
     var errorDescription: String? {
         switch self {
         case .invalidClientID: "Enter a Google OAuth client ID ending in .apps.googleusercontent.com."
@@ -145,6 +145,7 @@ enum MailIntakeError: LocalizedError, Equatable {
         case .reauthorize: "Google ended this sign-in. Choose Connect to sign in again."
         case .http(let status): "Gmail returned HTTP \(status)."
         case .unreadable(let what): "\(what) could not be read."
+        case .accountMismatch(let actual): "You signed in as \(actual), not this account. Nothing was saved. Choose Connect and pick the matching Google account."
         }
     }
 }
@@ -253,6 +254,13 @@ struct GmailMetadataClient: Sendable {
         return response.body
     }
 
+    func profileEmail() async throws -> String {
+        struct Profile: Decodable { var emailAddress: String }
+        guard let p = try? JSONDecoder().decode(Profile.self, from: try await get(Self.base.appendingPathComponent("profile"))),
+              !p.emailAddress.isEmpty else { throw MailIntakeError.unreadable("Gmail profile") }
+        return p.emailAddress.lowercased()
+    }
+
     func listMessageIDs(query: String, max: Int) async throws -> [String] {
         struct List: Decodable { struct Ref: Decodable { var id: String }; var messages: [Ref]? }
         var c = URLComponents(url: Self.base.appendingPathComponent("messages"), resolvingAgainstBaseURL: false)!
@@ -294,6 +302,9 @@ struct MailIntakeEngine: Sendable {
         let response = try await transport.send(config.exchangeRequest(code: code, verifier: verifier))
         guard response.status == 200, let token = try? JSONDecoder().decode(GoogleTokenResponse.self, from: response.body),
               let refresh = token.refresh_token, !refresh.isEmpty else { throw MailIntakeError.signInFailed }
+        // login_hint is only a hint: confirm the signed-in mailbox before storing anything.
+        let actual = try await GmailMetadataClient(accessToken: token.access_token, transport: transport).profileEmail()
+        guard actual.caseInsensitiveCompare(email) == .orderedSame else { throw MailIntakeError.accountMismatch(actual) }
         try tokens.write(refresh, for: email)
     }
 
