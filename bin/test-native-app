@@ -22,6 +22,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/ControlWardModels.swift" \
   "${SOURCE_ROOT}/ControlWardStore.swift" \
   "${SOURCE_ROOT}/OverviewModel.swift" \
+  "${SOURCE_ROOT}/MailIntake.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \
@@ -30,6 +31,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${PROJECT_ROOT}/native-crm/Tests/LeadInboxTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GapAnalysisTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/KairosTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/MailIntakeTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GTMTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/CSVImportTests.swift" \

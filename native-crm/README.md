@@ -62,6 +62,32 @@ Release artifacts are written below `native-crm/release/`, which is excluded
 from Git. The packaging command re-runs the complete native test/build/signature
 gate before producing the archive and SHA-256 file.
 
+## Live mail intake
+
+Integrations → **Mail accounts** pulls message metadata into Email → Local review inbox.
+
+- Sign-ins (Google OAuth in the system browser, PKCE, scope `gmail.readonly`, no client secret):
+  `martinlepage.ai@gmail.com` and `ml@infrafabric.io` (Google Workspace).
+- Aliases, no sign-in: `martinlepage26@me.com` and `ml@pharos-ai.ca` forward into
+  `martinlepage.ai@gmail.com`. Messages are labelled with the alias as `account_id`
+  when `Delivered-To`/`X-Forwarded-To`, then `To`/`Cc`, name it.
+- Fields: subject, sender, recipient, received_at, provider, account_id, Gmail link.
+  Requests use `format=metadata`; bodies and snippets are never fetched or stored.
+- Last 14 days, up to 100 messages per account per refresh; manual **Refresh** and every
+  10 minutes while the app is open. Dedupe by `source_id` (`gmail:<id>`); review state,
+  contact/company links and tasks are kept on refresh.
+- Refresh tokens only, in the login Keychain: service `com.pharos.contextward.mail.<email>`,
+  account `oauth`. Access tokens stay in memory. **Disconnect** deletes the item.
+- One-time setup: create a Google Cloud OAuth client of type **iOS** with bundle ID
+  `com.pharos.contextward` (its reverse-DNS scheme is the redirect), enable the Gmail API,
+  set the consent screen to External/Testing with both Google addresses as test users,
+  then paste the client ID (not secret) in Mail accounts and choose **Connect**.
+  In Testing mode Google expires refresh tokens after 7 days; publish the app (or use an
+  Internal Workspace app for infrafabric.io) to avoid weekly reconnects.
+
+Tests: `bin/test-native-app` (Mail intake suite). `CONTEXTWARD_KEYCHAIN_TESTS=1` adds a real
+Keychain round trip under a test service prefix.
+
 ## Data location
 
 The app stores `workspace.json` in `Application Support/Contextward/`. Because

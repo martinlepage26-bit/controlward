@@ -19,6 +19,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/WorkspaceModulePolicy.swift" \
   "${SOURCE_ROOT}/ControlWardModels.swift" \
   "${SOURCE_ROOT}/ControlWardStore.swift" \
+  "${SOURCE_ROOT}/MailIntake.swift" \
   "${SOURCE_ROOT}/WorkspaceWebController.swift" \
   "${SOURCE_ROOT}/ProjectModuleBridge.swift" \
   "${PROJECT_ROOT}/native-crm/WebKitTests/ModuleRenderingTests.swift" \

@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct FollowUpOSApp: App {
     @StateObject private var store = makeStore()
+    @StateObject private var mail = MailIntakeController()
 
     @MainActor private static func makeStore() -> AppStore {
 #if DEBUG && CONTEXTWARD_ACCEPTANCE
@@ -15,6 +16,8 @@ struct FollowUpOSApp: App {
         WindowGroup("ControlWard") {
             RootView()
                 .environmentObject(store)
+                .environmentObject(mail)
+                .task { mail.startPeriodic(store: store) }
                 .frame(minWidth: 940, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
