@@ -22,6 +22,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/ControlWardModels.swift" \
   "${SOURCE_ROOT}/ControlWardStore.swift" \
   "${SOURCE_ROOT}/OverviewModel.swift" \
+  "${SOURCE_ROOT}/GoogleWebAuthorizer.swift" \
   "${SOURCE_ROOT}/MailIntake.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \

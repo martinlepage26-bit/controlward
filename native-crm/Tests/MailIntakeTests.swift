@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 
 @MainActor
@@ -17,6 +18,7 @@ enum MailIntakeTests {
             ("Mail: re-intake of existing ids keeps review state, links and task", mergeKeepsState),
             ("Mail: disconnect deletes the token and resets state", disconnect),
             ("Mail: shipped client ID is default, reversed scheme, overridable", shippedClient),
+            ("Mail: web sign-in completion runs off the main thread without trapping", offMainCompletion),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -59,6 +61,28 @@ enum MailIntakeTests {
                                  ["name": "To", "value": to], ["name": "Delivered-To", "value": delivered]]]]
     }
 
+    static func offMainCompletion() async throws {
+        // AuthenticationServices calls the completion on an XPC queue; it must not assume main-actor isolation.
+        let gate = GoogleWebAuthorizer.ResumeOnce()
+        let url = URL(string: "com.example.test:/oauth2redirect?code=x")!
+        let got: URL = try await withCheckedThrowingContinuation { c in
+            gate.set(c)
+            let done = GoogleWebAuthorizer.makeCompletion(gate) {}
+            DispatchQueue.global().async { done(url, nil); done(nil, nil) } // second call is ignored
+        }
+        try expect(got == url, "callback returned")
+        let failed = GoogleWebAuthorizer.ResumeOnce()
+        do {
+            _ = try await withCheckedThrowingContinuation { (c: CheckedContinuation<URL, Error>) in
+                failed.set(c)
+                let done = GoogleWebAuthorizer.makeCompletion(failed) {}
+                DispatchQueue.global().async { done(nil, NSError(domain: "x", code: 1)) }
+            }
+            throw SmokeTestFailure.failed("expected error")
+        } catch let e as MailIntakeError { try expect(e == .signInFailed, "error path") }
+        let cancel = GoogleWebAuthorizer.result(callback: nil, error: ASWebAuthenticationSessionError(.canceledLogin))
+        if case .failure(let e as MailIntakeError) = cancel { try expect(e == .cancelled, "cancel") } else { throw SmokeTestFailure.failed("cancel") }
+    }
     static func pkceVector() throws {
         try expect(PKCE.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "challenge")
         let v = PKCE.verifier(); try expect(v.count >= 43 && !v.contains("=") && v != PKCE.verifier(), "verifier")
