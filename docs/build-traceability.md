@@ -8,11 +8,11 @@ Every ControlWard.app built by `bin/build-native-app` can be traced to a commit.
 | --- | --- |
 | `CFBundleVersion` | base build + number of commits since the base commit |
 | `ControlWardGitCommit` | full SHA of `HEAD` |
-| `ControlWardGitDirty` | `true` if tracked files had uncommitted changes |
+| `ControlWardGitDirty` | `true` if `git status --porcelain` shows any staged, unstaged or untracked change (ignored files excluded) |
 
 The base is in `native-crm/Resources/build-number-base` (`<commit> <build>`), starting at `001c7cd 103`, the build installed from PR #14. Each merge to `main` raises the build number with no manual edit. Builds from other branches get their own numbers, so the commit SHA is the identity; the build number is for ordering.
 
-The stamp refuses to run outside a git checkout or when the base commit is missing (shallow clone). Fetch full history in CI (`fetch-depth: 0`).
+The stamp refuses to run outside a git checkout or when the base commit is missing; a shallow clone gets an explicit "Shallow clone" error. `build-macos-app.yml` checks out with `fetch-depth: 0` for this reason.
 
 `bin/package-native-app` names archives `ControlWard-<version>-<build>-<short sha>-macOS.zip`.
 

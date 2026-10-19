@@ -17,6 +17,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # bin/stamp-build-info needs history back to the build-number base commit.
+          fetch-depth: 0
       - name: Record Swift toolchain
         run: swift --version
       - name: Test, package and verify ControlWard

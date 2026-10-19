@@ -40,7 +40,6 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/CSVImportTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
-"${SCRIPT_DIR}/test-build-stamp"
 
 "${TEST_BINARY}"
 "${SCRIPT_DIR}/test-build-stamp"
