@@ -4,7 +4,25 @@ import AuthenticationServices
 /// System-browser Google sign-in. ControlWard never sees the password; only the code returns.
 @MainActor
 final class GoogleWebAuthorizer: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private var session: ASWebAuthenticationSession?
+    /// Builds the web sign-in session. Production uses ASWebAuthenticationSession; tests inject a fake
+    /// that fires the completion from a background queue, exactly like AuthenticationServices does.
+    /// The completion is @Sendable on purpose: a closure written inline in authorize() that touches
+    /// main-actor state no longer compiles, which is the regression that trapped at runtime.
+    typealias SessionFactory = @MainActor (URL, String, @escaping @Sendable (URL?, Error?) -> Void) -> any WebAuthSession
+
+    private var session: (any WebAuthSession)?
+    private let makeSession: SessionFactory
+
+    init(makeSession: @escaping SessionFactory = GoogleWebAuthorizer.systemSession) {
+        self.makeSession = makeSession
+        super.init()
+    }
+
+    static let systemSession: SessionFactory = { url, scheme, completion in
+        ASWebAuthenticationSession(url: url, callbackURLScheme: scheme, completionHandler: completion)
+    }
+
+    var hasActiveSession: Bool { session != nil }
 
     func authorize(_ url: URL, callbackScheme: String) async throws -> URL {
         let gate = GoogleWebAuthorizer.ResumeOnce()
@@ -12,9 +30,9 @@ final class GoogleWebAuthorizer: NSObject, ASWebAuthenticationPresentationContex
             gate.set(continuation)
             // The completion handler is built outside main-actor isolation: AuthenticationServices
             // calls it on an XPC queue, and a main-actor closure there traps at runtime (Swift 6).
-            let session = ASWebAuthenticationSession(
-                url: url, callbackURLScheme: callbackScheme,
-                completionHandler: GoogleWebAuthorizer.makeCompletion(gate) { [weak self] in
+            let session = makeSession(
+                url, callbackScheme,
+                GoogleWebAuthorizer.makeCompletion(gate) { [weak self] in
                     Task { @MainActor in self?.session = nil }
                 })
             session.presentationContextProvider = self
@@ -57,3 +75,13 @@ final class GoogleWebAuthorizer: NSObject, ASWebAuthenticationPresentationContex
         return DispatchQueue.main.sync { MainActor.assumeIsolated { pick() } }
     }
 }
+
+/// The parts of ASWebAuthenticationSession that GoogleWebAuthorizer uses.
+@MainActor
+protocol WebAuthSession: AnyObject {
+    var presentationContextProvider: (any ASWebAuthenticationPresentationContextProviding)? { get set }
+    var prefersEphemeralWebBrowserSession: Bool { get set }
+    func start() -> Bool
+}
+
+extension ASWebAuthenticationSession: WebAuthSession {}

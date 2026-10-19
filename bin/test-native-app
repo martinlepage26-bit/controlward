@@ -8,7 +8,7 @@ BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/native-smoke-tests"
 TEST_BINARY="${BUILD_ROOT}/FollowUpOSNativeSmokeTests"
 
 mkdir -p "${BUILD_ROOT}"
-swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
+swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/Models.swift" \
   "${SOURCE_ROOT}/AppStore.swift" \
   "${SOURCE_ROOT}/Security.swift" \

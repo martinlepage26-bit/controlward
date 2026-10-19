@@ -19,6 +19,7 @@ enum MailIntakeTests {
             ("Mail: disconnect deletes the token and resets state", disconnect),
             ("Mail: shipped client ID is default, reversed scheme, overridable", shippedClient),
             ("Mail: web sign-in completion runs off the main thread without trapping", offMainCompletion),
+            ("Mail: authorize() completion fired from a background queue resumes once and clears the session", authorizeOffMain),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -59,6 +60,57 @@ enum MailIntakeTests {
         ["id": id, "internalDate": "1792309386000", "snippet": "BODY-SHOULD-NOT-APPEAR",
          "payload": ["headers": [["name": "Subject", "value": "Synthetic \(id)"], ["name": "From", "value": "Sender <s@example.com>"],
                                  ["name": "To", "value": to], ["name": "Delivered-To", "value": delivered]]]]
+    }
+
+    /// Stands in for ASWebAuthenticationSession: start() hands the completion that authorize() built to a
+    /// background queue, the way AuthenticationServices does over XPC. The suite is compiled in Swift 6 mode, so
+    /// an inline main-actor closure in authorize() fails to build, and a wrong completion path fails here.
+    final class BackgroundFiringSession: WebAuthSession {
+        var presentationContextProvider: (any ASWebAuthenticationPresentationContextProviding)?
+        var prefersEphemeralWebBrowserSession = true
+        let completion: @Sendable (URL?, Error?) -> Void
+        let results: [(URL?, Error?)]
+        let started: Bool
+        nonisolated(unsafe) static var firedOffMain = 0
+        init(_ completion: @escaping @Sendable (URL?, Error?) -> Void, results: [(URL?, Error?)], started: Bool = true) {
+            self.completion = completion; self.results = results; self.started = started
+        }
+        func start() -> Bool {
+            guard started else { return false }
+            let handler = completion
+            nonisolated(unsafe) let results = results
+            DispatchQueue.global().async {
+                for r in results {
+                    if !Thread.isMainThread { BackgroundFiringSession.firedOffMain += 1 }
+                    handler(r.0, r.1)
+                }
+            }
+            return true
+        }
+    }
+
+    static func authorizeOffMain() async throws {
+        let url = URL(string: "https://accounts.google.com/o/oauth2/v2/auth?x=1")!
+        let callback = URL(string: "com.example.test:/oauth2redirect?code=x")!
+        BackgroundFiringSession.firedOffMain = 0
+        var made: BackgroundFiringSession?
+        let ok = GoogleWebAuthorizer { _, _, completion in
+            let s = BackgroundFiringSession(completion, results: [(callback, nil), (nil, NSError(domain: "dup", code: 1))]); made = s; return s
+        }
+        let got = try await ok.authorize(url, callbackScheme: "com.example.test")
+        try expect(got == callback, "callback returned through authorize()")
+        try expect(made?.presentationContextProvider === ok && made?.prefersEphemeralWebBrowserSession == false, "session configured")
+        for _ in 0..<200 where ok.hasActiveSession || BackgroundFiringSession.firedOffMain < 2 { try await Task.sleep(nanoseconds: 5_000_000) }
+        try expect(BackgroundFiringSession.firedOffMain == 2, "completion fired off main (\(BackgroundFiringSession.firedOffMain))")
+        try expect(!ok.hasActiveSession, "session released after completion")
+
+        let cancelled = GoogleWebAuthorizer { _, _, c in BackgroundFiringSession(c, results: [(nil, ASWebAuthenticationSessionError(.canceledLogin))]) }
+        do { _ = try await cancelled.authorize(url, callbackScheme: "com.example.test"); throw SmokeTestFailure.failed("cancel accepted") }
+        catch let e as MailIntakeError { try expect(e == .cancelled, "cancel maps to cancelled") }
+
+        let refused = GoogleWebAuthorizer { _, _, c in BackgroundFiringSession(c, results: [], started: false) }
+        do { _ = try await refused.authorize(url, callbackScheme: "com.example.test"); throw SmokeTestFailure.failed("start failure accepted") }
+        catch let e as MailIntakeError { try expect(e == .signInFailed && !refused.hasActiveSession, "start() false shows error") }
     }
 
     static func offMainCompletion() async throws {
