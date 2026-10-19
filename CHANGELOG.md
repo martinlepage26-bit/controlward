@@ -4,6 +4,10 @@ All notable changes to this application are documented in this file.
 
 ## Unreleased
 
+- Every app build is traceable: the bundle's `CFBundleVersion` is stamped
+  automatically (base 103 + commits since 001c7cd), and `ControlWardGitCommit` /
+  `ControlWardGitDirty` record the source commit. About ControlWard shows
+  version, build and short SHA. See docs/build-traceability.md.
 - Self-hosted CI now waits for a GitHub-hosted secrets preflight. The guard
   rejects whole-context, wildcard and mixed-case secret access, allowing only
   explicit `secrets.GITHUB_TOKEN` references.

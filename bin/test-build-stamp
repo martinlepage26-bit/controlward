@@ -1,0 +1,26 @@
+#!/bin/zsh
+# Checks bin/stamp-build-info against a throwaway git repo. No network, no real data.
+set -euo pipefail
+SCRIPT_DIR="${0:A:h}"
+STAMP="${SCRIPT_DIR}/stamp-build-info"
+PB=/usr/libexec/PlistBuddy
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/cw-stamp.XXXXXX")"; trap 'rm -rf "${tmp}"' EXIT
+fail=0; pass=0
+check() { if [[ "$2" == "$3" ]]; then pass=$((pass+1)); print "PASS  Stamp: $1"; else fail=$((fail+1)); print "FAIL  Stamp: $1 (got '$2', want '$3')"; fi }
+
+cd "${tmp}" && git init -q && git config user.email t@example.com && git config user.name t
+mkdir -p native-crm/Resources && print "one" > f && git add f && git commit -qm one
+base="$(git rev-parse HEAD)"; print "${base} 103" > native-crm/Resources/build-number-base
+git add . && git commit -qm two && print "x" >> f && git commit -qam three
+cp "${SCRIPT_DIR:h}/native-crm/Resources/Info.plist" app.plist
+"${STAMP}" app.plist "${tmp}" >/dev/null
+check "build = base + commits since base" "$("${PB}" -c 'Print :CFBundleVersion' app.plist)" "105"
+check "commit is full HEAD SHA" "$("${PB}" -c 'Print :ControlWardGitCommit' app.plist)" "$(git rev-parse HEAD)"
+check "clean tree" "$("${PB}" -c 'Print :ControlWardGitDirty' app.plist)" "false"
+print "y" >> f; "${STAMP}" app.plist "${tmp}" >/dev/null
+check "dirty tree flagged, restamp idempotent" "$("${PB}" -c 'Print :ControlWardGitDirty' app.plist)" "true"
+check "source plist untouched" "$("${PB}" -c 'Print :CFBundleVersion' "${SCRIPT_DIR:h}/native-crm/Resources/Info.plist")" "103"
+print "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef 103" > native-crm/Resources/build-number-base
+if "${STAMP}" app.plist "${tmp}" >/dev/null 2>&1; then check "unknown base commit refused" "accepted" "refused"; else check "unknown base commit refused" "refused" "refused"; fi
+print "Build stamp tests: ${pass}/$((pass+fail)) passed"
+(( fail == 0 ))

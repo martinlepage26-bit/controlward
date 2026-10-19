@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -24,6 +25,12 @@ struct FollowUpOSApp: App {
         .defaultSize(width: 1280, height: 854)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(replacing: .appInfo) {
+                Button("About ControlWard") {
+                    // The standard panel shows the version line; the commit makes every build traceable.
+                    NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: BuildInfo.current.aboutVersion, .version: ""])
+                }
+            }
         }
     }
 }

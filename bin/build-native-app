@@ -36,6 +36,8 @@ fi
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp "${BIN_DIR}/FollowUpOSNative" "${MACOS_DIR}/FollowUpOSNative"
 cp "${PACKAGE_ROOT}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
+# Build traceability: build number and git commit go into the bundle copy before signing.
+"${PROJECT_ROOT}/bin/stamp-build-info" "${CONTENTS_DIR}/Info.plist" "${PROJECT_ROOT}"
 ICON_FILE="${PACKAGE_ROOT}/Resources/ControlWard.icns"
 if [[ ! -f "${ICON_FILE}" ]]; then
   print -u2 "Missing app icon: ${ICON_FILE}"
@@ -68,4 +70,5 @@ fi
 codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
 
 print "Built native app: ${APP_BUNDLE}"
+print "Build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${CONTENTS_DIR}/Info.plist"), commit $(/usr/libexec/PlistBuddy -c 'Print :ControlWardGitCommit' "${CONTENTS_DIR}/Info.plist")"
 print "Persistent data (sandboxed): ${HOME}/Library/Containers/com.pharos.contextward/Data/Library/Application Support/Contextward/workspace.json"

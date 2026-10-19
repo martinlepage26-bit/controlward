@@ -5,11 +5,14 @@ SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
 APP_BUNDLE="${PROJECT_ROOT}/native-crm/dist/ControlWard.app"
 RELEASE_DIR="${PROJECT_ROOT}/native-crm/release"
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${PROJECT_ROOT}/native-crm/Resources/Info.plist")"
-BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${PROJECT_ROOT}/native-crm/Resources/Info.plist")"
-ARCHIVE="${RELEASE_DIR}/ControlWard-${VERSION}-${BUILD}-macOS.zip"
-
 "${PROJECT_ROOT}/bin/build-native-app"
+
+# Name the archive from the stamped bundle, not the source plist.
+BUILT_PLIST="${APP_BUNDLE}/Contents/Info.plist"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${BUILT_PLIST}")"
+BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${BUILT_PLIST}")"
+COMMIT="$(/usr/libexec/PlistBuddy -c 'Print :ControlWardGitCommit' "${BUILT_PLIST}")"
+ARCHIVE="${RELEASE_DIR}/ControlWard-${VERSION}-${BUILD}-${COMMIT[1,7]}-macOS.zip"
 codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
 
 mkdir -p "${RELEASE_DIR}"
