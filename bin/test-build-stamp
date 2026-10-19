@@ -1,0 +1,52 @@
+#!/bin/zsh
+# Checks bin/stamp-build-info against throwaway git repos. No network, no real data.
+set -euo pipefail
+SCRIPT_DIR="${0:A:h}"
+STAMP="${SCRIPT_DIR}/stamp-build-info"
+SOURCE_PLIST="${SCRIPT_DIR:h}/native-crm/Resources/Info.plist"
+PB=/usr/libexec/PlistBuddy
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/cw-stamp.XXXXXX")"; trap 'rm -rf "${tmp}"' EXIT
+fail=0; pass=0
+check() { if [[ "$2" == "$3" ]]; then pass=$((pass+1)); print "PASS  Stamp: $1"; else fail=$((fail+1)); print "FAIL  Stamp: $1 (got '$2', want '$3')"; fi }
+get() { "${PB}" -c "Print :$1" "${tmp}/app.plist"; }
+source_hash="$(shasum -a 256 "${SOURCE_PLIST}" | cut -d ' ' -f 1)"
+
+repo="${tmp}/repo"; mkdir -p "${repo}" && cd "${repo}"
+git init -q && git config user.email t@example.com && git config user.name t
+mkdir -p native-crm/Resources native-crm/Sources && print "one" > f && git add f && git commit -qm one
+base="$(git rev-parse HEAD)"; print "${base} 103" > native-crm/Resources/build-number-base
+git add . && git commit -qm two && print "x" >> f && git commit -qam three
+cp "${SOURCE_PLIST}" "${tmp}/app.plist"   # outside the repo, so it is not an untracked file
+
+"${STAMP}" "${tmp}/app.plist" "${repo}" >/dev/null
+check "build = base + commits since base" "$(get CFBundleVersion)" "105"
+check "commit is full HEAD SHA" "$(get ControlWardGitCommit)" "$(git rev-parse HEAD)"
+check "clean tree" "$(get ControlWardGitDirty)" "false"
+
+print "y" >> f; "${STAMP}" "${tmp}/app.plist" "${repo}" >/dev/null
+check "tracked edit flagged dirty, restamp idempotent" "$(get ControlWardGitDirty)" "true"
+git checkout -q -- f
+
+print "struct Extra {}" > native-crm/Sources/Extra.swift
+"${STAMP}" "${tmp}/app.plist" "${repo}" >/dev/null
+check "untracked .swift file flagged dirty" "$(get ControlWardGitDirty)" "true"
+rm native-crm/Sources/Extra.swift
+"${STAMP}" "${tmp}/app.plist" "${repo}" >/dev/null
+check "clean again after removing it" "$(get ControlWardGitDirty)" "false"
+
+# Real shallow clone (depth 1): the base commit is missing and the stamp must fail closed.
+git clone -q --depth 1 "file://${repo}" "${tmp}/shallow"
+cp "${SOURCE_PLIST}" "${tmp}/shallow.plist"
+if err="$("${STAMP}" "${tmp}/shallow.plist" "${tmp}/shallow" 2>&1 >/dev/null)"; then
+  check "shallow clone refused" "accepted" "refused"
+else
+  check "shallow clone refused" "refused" "refused"
+  check "shallow clone message says to fetch full history" "$([[ "${err}" == *"Shallow clone"*"fetch-depth: 0"* ]] && print yes || print "no: ${err}")" "yes"
+fi
+check "shallow refusal leaves plist unstamped" "$("${PB}" -c 'Print :ControlWardGitCommit' "${tmp}/shallow.plist" 2>/dev/null || print absent)" "absent"
+
+print "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef 103" > native-crm/Resources/build-number-base
+if "${STAMP}" "${tmp}/app.plist" "${repo}" >/dev/null 2>&1; then check "unknown base commit refused" "accepted" "refused"; else check "unknown base commit refused" "refused" "refused"; fi
+check "source Info.plist unchanged" "$(shasum -a 256 "${SOURCE_PLIST}" | cut -d ' ' -f 1)" "${source_hash}"
+print "Build stamp tests: ${pass}/$((pass+fail)) passed"
+(( fail == 0 ))

@@ -1,0 +1,43 @@
+#!/bin/zsh
+# Stamp build identity into a built app's Info.plist (never the source plist).
+#   CFBundleVersion      = base build + commits since the base commit (native-crm/Resources/build-number-base)
+#   ControlWardGitCommit = full SHA of HEAD
+#   ControlWardGitDirty  = true when tracked files have uncommitted changes
+# Usage: bin/stamp-build-info <path/to/Info.plist> [repo-root]
+set -euo pipefail
+
+PLIST="${1:?usage: stamp-build-info <Info.plist> [repo-root]}"
+SCRIPT_DIR="${0:A:h}"
+REPO="${2:-${SCRIPT_DIR:h}}"
+BASE_FILE="${REPO}/native-crm/Resources/build-number-base"
+
+[[ -f "${PLIST}" ]] || { print -u2 "No Info.plist at ${PLIST}"; exit 1; }
+git -C "${REPO}" rev-parse --git-dir >/dev/null 2>&1 || { print -u2 "Not a git checkout: ${REPO}. Builds must be traceable to a commit."; exit 1; }
+
+read -r BASE_COMMIT BASE_BUILD < "${BASE_FILE}"
+[[ "${BASE_BUILD}" == <-> ]] || { print -u2 "Bad base build number in ${BASE_FILE}"; exit 1; }
+[[ "${BASE_COMMIT}" =~ '^[0-9a-f]{40}$' ]] || { print -u2 "Bad base commit in ${BASE_FILE}"; exit 1; }
+if [[ "$(git -C "${REPO}" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]] \
+   && ! git -C "${REPO}" cat-file -e "${BASE_COMMIT}^{commit}" 2>/dev/null; then
+  print -u2 "Shallow clone: base commit ${BASE_COMMIT} is not in local history. Fetch full history (git fetch --unshallow, or actions/checkout fetch-depth: 0)."
+  exit 1
+fi
+if ! git -C "${REPO}" merge-base --is-ancestor "${BASE_COMMIT}" HEAD 2>/dev/null; then
+  print -u2 "Base commit ${BASE_COMMIT} is not an ancestor of HEAD (shallow clone or unrelated branch); fetch full history."
+  exit 1
+fi
+
+COMMIT="$(git -C "${REPO}" rev-parse HEAD)"
+SINCE="$(git -C "${REPO}" rev-list --count "${BASE_COMMIT}..HEAD")"
+BUILD=$(( BASE_BUILD + SINCE ))
+# Any staged, unstaged or untracked change counts (ignored build output does not).
+# An untracked .swift file under Sources/ is compiled by SwiftPM, so it must mark the build dirty.
+if STATUS="$(git -C "${REPO}" status --porcelain --untracked-files=all 2>/dev/null)" && [[ -z "${STATUS}" ]]; then DIRTY=false; else DIRTY=true; fi
+
+PB=/usr/libexec/PlistBuddy
+"${PB}" -c "Set :CFBundleVersion ${BUILD}" "${PLIST}"
+for key in ControlWardGitCommit ControlWardGitDirty; do "${PB}" -c "Delete :${key}" "${PLIST}" 2>/dev/null || true; done
+"${PB}" -c "Add :ControlWardGitCommit string ${COMMIT}" "${PLIST}"
+"${PB}" -c "Add :ControlWardGitDirty bool ${DIRTY}" "${PLIST}"
+
+print "Stamped build ${BUILD} commit ${COMMIT} dirty=${DIRTY}"

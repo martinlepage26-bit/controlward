@@ -24,6 +24,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/OverviewModel.swift" \
   "${SOURCE_ROOT}/GoogleWebAuthorizer.swift" \
   "${SOURCE_ROOT}/MailIntake.swift" \
+  "${SOURCE_ROOT}/BuildInfo.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \
@@ -33,6 +34,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/GapAnalysisTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/KairosTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/MailIntakeTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/BuildInfoTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GTMTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/CSVImportTests.swift" \
@@ -40,3 +42,4 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   -o "${TEST_BINARY}"
 
 "${TEST_BINARY}"
+"${SCRIPT_DIR}/test-build-stamp"
