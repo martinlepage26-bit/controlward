@@ -1,30 +1,6 @@
 import AuthenticationServices
 import SwiftUI
 
-/// System-browser Google sign-in. ControlWard never sees the password; only the code returns.
-@MainActor
-final class GoogleWebAuthorizer: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private var session: ASWebAuthenticationSession?
-
-    func authorize(_ url: URL, callbackScheme: String) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { callback, error in
-                if let callback { continuation.resume(returning: callback) }
-                else if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { continuation.resume(throwing: MailIntakeError.cancelled) }
-                else { continuation.resume(throwing: MailIntakeError.signInFailed) }
-            }
-            session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = false
-            self.session = session
-            if !session.start() { continuation.resume(throwing: MailIntakeError.signInFailed) }
-        }
-    }
-
-    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        MainActor.assumeIsolated { NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor() }
-    }
-}
-
 struct MailAccountsSection: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var mail: MailIntakeController
