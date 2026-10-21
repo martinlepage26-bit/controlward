@@ -66,13 +66,20 @@ gate before producing the archive and SHA-256 file.
 
 Integrations → **Mail accounts** pulls message metadata into Email → Local review inbox.
 
-- Sign-ins (Google OAuth in the system browser, PKCE, scope `gmail.readonly`, no client secret):
+- Sign-ins (Google OAuth in the system browser, PKCE, scopes `gmail.modify` and `gmail.compose`, no client secret, no permanent-delete scope):
   `martinlepage.ai@gmail.com` and `ml@infrafabric.io` (Google Workspace).
 - Aliases, no sign-in: `martinlepage26@me.com` and `ml@pharos-ai.ca` forward into
   `martinlepage.ai@gmail.com`. Messages are labelled with the alias as `account_id`
   when `Delivered-To`/`X-Forwarded-To`, then `To`/`Cc`, name it.
-- Fields: subject, sender, recipient, received_at, provider, account_id, Gmail link.
-  Requests use `format=metadata`; bodies and snippets are never fetched or stored.
+- Refresh fields: subject, sender, recipient, received_at, provider, account_id, Gmail link.
+  Refresh requests use `format=metadata` and do not store bodies or snippets.
+  Opening a message in Email fetches the full body through the mailbox connector.
+  The body is shown in the app and is not written into the workspace. Remote images
+  in HTML are stripped before display. Reply, reply all, forward, draft edit, Trash,
+  archive, and mark read/unread call the Gmail connector. Sending and Trash ask for
+  confirmation first. Trash uses `messages.trash` and does not erase the message.
+  A connector that cannot perform an action disables that button and says why.
+  An existing read-only sign-in must use Connect again before mailbox changes work.
 - Last 14 days, up to 100 messages per account per refresh; manual **Refresh** and every
   10 minutes while the app is open. Dedupe by `source_id` (`gmail:<id>`); review state,
   contact/company links and tasks are kept on refresh.

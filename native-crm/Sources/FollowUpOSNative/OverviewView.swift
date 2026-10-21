@@ -447,33 +447,66 @@ struct EmailPanel: View {
         let sorted = store.mail.sorted { $0.receivedAt > $1.receivedAt }
         let byTab = tab == 2 ? sorted.filter { !$0.reviewed } : sorted
         let rows = search.isEmpty ? byTab : byTab.filter { $0.subject.localizedCaseInsensitiveContains(search) || $0.sender.localizedCaseInsensitiveContains(search) }
+        let inputs = rows.map {
+            MailOverviewInput(sourceID: $0.sourceID, provider: $0.provider, accountID: $0.accountID, sender: $0.sender, subject: $0.subject, receivedAt: $0.receivedAt)
+        }
+        let sections = MailOverviewLayout.sections(from: inputs)
+        let fit = MailOverviewLayout.project(inputs)
         VStack(alignment: .leading, spacing: 9) {
             PanelHeader(title: "Email Aggregator", action: "Import metadata") { navigation.show(.email) }
             HStack { SegmentTabs(tabs: ["Inbox", "All accounts", "Unread", "Starred"], selection: $tab); Spacer() }
-            MiniSearch(prompt: "Search emails...", text: $search)
+            HStack(spacing: 8) {
+                MiniSearch(prompt: "Search emails...", text: $search)
+                if tab != 3 {
+                    Text("\(fit.shownCount)")
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(CWPalette.ink)
+                        .accessibilityLabel("\(fit.shownCount) messages")
+                }
+            }
             if store.mail.isEmpty {
                 Text("No mail accounts connected. Import metadata to see messages here.").font(.system(size: 10.5)).foregroundStyle(CWPalette.gray).padding(.vertical, 12)
-            } else if rows.isEmpty || tab == 3 {
-                Text(tab == 3 ? "Starring is not available for imported metadata." : "No messages match.").font(.system(size: 10.5)).foregroundStyle(CWPalette.gray).padding(.vertical, 12)
+            } else if tab == 3 {
+                Text("Starring is not available for imported metadata.").font(.system(size: 10.5)).foregroundStyle(CWPalette.gray).padding(.vertical, 12)
+            } else if sections.isEmpty {
+                Text("No messages match.").font(.system(size: 10.5)).foregroundStyle(CWPalette.gray).padding(.vertical, 12)
             }
-            if tab != 3 {
-                ForEach(rows.prefix(4)) { m in
-                    Button { navigation.show(.email) } label: {
-                        HStack(alignment: .top, spacing: 8) {
-                            Circle().fill(m.reviewed ? .clear : CWPalette.blue).frame(width: 5, height: 5).padding(.top, 12)
-                            Avatar(name: m.sender, color: CWPalette.teal)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(m.sender).font(.system(size: 10.5, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
-                                Text(m.subject).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray).lineLimit(1)
-                            }
-                            Spacer()
-                            Text(String(m.receivedAt.prefix(10))).font(.system(size: 9)).foregroundStyle(CWPalette.gray)
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+            if tab != 3 && !sections.isEmpty {
+                // The overview ScrollView is the scroll port, so every line stays reachable at 1280×800.
+                ForEach(sections) { section in
+                    HStack(spacing: 6) {
+                        Text(section.platform).font(.system(size: 10, weight: .semibold)).foregroundStyle(CWPalette.ink)
+                        Text("\(section.lines.count)").font(.system(size: 9, weight: .semibold)).foregroundStyle(CWPalette.gray)
+                            .accessibilityLabel("\(section.lines.count) \(section.platform)")
+                    }
+                    ForEach(section.lines) { line in
+                        EmailOverviewLine(line: line, reviewed: store.mail.first { $0.sourceID == line.sourceID }?.reviewed ?? false) {
+                            navigation.show(.email)
+                        }
+                    }
                 }
             }
             Spacer(minLength: 0)
         }.frame(maxWidth: .infinity, minHeight: 200, alignment: .top).cwCard(12)
+    }
+}
+
+struct EmailOverviewLine: View {
+    var line: MailPlatformLine
+    var reviewed: Bool
+    var open: () -> Void
+    var body: some View {
+        Button(action: open) {
+            HStack(alignment: .top, spacing: 8) {
+                Circle().fill(reviewed ? .clear : CWPalette.blue).frame(width: 5, height: 5).padding(.top, 12)
+                Avatar(name: line.sender, color: CWPalette.teal)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(line.sender).font(.system(size: 10.5, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                    Text(line.subject).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Text(String(line.receivedAt.prefix(10))).font(.system(size: 9)).foregroundStyle(CWPalette.gray)
+            }.contentShape(Rectangle())
+        }.buttonStyle(.plain)
     }
 }
 

@@ -96,6 +96,17 @@ enum ControlWardTests {
             try expect(unwritable.mail.isEmpty, "failed disk write changed in-memory mail")
             let reloaded = AppStore(storageURL: store.storageURL)
             try expect(reloaded.mail == store.mail && reloaded.workspace.controlWard.projectLinks == store.workspace.controlWard.projectLinks, "new workflows did not survive reload")
+            let scratchRoot = root.appendingPathComponent("scratch-mail")
+            try FileManager.default.createDirectory(at: scratchRoot, withIntermediateDirectories: true)
+            let scratch = AppStore(storageURL: scratchRoot.appendingPathComponent("workspace.json"))
+            scratch.createWorkspace(name: "Synthetic Trash", industry: "Consulting")
+            try expect(try scratch.importMailMetadata(metadata(source: "gone")) == 1, "scratch import")
+            let gone = scratch.mail[0].id
+            try scratch.forgetMailMetadata(id: gone)
+            try expect(scratch.mail.isEmpty, "trashed metadata row was kept")
+            let scratchFile = String(decoding: try Data(contentsOf: scratch.storageURL), as: UTF8.self)
+            try expect(scratchFile.contains("mail_trash") && !scratchFile.contains("BODY_MUST_NOT_PERSIST"), "trash note")
+            try rejects("forgetting a missing message") { try scratch.forgetMailMetadata(id: gone) }
             print("ControlWard workflow tests: \(count) assertions passed")
             return true
         } catch { print("FAIL ControlWard workflow tests: \(error)"); return false }
