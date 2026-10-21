@@ -277,14 +277,46 @@ private struct MailReviewDetail: View {
                 })
             }
             .confirmationDialog("Move this message to Trash?", isPresented: $confirmTrash, titleVisibility: .visible) {
-                Button("Move to Trash", role: .destructive) {
-                    Task { _ = await run(.trash, draft: nil) }
+                ForEach(MailTrashConfirmation.buttons) { button in
+                    trashConfirmationButton(button)
                 }
-                Button("Cancel", role: .cancel) {}
             } message: {
                 Text("The message stays in Trash and is not erased. Cancel leaves the mailbox unchanged.")
             }
     }
+    @ViewBuilder
+    private func trashConfirmationButton(_ button: MailTrashDialogButton) -> some View {
+        switch button.kind {
+        case .cancel:
+            if button.isDefault {
+                Button(button.title, role: .cancel) {}
+                    .keyboardShortcut(.defaultAction)
+            } else {
+                Button(button.title, role: .cancel) {}
+            }
+        case .trash:
+            if button.isDestructive && button.isDefault {
+                Button(button.title, role: .destructive) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+                .keyboardShortcut(.defaultAction)
+            } else if button.isDestructive {
+                Button(button.title, role: .destructive) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+            } else if button.isDefault {
+                Button(button.title) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button(button.title) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+            }
+        }
+    }
+
     private func perform(_ action: () throws -> String) { do { message = try action() } catch { message = error.localizedDescription } }
 
     private func handle(_ action: MailboxAction) {

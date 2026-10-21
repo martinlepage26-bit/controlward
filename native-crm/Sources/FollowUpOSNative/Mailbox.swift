@@ -145,6 +145,24 @@ enum MailSendConfirmation {
     ]
 }
 
+enum MailTrashButton: String, Equatable, Sendable { case cancel, trash }
+
+struct MailTrashDialogButton: Equatable, Identifiable, Sendable {
+    var kind: MailTrashButton
+    var title: String
+    var isDefault: Bool
+    var isDestructive: Bool
+    var id: String { kind.rawValue }
+}
+
+/// The trash confirmation dialog. Cancel is the default action. Move to Trash is destructive and is not the default.
+enum MailTrashConfirmation {
+    static let buttons: [MailTrashDialogButton] = [
+        MailTrashDialogButton(kind: .cancel, title: "Cancel", isDefault: true, isDestructive: false),
+        MailTrashDialogButton(kind: .trash, title: "Move to Trash", isDefault: false, isDestructive: true),
+    ]
+}
+
 enum MailActionResolution: Equatable, Sendable {
     case cancelled
     case ready(MailCommand)

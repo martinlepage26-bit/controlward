@@ -12,6 +12,7 @@ enum MailboxTests {
             ("Mail body: obfuscated remote images and non-http links are blocked", remoteReferences),
             ("Mail body: remote CSS and non-bitmap data images are removed", remoteCSS),
             ("Mail send confirmation: Cancel is the only default button", sendConfirmation),
+            ("Mail trash confirmation: Cancel is the default and Move to Trash is destructive", trashConfirmation),
             ("Mail actions: fake mailbox applies each action, and send or trash without confirmation does nothing", actions),
             ("Mail connectors: unsupported actions are disabled with a reason", connectors),
             ("Mail Gmail: writes use the API and never permanently delete", gmail),
@@ -109,7 +110,7 @@ enum MailboxTests {
 
     /// Image URLs are allowlisted (`cid:` and `data:image/` only) after entities,
     /// CSS escapes, and control characters are normalised. Links are http, https, or mailto.
-    private static func remoteReferences() throws {
+    private static func remoteReferences() async throws {
         func sanitized(_ source: String) -> String { MailHTMLSanitizer.sanitizeHTML(source) }
         let blockedImages = [
             "ht\ttps://evil.test/e.png",
@@ -186,7 +187,7 @@ enum MailboxTests {
 
     /// image-set, @import, expression, and @font-face src drop the whole style.
     /// data:image stays only for png, jpeg, gif, and webp.
-    private static func remoteCSS() throws {
+    private static func remoteCSS() async throws {
         func sanitized(_ source: String) -> String { MailHTMLSanitizer.sanitizeHTML(source) }
         let dropped = [
             "<div style=\"color:red;background:image-set('https://evil.test/a.png' 1x)\">x</div>",
@@ -236,11 +237,21 @@ enum MailboxTests {
         try expect(localFont.contains("cid:font"), "local font src dropped -> \(localFont)")
     }
 
-    private static func sendConfirmation() throws {
+    private static func sendConfirmation() async throws {
         let buttons = MailSendConfirmation.buttons
         try expect(buttons.map(\.title) == ["Cancel", "Send"], "send dialog order \(buttons)")
         try expect(buttons.filter(\.isDefault).map(\.title) == ["Cancel"], "cancel is not the only default \(buttons)")
         try expect(buttons.first { $0.kind == .send }?.isDefault == false, "send is the default")
+    }
+
+    private static func trashConfirmation() async throws {
+        let buttons = MailTrashConfirmation.buttons
+        try expect(buttons.map(\.title) == ["Cancel", "Move to Trash"], "trash dialog order \(buttons)")
+        try expect(buttons.filter(\.isDefault).map(\.title) == ["Cancel"], "cancel is not the only trash default \(buttons)")
+        let move = buttons.first { $0.kind == .trash }
+        try expect(move?.isDefault == false, "move to trash is the default")
+        try expect(move?.isDestructive == true, "move to trash is not destructive")
+        try expect(buttons.first { $0.kind == .cancel }?.isDestructive == false, "cancel is destructive")
     }
 
     private static func actions() async throws {
