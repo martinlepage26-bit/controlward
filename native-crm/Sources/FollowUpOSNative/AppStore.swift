@@ -5,7 +5,7 @@ import Foundation
 import FoundationModels
 #endif
 import OSLog
-import UserNotifications
+@preconcurrency import UserNotifications
 import SwiftUI
 
 enum WorkspaceRecoveryState: Equatable {
