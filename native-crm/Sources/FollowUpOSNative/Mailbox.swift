@@ -128,6 +128,23 @@ enum MailCommandGate {
 
 enum MailUserDecision: Equatable, Sendable { case confirm, cancel }
 
+enum MailSendButton: String, Equatable, Sendable { case cancel, send }
+
+struct MailSendDialogButton: Equatable, Identifiable, Sendable {
+    var kind: MailSendButton
+    var title: String
+    var isDefault: Bool
+    var id: String { kind.rawValue }
+}
+
+/// The send confirmation dialog. Cancel is the default action. Send is not.
+enum MailSendConfirmation {
+    static let buttons: [MailSendDialogButton] = [
+        MailSendDialogButton(kind: .cancel, title: "Cancel", isDefault: true),
+        MailSendDialogButton(kind: .send, title: "Send", isDefault: false),
+    ]
+}
+
 enum MailActionResolution: Equatable, Sendable {
     case cancelled
     case ready(MailCommand)
@@ -347,9 +364,10 @@ enum MailHTMLSanitizer {
         return rewriteTags(cleaned)
     }
 
-    /// A reference is remote unless it is `cid:` or `data:image/` after entities,
-    /// CSS escapes, whitespace, and control characters have been removed.
-    /// Relative URLs, protocol-relative URLs, and unknown schemes are remote.
+    /// A reference is remote unless it is `cid:` or a bitmap `data:image/`
+    /// (png, jpeg, gif, webp) after entities, CSS escapes, whitespace, and
+    /// control characters have been removed. Relative URLs, protocol-relative
+    /// URLs, SVG data images, and unknown schemes are remote.
     static func isRemoteReference(_ raw: String) -> Bool {
         canonicalImageReference(raw) == nil
     }
@@ -560,54 +578,32 @@ enum MailHTMLSanitizer {
         return pairs
     }
 
+    /// Drops the whole value when any reference is not `cid:` or a bitmap data image.
+    /// `url()`, `image-set()`, `-webkit-image-set()`, `@import`, `expression()`, and
+    /// `@font-face` `src` are all covered. A safe `url(cid:…)` is kept.
     static func stripRemoteCSS(_ css: String) -> String {
-        let decoded = removingControls(fullyDecode(css))
-        var result = ""
-        var rest = Substring(decoded)
-        while let range = rest.range(of: "url(", options: .caseInsensitive) {
-            result.append(contentsOf: rest[..<range.lowerBound])
-            let after = rest[range.upperBound...]
-            var quote: Character?
-            var end: Substring.Index?
-            var cursor = after.startIndex
-            while cursor < after.endIndex {
-                let character = after[cursor]
-                if let current = quote {
-                    if character == current { quote = nil }
-                } else if character == "\"" || character == "'" {
-                    quote = character
-                } else if character == ")" {
-                    end = cursor
-                    break
-                }
-                cursor = after.index(after: cursor)
-            }
-            guard let end else {
-                result.append("url(\"\")")
-                return result
-            }
-            if let canonical = canonicalImageReference(String(after[..<end])) {
-                result.append(cssQuoted(canonical))
-            } else {
-                result.append("url(\"\")")
-            }
-            rest = after[after.index(after: end)...]
-        }
-        result.append(contentsOf: rest)
-        return result
+        let decoded = stripCSSComments(removingControls(fullyDecode(css)))
+        let compact = removingIgnorable(decoded).lowercased()
+        if compact.contains("@import") || compact.contains("expression(") { return "" }
+        guard let rewritten = rewriteCSSReferences(decoded) else { return "" }
+        if containsProtocolRelativeReference(rewritten) { return "" }
+        return rewritten
     }
 
-    /// `cid:` and `data:image/` after normalisation. Anything else is not a local image.
+    private static let bitmapDataTypes: Set<String> = ["png", "jpeg", "gif", "webp"]
+
+    /// `cid:` and bitmap `data:image/` after normalisation. Anything else is not a local image.
     private static func canonicalImageReference(_ raw: String) -> String? {
         let normalized = normalizeReference(raw)
         let lower = normalized.lowercased()
         if lower.hasPrefix("cid:") {
             return "cid:" + normalized.dropFirst("cid:".count)
         }
-        if lower.hasPrefix("data:image/") {
-            return canonicalizeDataImage(normalized)
-        }
-        return nil
+        guard lower.hasPrefix("data:image/") else { return nil }
+        let subtype = lower.dropFirst("data:image/".count)
+        let typeEnd = subtype.firstIndex { $0 == ";" || $0 == "," } ?? subtype.endIndex
+        guard bitmapDataTypes.contains(String(subtype[..<typeEnd])) else { return nil }
+        return canonicalizeDataImage(normalized)
     }
 
     /// http, https, and mailto. Relative links stay. Every other scheme is removed.
@@ -651,6 +647,169 @@ enum MailHTMLSanitizer {
             return "data:image/" + value.dropFirst("data:image/".count).lowercased()
         }
         return value[..<comma].lowercased() + value[comma...]
+    }
+
+    private static func rewriteCSSReferences(_ css: String) -> String? {
+        var result = ""
+        var index = css.startIndex
+        while index < css.endIndex {
+            if cssFunction(css, at: index, name: "expression") != nil { return nil }
+            if let open = cssFunction(css, at: index, name: "-webkit-image-set") ?? cssFunction(css, at: index, name: "image-set") {
+                guard let close = endOfCSSFunction(css, openParen: open) else { return nil }
+                let bodyStart = css.index(after: open)
+                guard let body = rewriteCSSReferences(String(css[bodyStart..<close])) else { return nil }
+                let name = css[index..<open].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                result += name + "(" + body + ")"
+                index = css.index(after: close)
+                continue
+            }
+            if let open = cssFunction(css, at: index, name: "url") {
+                guard let close = endOfCSSFunction(css, openParen: open) else { return nil }
+                let inside = String(css[css.index(after: open)..<close])
+                let trimmed = inside.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    result += "url(\"\")"
+                } else if let canonical = canonicalImageReference(trimmed) {
+                    result += cssQuoted(canonical)
+                } else {
+                    return nil
+                }
+                index = css.index(after: close)
+                continue
+            }
+            if css[index] == "\"" || css[index] == "'" {
+                guard let literal = readCSSString(css, at: index) else { return nil }
+                if let canonical = canonicalImageReference(literal.value) {
+                    result += quotedCSS(canonical)
+                } else if isURLLike(literal.value) {
+                    return nil
+                } else {
+                    result += css[index..<literal.next]
+                }
+                index = literal.next
+                continue
+            }
+            result.append(css[index])
+            index = css.index(after: index)
+        }
+        return result
+    }
+
+    /// Index of the `(` after `name`, allowing whitespace before it. Longer names win at the call site.
+    private static func cssFunction(_ css: String, at index: String.Index, name: String) -> String.Index? {
+        guard let end = css.index(index, offsetBy: name.count, limitedBy: css.endIndex),
+              css[index..<end].lowercased() == name else { return nil }
+        if index > css.startIndex {
+            let previous = css[css.index(before: index)]
+            if previous.isLetter || previous.isNumber || previous == "-" || previous == "_" { return nil }
+        }
+        var cursor = end
+        while cursor < css.endIndex, css[cursor].isWhitespace { cursor = css.index(after: cursor) }
+        guard cursor < css.endIndex, css[cursor] == "(" else { return nil }
+        return cursor
+    }
+
+    private static func endOfCSSFunction(_ css: String, openParen: String.Index) -> String.Index? {
+        var depth = 0
+        var quote: Character?
+        var index = openParen
+        while index < css.endIndex {
+            let character = css[index]
+            if let current = quote {
+                if character == "\\" {
+                    let next = css.index(after: index)
+                    if next < css.endIndex { index = next }
+                } else if character == current {
+                    quote = nil
+                }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character == "(" {
+                depth += 1
+            } else if character == ")" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index = css.index(after: index)
+        }
+        return nil
+    }
+
+    private static func readCSSString(_ css: String, at start: String.Index) -> (value: String, next: String.Index)? {
+        let quote = css[start]
+        var index = css.index(after: start)
+        var literal = ""
+        while index < css.endIndex {
+            let character = css[index]
+            if character == "\\" {
+                let next = css.index(after: index)
+                guard next < css.endIndex else { return nil }
+                literal.append(css[next])
+                index = css.index(after: next)
+                continue
+            }
+            if character == quote { return (literal, css.index(after: index)) }
+            literal.append(character)
+            index = css.index(after: index)
+        }
+        return nil
+    }
+
+    private static func isURLLike(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.contains("://") || lower.hasPrefix("//") || lower.hasPrefix("\\\\") { return true }
+        guard let colon = lower.firstIndex(of: ":"), colon > lower.startIndex else { return false }
+        let scheme = lower[..<colon]
+        guard scheme.first?.isLetter == true else { return false }
+        return scheme.allSatisfy { $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }
+    }
+
+    private static func containsProtocolRelativeReference(_ css: String) -> Bool {
+        var index = css.startIndex
+        while let slash = css[index...].firstIndex(of: "/") {
+            let next = css.index(after: slash)
+            if next < css.endIndex, css[next] == "/" {
+                let boundary: Bool
+                if slash == css.startIndex {
+                    boundary = true
+                } else {
+                    let previous = css[css.index(before: slash)]
+                    boundary = previous.isWhitespace || previous == "(" || previous == "," || previous == ":" || previous == "'" || previous == "\"" || previous == "="
+                }
+                if boundary { return true }
+            }
+            index = next < css.endIndex ? next : css.endIndex
+            if index == css.endIndex { break }
+        }
+        return false
+    }
+
+    private static func stripCSSComments(_ css: String) -> String {
+        var result = ""
+        var index = css.startIndex
+        while index < css.endIndex {
+            if css[index...].hasPrefix("/*") {
+                let search = css.index(index, offsetBy: 2)
+                if let end = css.range(of: "*/", range: search..<css.endIndex) {
+                    index = end.upperBound
+                    continue
+                }
+                break
+            }
+            result.append(css[index])
+            index = css.index(after: index)
+        }
+        return result
+    }
+
+    private static func quotedCSS(_ value: String) -> String {
+        var escaped = ""
+        for character in value {
+            if character == "\\" || character == "\"" { escaped.append("\\") }
+            escaped.append(character)
+        }
+        return "\"\(escaped)\""
     }
 
     private static func normalizeReference(_ raw: String) -> String {

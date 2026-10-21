@@ -10,6 +10,8 @@ enum MailboxTests {
             ("Mail overview: every connector line is reachable at 1280x800", overview),
             ("Mail body: fetched length equals the source and remote images are blocked", bodies),
             ("Mail body: obfuscated remote images and non-http links are blocked", remoteReferences),
+            ("Mail body: remote CSS and non-bitmap data images are removed", remoteCSS),
+            ("Mail send confirmation: Cancel is the only default button", sendConfirmation),
             ("Mail actions: fake mailbox applies each action, and send or trash without confirmation does nothing", actions),
             ("Mail connectors: unsupported actions are disabled with a reason", connectors),
             ("Mail Gmail: writes use the API and never permanently delete", gmail),
@@ -180,6 +182,65 @@ enum MailboxTests {
         try expect(links.contains("http://notes.example.test/plain"), "http link removed -> \(links)")
         try expect(links.contains("mailto:owner@example.test"), "mailto removed -> \(links)")
         try expect(links.contains("href=\"#section\"") && links.contains("href=\"/readme\""), "relative link removed -> \(links)")
+    }
+
+    /// image-set, @import, expression, and @font-face src drop the whole style.
+    /// data:image stays only for png, jpeg, gif, and webp.
+    private static func remoteCSS() throws {
+        func sanitized(_ source: String) -> String { MailHTMLSanitizer.sanitizeHTML(source) }
+        let dropped = [
+            "<div style=\"color:red;background:image-set('https://evil.test/a.png' 1x)\">x</div>",
+            "<div style=\"color:red;background:-webkit-image-set(url(https://evil.test/b.png) 1x)\">x</div>",
+            "<div style=\"color:red;@import 'https://evil.test/c.css'\">x</div>",
+            "<div style=\"color:red;width:expression(alert(1))\">x</div>",
+            "<div style=\"color:red;@font-face{src:url(https://evil.test/d.woff)}\">x</div>",
+            "<div style=\"color:red;src:'https://evil.test/e.woff'\">x</div>",
+            "<div style=\"color:red;background:url(ht/*c*/tps://evil.test/f.png)\">x</div>",
+            "<div style=\"color:red;background:image-set('\\68ttps://evil.test/g.png' 1x)\">x</div>",
+            "<p style=\"color:red;background:url(data:image/svg+xml,&lt;svg xmlns='http://evil.test/a.svg'&gt;&lt;/svg&gt;)\">x</p>",
+        ]
+        for source in dropped {
+            let out = sanitized(source)
+            let lowered = out.lowercased()
+            try expect(!lowered.contains("evil.test") && !lowered.contains("expression(") && !lowered.contains("@import") && !lowered.contains("color:red") && !lowered.contains("svg"), "remote css kept -> \(out)")
+        }
+
+        let svgSources = [
+            "data:image/svg+xml,<svg></svg>",
+            "DATA:IMAGE/SVG+XML;charset=utf-8,<svg></svg>",
+            "data:image/sv\u{0}g+xml,<svg></svg>",
+            "data:image/svg&#43;xml,<svg></svg>",
+            "data:image/bmp;base64,AAAA",
+            "data:image/jpg;base64,AAAA",
+        ]
+        for src in svgSources {
+            let out = sanitized("<img src=\"\(src)\" alt=\"pic\">")
+            let lowered = out.lowercased()
+            try expect(!lowered.contains("svg") && !lowered.contains("data:image/bmp") && !lowered.contains("data:image/jpg") && out.contains("data-remote-image=\"blocked\""), "data image kept for \(src) -> \(out)")
+        }
+
+        let png = sanitized("<img src=\"data:image/png;base64,AbCd\" alt=\"pic\">")
+        let jpeg = sanitized("<img src=\"data:image/jpeg;base64,AbCd\" alt=\"pic\">")
+        let gif = sanitized("<img src=\"data:image/gif;base64,R0lG\" alt=\"pic\">")
+        let webp = sanitized("<img src=\"DATA:IMAGE/WebP;base64,UklG\" alt=\"pic\">")
+        try expect(png.contains("src=\"data:image/png;base64,AbCd\""), png)
+        try expect(jpeg.contains("src=\"data:image/jpeg;base64,AbCd\""), jpeg)
+        try expect(gif.contains("src=\"data:image/gif;base64,R0lG\""), gif)
+        try expect(webp.contains("src=\"data:image/webp;base64,UklG\""), webp)
+
+        let plain = sanitized("<div style=\"color:red\">x</div>")
+        try expect(plain.contains("color:red"), "local css dropped -> \(plain)")
+        let localSet = sanitized("<div style=\"background:image-set('cid:logo' 1x)\">x</div>")
+        try expect(localSet.contains("cid:logo") && !localSet.contains("evil.test"), "local image-set dropped -> \(localSet)")
+        let localFont = sanitized("<div style=\"src:url(cid:font)\">x</div>")
+        try expect(localFont.contains("cid:font"), "local font src dropped -> \(localFont)")
+    }
+
+    private static func sendConfirmation() throws {
+        let buttons = MailSendConfirmation.buttons
+        try expect(buttons.map(\.title) == ["Cancel", "Send"], "send dialog order \(buttons)")
+        try expect(buttons.filter(\.isDefault).map(\.title) == ["Cancel"], "cancel is not the only default \(buttons)")
+        try expect(buttons.first { $0.kind == .send }?.isDefault == false, "send is the default")
     }
 
     private static func actions() async throws {

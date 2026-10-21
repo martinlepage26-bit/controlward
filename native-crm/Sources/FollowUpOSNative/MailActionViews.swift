@@ -172,15 +172,41 @@ struct MailComposeSheet: View {
         .padding(20)
         .frame(minWidth: 520, minHeight: 420)
         .confirmationDialog("Send this message?", isPresented: $confirmSend, titleVisibility: .visible) {
-            Button("Send") {
-                Task {
-                    if let failure = await onSend(draft) { error = failure }
-                    else { onCancel() }
-                }
+            ForEach(MailSendConfirmation.buttons) { button in
+                sendConfirmationButton(button)
             }
-            Button("Cancel", role: .cancel) {}
         } message: {
             Text("Nothing is sent until you confirm. Cancel leaves the mailbox unchanged.")
+        }
+    }
+
+    @ViewBuilder
+    private func sendConfirmationButton(_ button: MailSendDialogButton) -> some View {
+        switch button.kind {
+        case .cancel:
+            if button.isDefault {
+                Button(button.title, role: .cancel) {}
+                    .keyboardShortcut(.defaultAction)
+            } else {
+                Button(button.title, role: .cancel) {}
+            }
+        case .send:
+            if button.isDefault {
+                Button(button.title) {
+                    Task {
+                        if let failure = await onSend(draft) { error = failure }
+                        else { onCancel() }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button(button.title) {
+                    Task {
+                        if let failure = await onSend(draft) { error = failure }
+                        else { onCancel() }
+                    }
+                }
+            }
         }
     }
 
