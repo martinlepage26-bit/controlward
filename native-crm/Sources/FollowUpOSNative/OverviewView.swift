@@ -77,8 +77,16 @@ struct Sparkline: View {
     }
     private func points(in size: CGSize) -> [CGPoint] {
         guard values.count > 1, let maxV = values.max(), maxV > 0 else { return [] }
-        return values.enumerated().map { i, v in
-            CGPoint(x: size.width * Double(i) / Double(values.count - 1), y: size.height - (size.height - 3) * v / maxV - 1)
+        let lastIndex = Double(values.count - 1)
+        let width: Double = Double(size.width)
+        let height: Double = Double(size.height)
+        let plotHeight: Double = height - 3
+        let maxValue: Double = Double(maxV)
+        return values.enumerated().map { (i: Int, v) -> CGPoint in
+            let x: Double = width * Double(i) / lastIndex
+            let scaled: Double = plotHeight * Double(v) / maxValue
+            let y: Double = height - scaled - 1
+            return CGPoint(x: x, y: y)
         }
     }
 }
