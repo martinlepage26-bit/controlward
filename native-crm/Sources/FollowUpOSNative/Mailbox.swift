@@ -347,12 +347,11 @@ enum MailHTMLSanitizer {
         return rewriteTags(cleaned)
     }
 
+    /// A reference is remote unless it is `cid:` or `data:image/` after entities,
+    /// CSS escapes, whitespace, and control characters have been removed.
+    /// Relative URLs, protocol-relative URLs, and unknown schemes are remote.
     static func isRemoteReference(_ raw: String) -> Bool {
-        let value = decodeEntities(raw).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if value.hasPrefix("javascript:") || value.hasPrefix("vbscript:") || value.hasPrefix("data:text/html") { return true }
-        if value.hasPrefix("http://") || value.hasPrefix("https://") || value.hasPrefix("//") { return true }
-        if value.contains("http://") || value.contains("https://") { return true }
-        return false
+        canonicalImageReference(raw) == nil
     }
 
     private static func escape(_ text: String) -> String {
@@ -366,14 +365,7 @@ enum MailHTMLSanitizer {
     }
 
     static func decodeEntities(_ text: String) -> String {
-        var result = text.replacingOccurrences(of: "&amp;", with: "&")
-        result = result.replacingOccurrences(of: "&quot;", with: "\"")
-        result = result.replacingOccurrences(of: "&#39;", with: "'")
-        result = result.replacingOccurrences(of: "&lt;", with: "<")
-        result = result.replacingOccurrences(of: "&gt;", with: ">")
-        result = result.replacingOccurrences(of: "&#58;", with: ":")
-        result = result.replacingOccurrences(of: "&#47;", with: "/")
-        return result
+        decodeEntitiesUntilStable(text)
     }
 
     private static func stripComments(_ html: String) -> String {
@@ -500,13 +492,27 @@ enum MailHTMLSanitizer {
                 if !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { kept.append((key, cleaned)) }
                 continue
             }
-            let remoteMedia = lowered == "src" || lowered == "srcset" || lowered == "poster" || lowered == "background"
-                || (lowered == "href" && mediaTags.contains(name)) || lowered == "xlink:href"
-            if remoteMedia && isRemoteReference(value) {
-                blockedImage = true
+            if lowered == "srcset" {
+                guard let canonical = canonicalSrcset(value) else {
+                    blockedImage = true
+                    continue
+                }
+                kept.append((key, canonical))
                 continue
             }
-            if lowered == "href" && isRemoteReference(value) && (value.lowercased().contains("javascript:") || decodeEntities(value).lowercased().hasPrefix("javascript:")) {
+            let remoteMedia = lowered == "src" || lowered == "poster" || lowered == "background"
+                || (lowered == "href" && mediaTags.contains(name)) || lowered == "xlink:href"
+            if remoteMedia {
+                guard let canonical = canonicalImageReference(value) else {
+                    blockedImage = true
+                    continue
+                }
+                kept.append((key, canonical))
+                continue
+            }
+            if lowered == "href" {
+                guard let canonical = canonicalLink(value) else { continue }
+                kept.append((key, canonical))
                 continue
             }
             kept.append((key, value))
@@ -555,8 +561,9 @@ enum MailHTMLSanitizer {
     }
 
     static func stripRemoteCSS(_ css: String) -> String {
+        let decoded = removingControls(fullyDecode(css))
         var result = ""
-        var rest = Substring(css)
+        var rest = Substring(decoded)
         while let range = rest.range(of: "url(", options: .caseInsensitive) {
             result.append(contentsOf: rest[..<range.lowerBound])
             let after = rest[range.upperBound...]
@@ -576,20 +583,266 @@ enum MailHTMLSanitizer {
                 cursor = after.index(after: cursor)
             }
             guard let end else {
-                result.append(contentsOf: rest[range.lowerBound...])
+                result.append("url(\"\")")
                 return result
             }
-            let inside = after[..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-            let unquoted = inside.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            if isRemoteReference(String(unquoted)) {
-                result.append("url(\"\")")
+            if let canonical = canonicalImageReference(String(after[..<end])) {
+                result.append(cssQuoted(canonical))
             } else {
-                result.append(contentsOf: rest[range.lowerBound...end])
+                result.append("url(\"\")")
             }
             rest = after[after.index(after: end)...]
         }
         result.append(contentsOf: rest)
         return result
+    }
+
+    /// `cid:` and `data:image/` after normalisation. Anything else is not a local image.
+    private static func canonicalImageReference(_ raw: String) -> String? {
+        let normalized = normalizeReference(raw)
+        let lower = normalized.lowercased()
+        if lower.hasPrefix("cid:") {
+            return "cid:" + normalized.dropFirst("cid:".count)
+        }
+        if lower.hasPrefix("data:image/") {
+            return canonicalizeDataImage(normalized)
+        }
+        return nil
+    }
+
+    /// http, https, and mailto. Relative links stay. Every other scheme is removed.
+    private static func canonicalLink(_ raw: String) -> String? {
+        let normalized = normalizeReference(raw)
+        if normalized.isEmpty { return "" }
+        let lower = normalized.lowercased()
+        if lower.hasPrefix("https://") { return "https://" + normalized.dropFirst("https://".count) }
+        if lower.hasPrefix("http://") { return "http://" + normalized.dropFirst("http://".count) }
+        if lower.hasPrefix("mailto:") { return "mailto:" + normalized.dropFirst("mailto:".count) }
+        if lower.hasPrefix("//") || normalized.contains("\\") { return nil }
+        if let colon = lower.firstIndex(of: ":") {
+            let scheme = lower[..<colon]
+            let charactersOK = scheme.allSatisfy { $0.isLetter || $0.isNumber || $0 == "+" || $0 == "-" || $0 == "." }
+            if scheme.first?.isLetter == true && charactersOK { return nil }
+        }
+        return normalized
+    }
+
+    /// A srcset is local only when every candidate is `cid:`. Data URLs contain commas,
+    /// which srcset also uses to separate candidates, so they are not allowed here.
+    private static func canonicalSrcset(_ raw: String) -> String? {
+        let decoded = fullyDecode(raw)
+        var kept: [String] = []
+        for part in decoded.split(separator: ",", omittingEmptySubsequences: false) {
+            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+            let pieces = trimmed.split(whereSeparator: { $0.isWhitespace })
+            guard let url = pieces.first,
+                  let canonical = canonicalImageReference(String(url)),
+                  canonical.lowercased().hasPrefix("cid:") else { return nil }
+            let descriptor = pieces.dropFirst().joined(separator: " ")
+            kept.append(descriptor.isEmpty ? canonical : "\(canonical) \(descriptor)")
+        }
+        guard !kept.isEmpty else { return nil }
+        return kept.joined(separator: ", ")
+    }
+
+    private static func canonicalizeDataImage(_ value: String) -> String {
+        guard let comma = value.firstIndex(of: ",") else {
+            return "data:image/" + value.dropFirst("data:image/".count).lowercased()
+        }
+        return value[..<comma].lowercased() + value[comma...]
+    }
+
+    private static func normalizeReference(_ raw: String) -> String {
+        removingIgnorable(trimWrappingQuotes(fullyDecode(raw)))
+    }
+
+    /// Entities and CSS escapes, repeated while a pass still produces an entity.
+    /// A decoded backslash is not run through the CSS decoder again.
+    private static func fullyDecode(_ text: String) -> String {
+        var value = text
+        for _ in 0..<8 {
+            let next = decodeCSSEscapes(decodeEntitiesUntilStable(value))
+            if next == value { break }
+            value = next
+            if !next.contains("&") { break }
+        }
+        return value
+    }
+
+    private static func decodeEntitiesUntilStable(_ text: String) -> String {
+        var value = text
+        for _ in 0..<8 {
+            let next = decodeEntitiesFully(value)
+            if next == value { break }
+            value = next
+        }
+        return value
+    }
+
+    private static let namedEntities: [String: String] = [
+        "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+        "colon": ":", "sol": "/", "tab": "\t", "newline": "\n", "nbsp": "\u{00A0}",
+    ]
+
+    private static func decodeEntitiesFully(_ text: String) -> String {
+        var result = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index] == "&", let consumed = consumeEntity(text, at: index) {
+                result += consumed.value
+                index = consumed.next
+            } else {
+                result.append(text[index])
+                index = text.index(after: index)
+            }
+        }
+        return result
+    }
+
+    private static func consumeEntity(_ text: String, at start: String.Index) -> (value: String, next: String.Index)? {
+        var index = text.index(after: start)
+        guard index < text.endIndex else { return nil }
+        if text[index] == "#" {
+            index = text.index(after: index)
+            guard index < text.endIndex else { return nil }
+            let hex = text[index] == "x" || text[index] == "X"
+            if hex {
+                index = text.index(after: index)
+                guard index < text.endIndex else { return nil }
+            }
+            let digitsStart = index
+            var count = 0
+            while index < text.endIndex, count < 8 {
+                let character = text[index]
+                let digit = hex ? character.isHexDigit : (character.isASCII && character.isNumber)
+                if !digit { break }
+                index = text.index(after: index)
+                count += 1
+            }
+            guard count > 0 else { return nil }
+            let digits = String(text[digitsStart..<index])
+            if index < text.endIndex, text[index] == ";" { index = text.index(after: index) }
+            guard let code = UInt32(digits, radix: hex ? 16 : 10), let scalar = Unicode.Scalar(code) else {
+                return ("", index)
+            }
+            return (String(Character(scalar)), index)
+        }
+        let nameStart = index
+        var count = 0
+        while index < text.endIndex, count < 32, text[index].isLetter {
+            index = text.index(after: index)
+            count += 1
+        }
+        let nameEnd = index
+        guard count > 0, index < text.endIndex, text[index] == ";" else { return nil }
+        index = text.index(after: index)
+        let name = String(text[nameStart..<nameEnd])
+        guard let value = namedEntities[name] ?? namedEntities[name.lowercased()] else { return nil }
+        return (value, index)
+    }
+
+    private static func decodeCSSEscapes(_ text: String) -> String {
+        var result = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index] != "\\" {
+                result.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+            let next = text.index(after: index)
+            if next == text.endIndex {
+                result.append("\\")
+                break
+            }
+            let character = text[next]
+            if character == "\n" || character == "\r" || character == "\u{0C}" {
+                index = text.index(after: next)
+                if character == "\r", index < text.endIndex, text[index] == "\n" {
+                    index = text.index(after: index)
+                }
+                continue
+            }
+            if character.isHexDigit {
+                var hex = ""
+                var cursor = next
+                while cursor < text.endIndex, hex.count < 6, text[cursor].isHexDigit {
+                    hex.append(text[cursor])
+                    cursor = text.index(after: cursor)
+                }
+                if cursor < text.endIndex, isCSSWhitespace(text[cursor]) {
+                    cursor = text.index(after: cursor)
+                }
+                if let code = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(code) {
+                    result.append(Character(scalar))
+                }
+                index = cursor
+                continue
+            }
+            result.append(character)
+            index = text.index(after: next)
+        }
+        return result
+    }
+
+    private static func isCSSWhitespace(_ character: Character) -> Bool {
+        character == " " || character == "\t" || character == "\n" || character == "\r" || character == "\u{0C}"
+    }
+
+    private static func trimWrappingQuotes(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.count >= 2, let first = value.first, let last = value.last,
+              (first == "\"" && last == "\"") || (first == "'" && last == "'") {
+            value = String(value.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return value
+    }
+
+    /// Drops ASCII controls and Unicode format characters. Spaces stay so CSS
+    /// outside a URL is still readable, while `url<NUL>(` cannot hide a function.
+    private static func removingControls(_ text: String) -> String {
+        var result = ""
+        for scalar in text.unicodeScalars where !isControlOrFormat(scalar) {
+            result.append(Character(scalar))
+        }
+        return result
+    }
+
+    private static func isControlOrFormat(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.value == 0x20 { return false }
+        if scalar.value < 0x20 || scalar.value == 0x7F { return true }
+        switch scalar.properties.generalCategory {
+        case .control, .format: return true
+        default: return false
+        }
+    }
+
+    private static func removingIgnorable(_ text: String) -> String {
+        var result = ""
+        for scalar in text.unicodeScalars where !isIgnorable(scalar) {
+            result.unicodeScalars.append(scalar)
+        }
+        return result
+    }
+
+    private static func isIgnorable(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.value <= 0x20 || scalar.value == 0x7F { return true }
+        switch scalar.properties.generalCategory {
+        case .control, .format: return true
+        default: return scalar.properties.isWhitespace
+        }
+    }
+
+    private static func cssQuoted(_ value: String) -> String {
+        var escaped = ""
+        for character in value {
+            if character == "\\" || character == "\"" || character == "(" || character == ")" {
+                escaped.append("\\")
+            }
+            escaped.append(character)
+        }
+        return "url(\"\(escaped)\")"
     }
 }
 

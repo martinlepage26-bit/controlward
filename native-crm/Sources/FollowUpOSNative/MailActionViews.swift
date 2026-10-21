@@ -153,6 +153,7 @@ struct MailComposeSheet: View {
             if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button("Cancel", role: .cancel) { onCancel() }
+                    .keyboardShortcut(action.sends ? .defaultAction : .cancelAction)
                 Spacer()
                 if action == .editDraft {
                     Button("Save draft") {
@@ -165,7 +166,6 @@ struct MailComposeSheet: View {
                     Button("Send") { confirmSend = true }
                         .disabled(draft.to.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty })
                         .help(draft.to.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } ? "Add a recipient before sending." : "Send this message. Nothing is sent until you confirm.")
-                        .keyboardShortcut(.defaultAction)
                 }
             }
         }

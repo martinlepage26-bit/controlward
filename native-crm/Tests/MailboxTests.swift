@@ -9,6 +9,7 @@ enum MailboxTests {
         let tests: [(String, () async throws -> Void)] = [
             ("Mail overview: every connector line is reachable at 1280x800", overview),
             ("Mail body: fetched length equals the source and remote images are blocked", bodies),
+            ("Mail body: obfuscated remote images and non-http links are blocked", remoteReferences),
             ("Mail actions: fake mailbox applies each action, and send or trash without confirmation does nothing", actions),
             ("Mail connectors: unsupported actions are disabled with a reason", connectors),
             ("Mail Gmail: writes use the API and never permanently delete", gmail),
@@ -102,6 +103,83 @@ enum MailboxTests {
         let metadata = ["sourceID": "gmail:m1", "subject": "Hello", "sender": "a@example.test"]
         let stored = String(decoding: try JSONSerialization.data(withJSONObject: metadata), as: UTF8.self)
         try expect(!stored.contains(attached), "body was written into metadata")
+    }
+
+    /// Image URLs are allowlisted (`cid:` and `data:image/` only) after entities,
+    /// CSS escapes, and control characters are normalised. Links are http, https, or mailto.
+    private static func remoteReferences() throws {
+        func sanitized(_ source: String) -> String { MailHTMLSanitizer.sanitizeHTML(source) }
+        let blockedImages = [
+            "ht\ttps://evil.test/e.png",
+            "ht\nttps://evil.test/n.png",
+            "ht\u{0}tps://evil.test/z.png",
+            "&#104;ttps://evil.test/y.png",
+            "https&#58;&#47;&#47;evil.test/h.png",
+            "//evil.test/p.png",
+            "HTTPS://evil.test/m.png",
+            "ftp://evil.test/f.png",
+            "/pixel.png",
+            "pixel.png",
+            "data:text/html,evil.test",
+            "data:image;base64,AAAA",
+        ]
+        for src in blockedImages {
+            let out = sanitized("<img src=\"\(src)\" alt=\"pic\">")
+            try expect(!out.contains("evil.test") && !out.contains("pixel.png") && !out.contains("data:text/html") && !out.contains("data:image;"), "image kept for \(src) -> \(out)")
+            try expect(out.contains("data-remote-image=\"blocked\""), "blocked image was not marked for \(src)")
+        }
+
+        let blockedCSS = [
+            "<div style=\"background:url(\\68ttps://evil.test/g.png)\">x</div>",
+            "<div style=\"background:url('\\68 tps://evil.test/q.png')\">x</div>",
+            "<div style='background:url(\"\\68ttps://evil.test/d.png\")'>x</div>",
+            "<div style=\"background:url(ht\nttps://evil.test/c.png)\">x</div>",
+            "<div style=\"background:url(ht\u{0}tps://evil.test/u.png)\">x</div>",
+            "<div style=\"background:URL(&#104;ttps://evil.test/e.png)\">x</div>",
+            "<div style=\"background:url\u{0}(\\68ttps://evil.test/k.png)\">x</div>",
+        ]
+        for source in blockedCSS {
+            let out = sanitized(source)
+            try expect(!out.contains("evil.test") && !out.lowercased().contains("https://") && !out.contains("\\68"), "css image kept -> \(out)")
+        }
+
+        let cid = sanitized("<img src=\"cid:logo@local\" alt=\"pic\">")
+        try expect(cid.contains("src=\"cid:logo@local\"") && !cid.contains("data-remote-image"), "cid image was blocked -> \(cid)")
+        let dataImage = sanitized("<img src=\"DATA:IMAGE/png;base64,AbCd\" alt=\"pic\">")
+        try expect(dataImage.contains("src=\"data:image/png;base64,AbCd\""), "data image was blocked -> \(dataImage)")
+        let obfuscatedCID = sanitized("<img src=\"ci&#100;:logo\" alt=\"pic\">")
+        try expect(obfuscatedCID.contains("src=\"cid:logo\""), "entity cid was blocked -> \(obfuscatedCID)")
+        let nulCID = sanitized("<img src=\"ci\u{0}d:logo\" alt=\"pic\">")
+        try expect(nulCID.contains("src=\"cid:logo\""), "nul cid was blocked -> \(nulCID)")
+        let cssCID = sanitized("<div style=\"background:url(\\63id\\3alogo)\">x</div>")
+        try expect(cssCID.contains("cid:logo") && !cssCID.contains("\\63"), "css cid was blocked -> \(cssCID)")
+
+        let srcset = sanitized("<img srcset=\"cid:a 1x, https://evil.test/s.png 2x\" alt=\"pic\">")
+        try expect(!srcset.contains("evil.test") && srcset.contains("data-remote-image=\"blocked\""), "srcset remote survived -> \(srcset)")
+        let localSet = sanitized("<img srcset=\"cid:a 1x, cid:b 2x\" alt=\"pic\">")
+        try expect(localSet.contains("cid:a") && localSet.contains("cid:b") && !localSet.contains("data-remote-image"), "cid srcset was blocked -> \(localSet)")
+
+        let links = sanitized(
+            "<a href=\"javascript:alert(1)\">bad</a>"
+            + "<a href=\"JaVaScRiPt:alert(1)\">bad</a>"
+            + "<a href=\"java\nscript:alert(1)\">bad</a>"
+            + "<a href=\"&#106;avascript:alert(1)\">bad</a>"
+            + "<a href=\"data:text/html,hello\">bad</a>"
+            + "<a href=\"vbscript:msg\">bad</a>"
+            + "<a href=\"//evil.test/phish\">bad</a>"
+            + "<a href=\"file:///tmp/x\">bad</a>"
+            + "<a href=\"https://notes.example.test/read\">notes</a>"
+            + "<a href=\"HTTP://notes.example.test/plain\">plain</a>"
+            + "<a href=\"mailto:owner@example.test\">mail</a>"
+            + "<a href=\"#section\">jump</a>"
+            + "<a href=\"/readme\">local</a>"
+        )
+        let lowered = links.lowercased()
+        try expect(!lowered.contains("javascript:") && !lowered.contains("vbscript:") && !lowered.contains("data:text/html") && !lowered.contains("file:") && !lowered.contains("evil.test"), "unsafe link survived -> \(links)")
+        try expect(links.contains("https://notes.example.test/read"), "https link removed -> \(links)")
+        try expect(links.contains("http://notes.example.test/plain"), "http link removed -> \(links)")
+        try expect(links.contains("mailto:owner@example.test"), "mailto removed -> \(links)")
+        try expect(links.contains("href=\"#section\"") && links.contains("href=\"/readme\""), "relative link removed -> \(links)")
     }
 
     private static func actions() async throws {
