@@ -50,7 +50,8 @@ inspected source. ControlWard's own live Gmail metadata intake is native (see
 
 The local inbox imports `controlward.mail.v1` JSON or the existing Project Control
 synthetic Email Aggregator fixture. Unknown fields such as body text and tokens
-are never decoded or persisted. Source/account IDs deduplicate imports, while
+are never decoded or persisted. The metadata store stays metadata: a connector
+fetches the body when a message is opened and does not write it back. Source/account IDs deduplicate imports, while
 review decisions and local links survive a refresh. A task action keeps one task
 per message, including after completion; a deleted task receipt is not silently
 revived. Synthetic mail capture is restricted to loopback test registers.
@@ -72,6 +73,18 @@ Example (synthetic data only):
   }]
 }
 ```
+
+Opening a message on the Email tab loads the body through a connector. HTML is
+rendered with scripts removed and remote images blocked. The body is not stored.
+
+| Connector | Actions |
+| --- | --- |
+| Gmail and Google Workspace | Reply, reply all, forward, edit draft, Trash, archive, mark read, mark unread. Bodies use `format=full`. Trash calls `messages.trash` and does not erase. Sends and Trash wait for confirmation. Tokens stay in the Keychain. |
+| iCloud and Cloudflare forwards | No mailbox API of their own. The same actions run on the Gmail account the alias forwards into. Buttons stay disabled, with a reason, until that account is connected. |
+| Metadata import and synthetic mail | No actions. Every button is disabled and explains that there is no mailbox connector. |
+| Hosted Email Aggregator | No body or write API in ControlWard. Actions stay on Local review inbox. |
+
+A read-only Gmail sign-in can still refresh metadata and, when the token allows, load a body. Write buttons stay disabled until Connect grants modify and compose access. Cancel on a send or Trash confirmation does not call the mailbox.
 
 ## GAP reconciliation
 

@@ -4,7 +4,10 @@ import Security
 
 // MARK: - Accounts
 
-/// Live mail intake reads metadata only (gmail.readonly, format=metadata). Bodies are never requested.
+/// Live mail intake lists metadata only (format=metadata). Opening a message fetches
+/// its body through the mailbox connector; the body is not written into this store.
+/// Sign-in requests gmail.modify and gmail.compose so reply, drafts, archive, and
+/// Trash can run. Permanent delete is not requested and is not called.
 /// Two Google sign-ins; me.com and pharos-ai.ca forward into the personal Gmail and are labelled
 /// by recipient (Delivered-To, then To/Cc), not signed in separately.
 struct MailAccount: Identifiable, Hashable, Sendable {
@@ -63,7 +66,9 @@ enum PKCE {
 }
 
 struct GoogleOAuthConfig: Sendable, Equatable {
-    static let scope = "https://www.googleapis.com/auth/gmail.readonly"
+    /// Read and change labels, including Trash. Does not include permanent delete.
+    /// Compose adds drafts and send. Together they replace gmail.readonly.
+    static let scope = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.compose"
     static let defaultsKey = "ControlWardGoogleOAuthClientID"
     /// ControlWard's iOS-type installed-app client (bundle com.pharos.contextward). Public, not a secret.
     static let defaultClientID = "522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1.apps.googleusercontent.com"

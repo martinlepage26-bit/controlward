@@ -45,6 +45,18 @@ extension AppStore {
         return taskID
     }
 
+    /// Drops the local metadata row after the mailbox has moved the message to Trash.
+    /// This does not erase the message from the mailbox.
+    func forgetMailMetadata(id: UUID) throws {
+        try commitWorkspace { next in
+            guard next.controlWard.mail.contains(where: { $0.id == id }) else {
+                throw ControlWardError.invalid("This message is no longer in the local inbox.")
+            }
+            next.controlWard.mail.removeAll { $0.id == id }
+            next.activity.insert(ActivityEvent(kind: "mail_trash", message: "Removed local mail metadata after the mailbox moved the message to Trash."), at: 0)
+        }
+    }
+
     func linkProject(recordKey: String, register: String, projectID: String, title: String) throws {
         guard allWorkspaceRecords.contains(where: { $0.id == recordKey }),
               !projectID.isEmpty, projectID.count <= 80,

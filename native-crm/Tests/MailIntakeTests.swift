@@ -7,7 +7,7 @@ enum MailIntakeTests {
         let tests: [(String, () async throws -> Void)] = [
             ("Mail: PKCE S256 matches RFC 7636 vector", pkceVector),
             ("Mail: client ID is validated and maps to reverse-DNS callback", clientIDValidation),
-            ("Mail: authorization URL is read-only, PKCE, offline, login hint", authURL),
+            ("Mail: authorization URL requests modify and compose, PKCE, offline, login hint", authURL),
             ("Mail: callback rejects wrong state and wrong scheme", callback),
             ("Mail: me.com and pharos-ai.ca are labelled by Delivered-To/To", labeler),
             ("Mail: Gmail metadata maps to the review model without bodies", parsing),
@@ -150,7 +150,8 @@ enum MailIntakeTests {
     static func authURL() throws {
         let u = try GoogleOAuthConfig(clientID: clientID).authorizationURL(loginHint: "ml@infrafabric.io", state: "s1", challenge: "c1")
         let q = Dictionary(uniqueKeysWithValues: URLComponents(url: u, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value ?? "") })
-        try expect(q["scope"] == "https://www.googleapis.com/auth/gmail.readonly", "scope")
+        try expect(q["scope"] == "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.compose", "scope")
+        try expect(q["scope"]?.contains("mail.google.com") == false && q["scope"]?.contains("gmail.readonly") == false, "scope")
         try expect(q["code_challenge_method"] == "S256" && q["code_challenge"] == "c1" && q["state"] == "s1", "pkce")
         try expect(q["access_type"] == "offline" && q["login_hint"] == "ml@infrafabric.io" && q["client_secret"] == nil, "params")
     }

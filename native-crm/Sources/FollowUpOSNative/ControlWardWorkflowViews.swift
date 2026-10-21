@@ -194,7 +194,11 @@ struct MailWorkspaceView: View {
             Picker("Email workspace", selection: $tab) { Text("Local review inbox").tag(0); Text("Email Aggregator").tag(1) }.pickerStyle(.segmented).padding(.horizontal, 22)
             if tab == 0 { MailIntakeStatusBar().padding(.horizontal, 22) }
             if let message { Text(message).font(.caption).padding(.horizontal, 22) }
-            if tab == 1 { WorkspaceModuleView(controller: modules.controller(for: .email)) }
+            if tab == 1 {
+                Text("Mailbox actions are in Local review inbox. The hosted Email Aggregator has no body or write API in ControlWard.")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 22)
+                WorkspaceModuleView(controller: modules.controller(for: .email))
+            }
             else {
                 HStack {
                     TextField("Search subject, sender or recipient", text: $search).textFieldStyle(.roundedBorder)
@@ -224,12 +228,16 @@ struct MailWorkspaceView: View {
 
 private struct MailReviewDetail: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var intake: MailIntakeController
     let mail: MailMetadata
+    @StateObject private var actions = MailActionModel()
     @State private var contactID: UUID?
     @State private var companyID: UUID?
     @State private var reviewed = false
     @State private var message: String?
     @State private var showCapture = false
+    @State private var compose: MailComposeRequest?
+    @State private var confirmTrash = false
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -238,11 +246,20 @@ private struct MailReviewDetail: View {
                 Text("From: \(mail.sender)\nTo: \(mail.recipient)\nReceived: \(mail.receivedAt)").textSelection(.enabled)
                 Text("Provider: \(mail.provider)").font(.caption)
                 if let url = URL(string: mail.link), !mail.link.isEmpty { Link("Open source", destination: url) }
+                if actions.loading { Text("Loading the message…").font(.caption).foregroundStyle(.secondary) }
+                if let body = actions.body {
+                    Text("Full message. Loaded from the mailbox and not saved in this workspace.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    MailHTMLView(html: body.safeHTML)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                MailActionBar(support: actions.support, run: handle)
+                if let status = actions.status { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                Divider()
                 Picker("Contact", selection: $contactID) { Text("Unlinked").tag(UUID?.none); ForEach(store.contacts) { Text($0.displayName).tag(Optional($0.id)) } }
                 Picker("Company", selection: $companyID) { Text("Unlinked").tag(UUID?.none); ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) } }
                 Toggle("Reviewed", isOn: $reviewed)
                 Button("Save review") { perform { try store.reviewMail(mail.id, reviewed: reviewed, contactID: contactID, companyID: companyID); return "Review saved." } }
-                Divider()
                 Button(mail.taskID == nil ? "Create review task" : "Linked task saved") {
                     perform { _ = try store.createMailTask(mail.id); return "Task saved in Tasks. This message keeps the same linked task." }
                 }
@@ -250,9 +267,76 @@ private struct MailReviewDetail: View {
                 if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
         }.onAppear { contactID = mail.contactID; companyID = mail.companyID; reviewed = mail.reviewed }
+            .task(id: mail.id) { await actions.load(message: mail, intake: intake) }
             .sheet(isPresented: $showCapture) { CaptureReviewSheet(recordKey: "mail:\(mail.id.uuidString.lowercased())", initial: mail.capture) }
+            .sheet(item: $compose) { request in
+                MailComposeSheet(action: request.action, initial: request.draft, onCancel: { compose = nil }, onSave: { draft in
+                    await run(.editDraft, draft: draft)
+                }, onSend: { draft in
+                    await run(request.action, draft: draft)
+                })
+            }
+            .confirmationDialog("Move this message to Trash?", isPresented: $confirmTrash, titleVisibility: .visible) {
+                ForEach(MailTrashConfirmation.buttons) { button in
+                    trashConfirmationButton(button)
+                }
+            } message: {
+                Text("The message stays in Trash and is not erased. Cancel leaves the mailbox unchanged.")
+            }
     }
+    @ViewBuilder
+    private func trashConfirmationButton(_ button: MailTrashDialogButton) -> some View {
+        switch button.kind {
+        case .cancel:
+            if button.isDefault {
+                Button(button.title, role: .cancel) {}
+                    .keyboardShortcut(.defaultAction)
+            } else {
+                Button(button.title, role: .cancel) {}
+            }
+        case .trash:
+            if button.isDestructive && button.isDefault {
+                Button(button.title, role: .destructive) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+                .keyboardShortcut(.defaultAction)
+            } else if button.isDestructive {
+                Button(button.title, role: .destructive) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+            } else if button.isDefault {
+                Button(button.title) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button(button.title) {
+                    Task { _ = await run(.trash, draft: nil) }
+                }
+            }
+        }
+    }
+
     private func perform(_ action: () throws -> String) { do { message = try action() } catch { message = error.localizedDescription } }
+
+    private func handle(_ action: MailboxAction) {
+        switch action {
+        case .reply, .replyAll, .forward, .editDraft:
+            compose = MailComposeRequest(action: action, draft: MailComposePrefill.draft(
+                action: action, sender: mail.sender, recipient: mail.recipient, subject: mail.subject,
+                body: actions.body?.quoteText ?? "", account: mail.accountID))
+        case .trash:
+            confirmTrash = true
+        case .archive, .markRead, .markUnread:
+            Task { _ = await run(action, draft: nil) }
+        }
+    }
+
+    private func run(_ action: MailboxAction, draft: MailCompose?) async -> String? {
+        let resolution = MailActionResolver.resolve(action: action, sourceID: mail.sourceID, compose: draft, decision: .confirm)
+        guard case .ready(let command) = resolution else { return nil }
+        return await actions.perform(command, store: store, localID: mail.id)
+    }
 }
 
 struct WorkspaceRecoveryControls: View {
