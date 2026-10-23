@@ -68,3 +68,21 @@ It's highly recommended to create new app entities using `yarn twenty dev:add`. 
 | Connection provider  | `yarn twenty dev:add connectionProvider` | `src/connection-providers/<name>.ts`  |
 
 This helps automatically generate required IDs etc.
+
+## Cloud Agent
+
+Linux Cloud Agents validate the parked Twenty extension and the PHAROS Worker. The native ControlWard app needs macOS 15 and Swift 6, and the Lima Twenty VM under `./bin/twenty-local` is Mac-only. The Twenty extension in `src/` is descoped and is not part of the operational pipeline.
+
+Use Node `24.5.0` from `.nvmrc` and Yarn `4.13.0`. The agent image may put another Node earlier on `PATH`; run Node and Yarn from `/usr/local/bin` after that version is installed there.
+
+```bash
+yarn lint
+yarn typecheck
+yarn test:unit
+yarn test:worker
+yarn check:worker
+```
+
+`yarn test` skips Twenty integration tests unless `TWENTY_API_KEY` is set and a Twenty server is already running.
+
+The local Worker listens on port 8787. It uses a local D1 database under `/tmp/pharos-wrangler` and the placeholder keys `local-dev-pharos-key`, `local-dev-leadgen-key`, and `local-dev-intake-key`. Keep Wrangler in local mode. `--remote` targets the live Cloudflare database. Health check: `GET http://127.0.0.1:8787/v1/health`.
