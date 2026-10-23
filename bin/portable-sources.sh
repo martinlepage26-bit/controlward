@@ -16,6 +16,7 @@ PORTABLE_SOURCES=(
   ProspectSearchRun.swift
   LeadProof.swift
   LeadPipelineEnvironment.swift
+  ProspectResearch.swift
 )
 PORTABLE_TESTS=(
   PortableCheck.swift

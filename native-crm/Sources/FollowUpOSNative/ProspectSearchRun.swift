@@ -22,6 +22,8 @@ struct ProspectSearchRun: Sendable {
         var drafts: [OutreachDraft] = []
         var refusals: [String: String] = [:]
         var skipped: [String: String] = [:]
+        /// Every place discovery returned (place id + normalized domain only), for the Overview funnel.
+        var discovered: [DiscoveredPlace] = []
     }
 
     let config: ICPConfig
@@ -46,8 +48,18 @@ struct ProspectSearchRun: Sendable {
                                                                           longitude: request.longitude, radiusMeters: request.radiusMeters,
                                                                           limit: request.limit)
         report.candidates = candidates.count
+        var seenDomains = Set<String>()
         for candidate in candidates {
-            guard let website = candidate.website, let siteURL = Self.siteURL(website), let host = siteURL.host?.lowercased() else {
+            let website = candidate.website.flatMap(Self.siteURL)
+            let host = website?.host?.lowercased()
+            let normalized = ProspectIdentity.normalizedDomain(host)
+            var place = DiscoveredPlace(placeID: candidate.osmID, domain: normalized, usableWebsite: false, closed: candidate.closed)
+            defer { report.discovered = DiscoveredPlace.merge([place], into: report.discovered) }
+            if candidate.closed {
+                report.skipped[candidate.osmID] = "closed business"
+                continue
+            }
+            guard let siteURL = website, let host else {
                 report.skipped[candidate.osmID] = "no own website on the listing"
                 continue
             }
@@ -55,9 +67,19 @@ struct ProspectSearchRun: Sendable {
                 report.skipped[candidate.osmID] = "website host not fetchable"
                 continue
             }
+            if let normalized, !seenDomains.insert(normalized).inserted {
+                report.skipped[candidate.osmID] = "duplicate domain"
+                continue
+            }
             let domain = HostMatch.registrable(host)
             let pages = await fetchSite(siteURL, domain: domain, segment: segment)
             guard !pages.isEmpty else { report.skipped[candidate.osmID] = "own site not readable"; continue }
+            if ProspectIdentity.siteSaysClosed(pages) {
+                place.closed = true
+                report.skipped[candidate.osmID] = "closed business (own site)"
+                continue
+            }
+            place.usableWebsite = true
             var record = Self.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: runID)
             if let source = RBQOpenData.source(config), let rbq { rbq.enrich(&record, municipality: candidate.city, source: source) }
             if let tender = TenderWatcher.openTender(for: record.organisation, in: watchItems, now: clock.now) { record.openTenderURL = tender.link }
@@ -126,7 +148,7 @@ struct ProspectSearchRun: Sendable {
         record.fetcher = "controlward:\(runID)"
         record.businessDomain = domain
         record.osmTags = candidate.tags
-        record.snapshots = pages.map { SiteSnapshot(url: $0.url, fetchedAt: $0.fetchedAt, text: $0.text) }
+        record.snapshots = pages.map { SiteSnapshot(url: $0.url, fetchedAt: $0.fetchedAt, text: $0.text, links: $0.links) }
         if let page = pages.first(where: { $0.address != nil }) {
             record.address = page.address
             record.addressSource = .ownSite
@@ -157,6 +179,7 @@ struct ProspectSearchRun: Sendable {
             record.fetchedAt = pages[0].fetchedAt
         }
         if pages.contains(where: { !$0.linkedinURLs.isEmpty }) { record.linkedinNote = config.etiquette.linkedinNote }
+        record.research = ProspectResearcher.research(name: candidate.name, pages: pages, segment: segment, triggers: triggers, config: config)
         return record
     }
 }

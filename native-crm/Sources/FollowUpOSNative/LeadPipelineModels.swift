@@ -78,6 +78,8 @@ struct SiteSnapshot: Codable, Equatable, Sendable {
     var url: String
     var fetchedAt: Date
     var text: String
+    /// Links seen on the page (optional so older stores still decode). Evidence for a booking URL may be a link.
+    var links: [String]? = nil
     var host: String { URL(string: url)?.host?.lowercased() ?? "" }
 }
 
@@ -161,4 +163,6 @@ struct ProspectRecord: Codable, Equatable, Identifiable, Sendable {
     var dataAttribution: String?
     var status: ProspectStatus = .fix
     var reasons: [String] = []
+    /// Own-site research: `observed_facts` and `assessment`. Drafts quote only evidence that checks out against `snapshots`.
+    var research: ProspectResearch?
 }

@@ -113,6 +113,22 @@ enum ProspectDisplay {
         if let contact = record.contact { lines.append("\(contact.name)\(contact.title.map { ", \($0)" } ?? "") (\(contact.titleSource?.rawValue ?? "no title source"))") }
         if let trigger = record.trigger { lines.append("Trigger (\(trigger.state.rawValue)): \(trigger.summary)") }
         if let fit = record.fit { lines.append("Fit: \(fit)") }
+        if let research = record.research {
+            let facts = research.observedFacts
+            var seen: [String] = []
+            if !facts.serviceCategories.isEmpty { seen.append("services: \(facts.serviceCategories.joined(separator: ", "))") }
+            if !facts.serviceAreas.isEmpty { seen.append("areas: \(facts.serviceAreas.joined(separator: ", "))") }
+            if !facts.languagesSeen.isEmpty { seen.append("languages: \(facts.languagesSeen.joined(separator: "/"))") }
+            if let contact = facts.contactPageURL { seen.append("contact page: \(contact)") }
+            seen.append("booking: \(facts.bookingURL ?? "none seen")")
+            lines.append("Observed: \(seen.joined(separator: " · "))")
+            let assessment = research.assessment
+            if assessment.requiresManualReview {
+                lines.append("Assessment: needs manual review\(assessment.unknowns.isEmpty ? "" : " (unknown: \(assessment.unknowns.joined(separator: ", ")))")")
+            } else if let offer = assessment.potentialOffer {
+                lines.append("Assessment: \(offer) · \(assessment.supportingEvidence.count) evidence excerpt(s)")
+            }
+        }
         lines.append("Risk: \(record.risk ?? LeadDefinition.riskLine(record))")
         if !record.reasons.isEmpty { lines.append("Fix: \(record.reasons.joined(separator: "; "))") }
         if !record.rbqCategories.isEmpty { lines.append("RBQ licence: \(record.rbqCategories.joined(separator: ", "))") }

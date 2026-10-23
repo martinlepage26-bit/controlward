@@ -14,6 +14,8 @@ struct LeadPipelineEnvironment: Sendable {
     var suppressionURL: URL { root.appendingPathComponent("suppression.json") }
     var draftsURL: URL { root.appendingPathComponent("drafts.json") }
     var rbqDirectory: URL { root.appendingPathComponent("rbq") }
+    /// Place ids and normalized domains seen by discovery (no contact data), for the funnel.
+    var discoveredURL: URL { root.appendingPathComponent("discovered.json") }
 
     /// `CONTROLWARD_LEADS_DIR`, else `~/Library/Application Support/ControlWard/leads`.
     static func defaultRoot() -> URL {
@@ -71,6 +73,9 @@ struct LeadPipelineEnvironment: Sendable {
             _ = await ProspectIngest.ingest(report.prospects, into: store, config: config, now: clock.now, audit: audit)
             reports.append(report)
         }
+        let places = DiscoveredPlace.merge(reports.flatMap(\.discovered), into: discoveredPlaces())
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder.iso.encode(places) { try? data.write(to: discoveredURL, options: .atomic) }
         var drafts = (try? JSONDecoder.iso.decode([OutreachDraft].self, from: Data(contentsOf: draftsURL))) ?? []
         drafts += reports.flatMap(\.drafts)
         if let data = try? JSONEncoder.iso.encode(drafts) { try? data.write(to: draftsURL, options: .atomic) }
@@ -84,5 +89,14 @@ struct LeadPipelineEnvironment: Sendable {
         let count = launch?["receipt"].flatMap { Int($0.replacingOccurrences(of: "store-", with: "")) } ?? -1
         let drafts = (try? JSONDecoder.iso.decode([OutreachDraft].self, from: Data(contentsOf: draftsURL))) ?? []
         return (count, lines, ProspectLeadsStore(fileURL: storeURL).records, drafts)
+    }
+
+    func discoveredPlaces() -> [DiscoveredPlace] {
+        (try? JSONDecoder.iso.decode([DiscoveredPlace].self, from: Data(contentsOf: discoveredURL))) ?? []
+    }
+
+    /// The Overview funnel: discovered → usable website → appropriate contact → evidence-backed opportunity.
+    func funnel(now: Date = Date()) -> LeadFunnel {
+        LeadFunnel.compute(places: discoveredPlaces(), records: ProspectLeadsStore(fileURL: storeURL).records, config: config, now: now)
     }
 }

@@ -290,6 +290,7 @@ enum LeadPipelineTests {
                 var test = LeadKit.readyClinic(id: "cw:test:1", email: "test@exemple.test")
                 test.isTest = true
                 test.provenance = .test
+                test.businessDomain = "exemple.test"
                 let result = await ProspectIngest.ingest([original, LeadKit.readyClinic(id: "cw:osm:node/6", email: "x@y.test"), phoneTwin, test],
                                                          into: store, config: config, now: now, audit: audit)
                 try expect(store.records.count == 2 && result.merged.count == 2, "records \(store.records.map(\.id)) merged \(result.merged)")
@@ -334,6 +335,115 @@ enum LeadPipelineTests {
                 for check in checks { try expect(check.passed, "bar \(check.number) \(check.name): \(check.detail)") }
                 try expect(inputs.lines.contains { $0.contains("surface=leads action=ingest") }, "ingest line")
                 try expect(env.recordLaunch(audit: MemoryAuditSink()) == 1, "second launch sees one stored prospect")
+            }),
+            ("Research: observed_facts and assessment come from the own site, every fact with verbatim evidence", {
+                let fixture = SearchFixture(config: config)
+                let report = await fixture.run()
+                let record = try unwrap(report.prospects.first, "prospect")
+                let research = try unwrap(record.research, "research")
+                let facts = research.observedFacts
+                try expect(facts.companyName == "Clinique Exemple Nord" && facts.evidence["company_name"]?.first?.url == LeadKit.homePage, "company name \(facts)")
+                try expect(facts.serviceCategories.contains("clinique") && facts.languagesSeen == ["fr"], "categories/languages \(facts)")
+                try expect(facts.bookingURL == nil && research.assessment.unknowns.contains("booking URL"), "no booking link seen: \(research.assessment.unknowns)")
+                for (key, items) in facts.evidence {
+                    for item in items { try expect(ProspectResearcher.isEvidenced(item, in: record.snapshots), "\(key) evidence not verbatim: \(item)") }
+                }
+                try expect(research.assessment.supportingEvidence == [FactEvidence(url: LeadKit.homePage, excerpt: "Prendre rendez-vous en ligne")], "\(research.assessment)")
+                try expect(research.assessment.potentialOffer != nil && !research.assessment.requiresManualReview, "evidence-backed offer")
+                let json = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
+                for key in ["\"observed_facts\"", "\"assessment\"", "\"supporting_evidence\"", "\"requires_manual_review\"", "\"booking_url\":null", "\"languages_seen\""] {
+                    try expect(json.contains(key), "stored JSON has \(key)")
+                }
+            }),
+            ("Research: a booking link and a service-area line become facts with evidence", {
+                let page = SiteExtractor.read(html: "<p>Clinique Exemple Nord</p><p>Territoire desservi : Rosemont et Villeray.</p><a href=\"https://www.clinique-exemple.test/prendre-rendez-vous\">RDV</a><p>Our team and your care</p>",
+                                              url: URL(string: LeadKit.homePage)!, fetchedAt: now)
+                let segment = try unwrap(config.segment("clinic"), "clinic")
+                let research = ProspectResearcher.research(name: "Clinique Exemple Nord", pages: [page], segment: segment, triggers: [], config: config)
+                let facts = research.observedFacts
+                try expect(facts.bookingURL == "https://www.clinique-exemple.test/prendre-rendez-vous", "booking \(String(describing: facts.bookingURL))")
+                try expect(facts.serviceAreas == ["Rosemont et Villeray"], "areas \(facts.serviceAreas)")
+                try expect(facts.languagesSeen.contains("en"), "en seen \(facts.languagesSeen)")
+                let snapshot = SiteSnapshot(url: page.url, fetchedAt: now, text: page.text, links: page.links)
+                for item in facts.evidence.values.flatMap({ $0 }) { try expect(ProspectResearcher.isEvidenced(item, in: [snapshot]), "evidence \(item)") }
+                try expect(research.assessment.requiresManualReview && research.assessment.potentialOffer == nil, "no trigger, so manual review")
+            }),
+            ("Drafts: quote only evidenced facts; no conclusion, no unsupported quote or URL, nothing when review is needed", {
+                let lead = LeadKit.readyClinic()
+                let draft = LeadKit.draft(for: lead, config: config)
+                try expect(draft.body.contains("« Prendre rendez-vous en ligne »") && draft.body.contains(LeadKit.homePage), "cites the evidence:\n\(draft.body)")
+                try expect(!draft.body.contains(lead.fit ?? "<none>"), "the fit conclusion is not in the draft")
+                try expect(OutreachDraftGate.check(draft, prospect: lead, config: config, suppression: SuppressionList(), now: now) == nil, "clean draft passes")
+                var invented = draft
+                invented.body = invented.body.replacingOccurrences(of: "« Prendre rendez-vous en ligne »", with: "« Chef de file en IA au Québec »")
+                try expect(OutreachDraftGate.check(invented, prospect: lead, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:unsupported-claim", "invented quote")
+                var elsewhere = draft
+                elsewhere.body = elsewhere.body.replacingOccurrences(of: LeadKit.homePage, with: "https://annuaire.example.test/clinique")
+                try expect(OutreachDraftGate.check(elsewhere, prospect: lead, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:unsupported-claim", "off-site URL")
+                var stale = lead
+                stale.snapshots[0].text = "Clinique Exemple Nord"
+                try expect(OutreachDraftGate.check(draft, prospect: stale, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:manual-review", "excerpt gone from snapshot")
+                var review = lead
+                review.research?.assessment.requiresManualReview = true
+                let reviewDraft = LeadKit.draft(for: review, config: config)
+                try expect(!(reviewDraft.body.components(separatedBy: "\n--\n").first ?? "").contains("«"), "no quote when review is needed")
+                try expect(OutreachDraftGate.check(reviewDraft, prospect: review, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:manual-review", "manual review")
+            }),
+            ("Dedupe: place id or normalized domain (www, case, trailing dot) is one lead", {
+                try expect(ProspectIdentity.normalizedDomain("WWW.Clinique-Exemple.test.") == "clinique-exemple.test", "normalize")
+                try expect(ProspectIdentity.normalizedDomain("https://www.clinique-exemple.test/equipe") == "clinique-exemple.test", "normalize URL")
+                let store = ProspectLeadsStore()
+                var first = LeadKit.readyClinic(id: "cw:osm:node/1", email: "info@clinique-exemple.test")
+                first.phone = "514 555 0101"
+                var second = LeadKit.readyClinic(id: "cw:osm:way/2", email: "accueil@clinique-exemple.test")
+                second.phone = "514 555 0199"
+                second.businessDomain = "WWW.clinique-exemple.test."
+                _ = await ProspectIngest.ingest([first, second], into: store, config: config, now: now, audit: MemoryAuditSink())
+                try expect(store.records.count == 1, "same domain is one lead: \(store.records.map(\.id))")
+                let merged = DiscoveredPlace.merge([DiscoveredPlace(placeID: "osm:node/1", domain: "www.a.test", usableWebsite: false),
+                                                    DiscoveredPlace(placeID: "osm:node/1", domain: nil, usableWebsite: true),
+                                                    DiscoveredPlace(placeID: "osm:way/9", domain: "A.test", usableWebsite: true),
+                                                    DiscoveredPlace(placeID: "osm:node/3", domain: "b.test", usableWebsite: true)], into: [])
+                try expect(merged.count == 2 && merged[0].usableWebsite && merged[0].domain == "a.test", "\(merged)")
+            }),
+            ("Closed businesses are dropped: OSM lifecycle tags, a closed name, or the own site says so", {
+                let data = Data("""
+                {"elements":[{"type":"node","id":1,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique A","disused:healthcare":"clinic"}},
+                {"type":"node","id":2,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique B","healthcare":"clinic","opening_hours":"closed"}},
+                {"type":"node","id":3,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique C (fermé)","healthcare":"clinic"}},
+                {"type":"node","id":4,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique D","healthcare":"clinic","end_date":"2025-06"}},
+                {"type":"node","id":5,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique E","healthcare":"clinic"}}]}
+                """.utf8)
+                let parsed = LeadDiscovery.parseOverpass(data, via: "overpass")
+                try expect(parsed.map(\.closed) == [true, true, true, true, false], "\(parsed.map { ($0.name, $0.closed) })")
+                let fixture = SearchFixture(config: config)
+                fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1><p>La clinique est définitivement fermée.</p><p>Prendre rendez-vous en ligne</p>")
+                let report = await fixture.run()
+                try expect(report.prospects.isEmpty && report.drafts.isEmpty, "closed site gives no lead")
+                try expect(report.skipped["osm:node/1001"] == "closed business (own site)" && report.discovered.first?.closed == true, "\(report.skipped)")
+            }),
+            ("Funnel: discovered, usable website, appropriate contact, evidence-backed opportunity (not raw rows)", {
+                try expect(LeadFunnel.labels == ["Businesses discovered", "With a usable website", "Appropriate contact found", "Evidence-backed opportunity"], "labels")
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-funnel-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: root) }
+                let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
+                let fixture = SearchFixture(config: config)
+                fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """
+                {"elements":[{"type":"node","id":1001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Nord","healthcare":"clinic","website":"https://www.clinique-exemple.test","addr:city":"Montréal"}},
+                {"type":"node","id":1002,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Sans Site","healthcare":"clinic"}},
+                {"type":"node","id":1003,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Miroir","healthcare":"clinic","website":"http://WWW.clinique-exemple.test/"}},
+                {"type":"node","id":1004,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Fermée","was:healthcare":"clinic","website":"https://ferme.example.test"}}]}
+                """, headers: ["content-type": "application/json"])
+                let reports = await env.searchAndIngest([.init(segmentID: "clinic", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 10)],
+                                                        inner: fixture.inner, audit: MemoryAuditSink(), clock: fixture.clock)
+                try expect(reports[0].skipped["osm:node/1003"] == "duplicate domain" && reports[0].skipped["osm:node/1004"] == "closed business", "\(reports[0].skipped)")
+                try expect(!fixture.inner.urls.contains { $0.contains("ferme.example.test") }, "closed site never fetched")
+                let funnel = env.funnel(now: fixture.clock.now)
+                try expect(funnel == LeadFunnel(discovered: 2, withUsableWebsite: 1, appropriateContact: 1, evidenceBackedOpportunity: 1), "\(funnel)")
+                try expect(funnel.stages.map(\.label) == LeadFunnel.labels && zip(funnel.values, funnel.values.dropFirst()).allSatisfy { $0 >= $1 }, "monotone stages")
+                _ = await env.searchAndIngest([.init(segmentID: "clinic", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 10)],
+                                              inner: fixture.inner, audit: MemoryAuditSink(), clock: fixture.clock)
+                try expect(env.funnel(now: fixture.clock.now) == funnel, "a second run of the same places does not inflate the funnel")
             }),
             ("Proof verifier: flags a seeded store, a send line and an off-allowlist host", {
                 let fixture = SearchFixture(config: config)

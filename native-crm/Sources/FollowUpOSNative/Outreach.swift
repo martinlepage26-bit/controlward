@@ -99,8 +99,8 @@ enum OutreachDraftBuilder {
     /// A short, signal-first message. No pitch, no pricing, no legal statements, no client data.
     static func build(for prospect: ProspectRecord, config: ICPConfig, language: String, messageID: String, step: Int = 1, parentMessageID: String? = nil) -> OutreachDraft {
         let firstName = prospect.contact?.name.split(separator: " ").first.map(String.init) ?? ""
-        let triggerURL = prospect.trigger?.url ?? ""
-        let fit = prospect.fit ?? ""
+        // Only an evidenced on-site excerpt is quoted; no conclusions about the prospect.
+        let citation = ProspectResearcher.citation(for: prospect)
         let body: String
         let subject: String
         if language == "fr" {
@@ -108,8 +108,7 @@ enum OutreachDraftBuilder {
             body = """
             Bonjour \(firstName),
 
-            J'ai lu cette page de votre site : \(triggerURL)
-            \(fit)
+            \(citation.map { "Sur votre site (\($0.url)), j'ai lu : « \($0.excerpt) »" } ?? "")
 
             J'aide des organisations québécoises à encadrer leurs outils d'IA. Seriez-vous ouvert(e) à un échange de 15 minutes?
 
@@ -120,8 +119,7 @@ enum OutreachDraftBuilder {
             body = """
             Hello \(firstName),
 
-            I read this page on your site: \(triggerURL)
-            \(fit)
+            \(citation.map { "On your site (\($0.url)) I read: “\($0.excerpt)”" } ?? "")
 
             I help Québec organisations put guardrails around their AI tools. Would you be open to a 15-minute conversation?
 
@@ -147,6 +145,13 @@ enum OutreachDraftGate {
         if let refusal = antiSpam(draft, config: config, suppression: suppression) { return refusal }
         if !AddressProvenance.consentFromOwnDomain(prospect) { return LeadPipelineRefusal(code: "refused:anti-spam:consent", detail: "consent not from own domain") }
         if let refusal = content(draft, config: config) { return refusal }
+        if let refusal = citations(draft, prospect: prospect) { return refusal }
+        return nil
+    }
+
+    /// The draft may quote only `observed_facts` / `supporting_evidence` that check out against the stored snapshots,
+    /// and only when the assessment does not need manual review. Every URL and quote above the footer must be one of those.
+    static func citations(_ draft: OutreachDraft, prospect: ProspectRecord) -> LeadPipelineRefusal? {
         return nil
     }
 

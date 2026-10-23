@@ -10,6 +10,8 @@ struct LeadCandidate: Equatable, Sendable {
     var latitude: Double
     var longitude: Double
     var discoveredVia: String
+    /// OSM lifecycle tags or the name say the place no longer operates. Closed places are dropped by the run.
+    var closed = false
 }
 
 /// Overpass first (overpass.private.coffee), then Photon (photon.komoot.io), per segment selector from icp.json.
@@ -86,7 +88,8 @@ struct LeadDiscovery: Sendable {
             let tagList = tags.filter { !["name", "website", "contact:website", "url", "phone", "contact:phone", "email", "contact:email"].contains($0.key) && !$0.key.hasPrefix("addr:") }
                 .map { "\($0.key)=\($0.value)" }.sorted()
             return LeadCandidate(osmID: "osm:\(type)/\(id)", name: name, website: website, tags: tagList,
-                                 city: tags["addr:city"], latitude: lat, longitude: lon, discoveredVia: via)
+                                 city: tags["addr:city"], latitude: lat, longitude: lon, discoveredVia: via,
+                                 closed: ProspectIdentity.isClosed(tags: tags, name: name))
         }
     }
 
@@ -104,7 +107,8 @@ struct LeadDiscovery: Sendable {
             let extra = properties["extra"] as? [String: Any]
             return LeadCandidate(osmID: "osm:\(type)/\(id)", name: name, website: extra?["website"] as? String, tags: tags,
                                  city: properties["city"] as? String, latitude: coordinates.count > 1 ? coordinates[1] : 0,
-                                 longitude: coordinates.first ?? 0, discoveredVia: via)
+                                 longitude: coordinates.first ?? 0, discoveredVia: via,
+                                 closed: ProspectIdentity.isClosed(tags: [:], name: name))
         }
     }
 }

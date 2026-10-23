@@ -51,6 +51,15 @@ enum LeadKit {
                                          summary: "online booking on /")
         record.fit = "Clinic with online booking: AI-tool guardrails"
         record.consent = .conspicuousPublication(contactPage)
+        var facts = ObservedFacts(companyName: "Clinique Exemple Nord", serviceCategories: ["clinique"], languagesSeen: ["fr"], contactPageURL: contactPage)
+        facts.evidence = ["company_name": [FactEvidence(url: homePage, excerpt: "Clinique Exemple Nord")],
+                          "service_categories": [FactEvidence(url: homePage, excerpt: "Clinique Exemple Nord")],
+                          "languages_seen": [FactEvidence(url: contactPage, excerpt: "Nous joindre")],
+                          "contact_page_url": [FactEvidence(url: contactPage, excerpt: "Nous joindre")]]
+        record.research = ProspectResearch(observedFacts: facts, assessment: ResearchAssessment(
+            potentialOffer: "Clinics: AI-use guardrails review (signal: ai_tool_on_own_site)",
+            supportingEvidence: [FactEvidence(url: homePage, excerpt: "Prendre rendez-vous en ligne")],
+            unknowns: ["service areas", "booking URL"], requiresManualReview: false))
         return record
     }
 
