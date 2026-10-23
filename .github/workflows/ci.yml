@@ -79,6 +79,16 @@ jobs:
           swift --version
           actual_major="$(swift --version | sed -nE 's/.*Swift version ([0-9]+).*/\1/p' | head -1)"
           test "${actual_major:-0}" -ge 6
+      # Argus planted reds 9 and 10 are pharos-api vitest cases: install the JS deps so the native suite counts 56/56.
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+      - run: yarn install --immutable
+      - name: Require vitest for the planted-red tally (fail loudly if missing)
+        run: |
+          test -x node_modules/.bin/vitest || { echo "vitest missing after yarn install - Argus reds 9 and 10 cannot run" >&2; exit 1; }
       - name: Native test suite
         run: ./bin/test-native-app
       - name: Native release build

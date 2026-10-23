@@ -8,7 +8,8 @@ import FoundationNetworking
 /// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth). A case "fails" when the code refuses
 /// it, so a healthy build prints `expected 56 failures, got 56: OK`. Any other count exits non-zero.
 /// Argus reds 9 and 10 live in pharos-api's vitest suite; they count only when CW_PHAROS_PLANTED_REDS points at that
-/// run's JSON report and the matching tests passed. Without the report they are RED-MISSED and the total is a MISMATCH.
+/// run's JSON report and the matching tests passed. Without the report they print RED-NOT-RUN with the reason (never "accepted")
+/// and the total is a MISMATCH.
 /// bin/test-portable and bin/test-native-app make that report via bin/pharos-planted-reds.sh (vitest from the repo root
 /// after `yarn install`, or pharos-api/node_modules); with no vitest they leave it unset, so the count fails loudly.
 enum LeadPipelinePlantedReds {
@@ -25,12 +26,21 @@ enum LeadPipelinePlantedReds {
 
     /// The line for a red that did not fail as planted.
     static func missedLine(group: String, label: String, report: PharosPlantedReds.Status? = nil) -> String {
-        "  RED-MISSED [\(group)] \(label): the planted bad input was accepted"
+        if case .missing(let reason)? = report {
+            return "  RED-NOT-RUN [\(group)] \(label): NOT-RUN, the pharos-api vitest check did not run (\(reason)); counted as a failed check"
+        }
+        return "  RED-MISSED [\(group)] \(label): the planted bad input was accepted"
     }
+
+    /// Thrown by a probe whose check could not run (e.g. no vitest report). Never counted as a caught red.
+    struct NotRun: Error { var reason: String }
+
+    /// Real counts from the last run(), for the smoke-test failure text.
+    nonisolated(unsafe) static var lastFailures = 0
 
     /// The smoke-test failure text with the real counts.
     static func tallyMessage(expected: Int, got: Int) -> String {
-        "Slice 3 planted reds did not print expected 56 failures, got 56: OK"
+        "Slice 3 planted reds: expected \(expected) failures, got \(got): \(expected == got ? "OK" : "MISMATCH")"
     }
     static let expectedByGroup: [(String, Int)] = [
         ("S3-RED (original)", 4), ("S3-RED-PC", 1), ("S3-RED-SRC", 2), ("S3-RED-SPAM", 5), ("S3-RED-SEQ", 2), ("S3-RED-FROM", 1),
@@ -43,19 +53,23 @@ enum LeadPipelinePlantedReds {
         do { cases = try makeCases() } catch {
             print("  FAIL planted reds: could not load config: \(error)")
             print("expected \(expectedTotal) failures, got 0: MISMATCH")
+            lastFailures = 0
             return false
         }
         var failures = 0
         var byGroup: [String: Int] = [:]
         for item in cases {
             var outcome: String?
-            do { outcome = try await item.probe() } catch { outcome = "threw \(error)" }
-            if let outcome {
+            var notRun: String?
+            do { outcome = try await item.probe() } catch let skipped as NotRun { notRun = skipped.reason } catch { outcome = "threw \(error)" }
+            if let notRun {
+                print(missedLine(group: item.group, label: item.label, report: .missing(notRun)))
+            } else if let outcome {
                 failures += 1
                 byGroup[item.group, default: 0] += 1
                 print("  RED-OK [\(item.group)] \(item.label): \(outcome)")
             } else {
-                print("  RED-MISSED [\(item.group)] \(item.label): the planted bad input was accepted")
+                print(missedLine(group: item.group, label: item.label))
             }
         }
         var ok = cases.count == expectedTotal
@@ -67,6 +81,7 @@ enum LeadPipelinePlantedReds {
             print("\(group): expected \(expected) failures, got \(got): \(line)")
         }
         ok = ok && failures == expectedTotal
+        lastFailures = failures
         print("Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
         if ok { print("expected \(expectedTotal) failures, got \(failures): OK") }
         return ok
@@ -420,10 +435,10 @@ enum LeadPipelinePlantedReds {
             return OutreachSendGate.check(edited, approval: approval, config: cfg, suppression: SuppressionList())?.code
         }
         add("ARGUS-RED", "9 PUSH-MIXED-RETRACT (pharos-api vitest): one refused lead drops the packet's retractions") {
-            PharosPlantedReds.passed("ARGUS-RED-9")
+            try PharosPlantedReds.caughtOrThrow("ARGUS-RED-9")
         }
         add("ARGUS-RED", "10 PUSH-TEST-STORED-AS-REAL (pharos-api vitest): a test lead is served like a real one") {
-            PharosPlantedReds.passed("ARGUS-RED-10")
+            try PharosPlantedReds.caughtOrThrow("ARGUS-RED-10")
         }
         add("ARGUS-RED", "11 PUSH-POLICY-PARITY: Swift accepts form_source \"   \" (or test:1) that pharos-api refuses") {
             let blank = LeadPushPolicy.check(["provenance": ["kind": "inbound_form", "form_source": "   "]])
@@ -471,20 +486,25 @@ enum PharosPlantedReds {
     }
 
     static func status(_ marker: String, path: String?) -> Status {
-        passed(marker).map(Status.caught) ?? .notCaught
-    }
-
-    static func passed(_ marker: String) -> String? {
-        guard let path = ProcessInfo.processInfo.environment["CW_PHAROS_PLANTED_REDS"], !path.isEmpty,
-              let data = FileManager.default.contents(atPath: path),
-              let report = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let files = report["testResults"] as? [[String: Any]] else { return nil }
+        guard let path, !path.isEmpty else { return .missing("CW_PHAROS_PLANTED_REDS not set: vitest did not run (no node_modules / yarn install)") }
+        guard let data = FileManager.default.contents(atPath: path) else { return .missing("vitest report not found at \(path)") }
+        guard let report = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let files = report["testResults"] as? [[String: Any]] else { return .missing("vitest report at \(path) is not readable JSON") }
         for file in files {
             for test in (file["assertionResults"] as? [[String: Any]]) ?? [] {
                 let title = (test["fullName"] as? String) ?? (test["title"] as? String) ?? ""
-                if title.contains(marker) { return test["status"] as? String == "passed" ? "vitest passed: \(title)" : nil }
+                if title.contains(marker) { return test["status"] as? String == "passed" ? .caught("vitest passed: \(title)") : .notCaught }
             }
         }
-        return nil
+        return .missing("no \(marker) case in the vitest report")
+    }
+
+    /// The caught text, nil when vitest ran and the case did not hold, or NotRun when there is no usable report.
+    static func caughtOrThrow(_ marker: String) throws -> String? {
+        switch status(marker, path: ProcessInfo.processInfo.environment["CW_PHAROS_PLANTED_REDS"]) {
+        case .caught(let text): return text
+        case .notCaught: return nil
+        case .missing(let reason): throw LeadPipelinePlantedReds.NotRun(reason: reason)
+        }
     }
 }
