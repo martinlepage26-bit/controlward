@@ -19,8 +19,9 @@ enum MailActionOutcomes {
         case .trash:
             do { try removeLocalRow() }
             catch {
+                // The remote Trash happened but the local step did not: this is a failure, not a success.
                 let text = "Moved to Trash in the mailbox. The local metadata row could not be removed."
-                return MailActionOutcome(status: text, failure: nil, auditResult: "ok")
+                return MailActionOutcome(status: text, failure: text, auditResult: "partial:local-row")
             }
             return MailActionOutcome(status: "Moved to Trash. The message is still in the mailbox Trash and was not erased.", failure: nil, auditResult: "ok")
         case .reply, .replyAll, .forward:
