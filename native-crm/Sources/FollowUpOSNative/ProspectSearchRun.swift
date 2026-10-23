@@ -115,6 +115,9 @@ struct ProspectSearchRun: Sendable {
         return report
     }
 
+    /// A skip reason as an audit result code: lowercase words joined by `-`.
+    static func reasonCode(_ reason: String) -> String { reason }
+
     static func siteURL(_ website: String) -> URL? {
         let trimmed = website.trimmingCharacters(in: .whitespaces)
         let withScheme = trimmed.lowercased().hasPrefix("http") ? trimmed : "https://\(trimmed)"

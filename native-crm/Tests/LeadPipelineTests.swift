@@ -109,6 +109,7 @@ enum LeadPipelineTests {
                 let shape = config.etiquette.discoveryQuery ?? .standard
                 try expect(config.etiquette.discoveryQuery != nil, "icp.json carries discovery_query")
                 try expect(shape.clientTimeoutMarginSeconds == 10, "margin is 10 s, got \(shape.clientTimeoutMarginSeconds)")
+                try expect(shape.overpassQueryTimeoutSeconds == 60 && shape.clientTimeoutSeconds == 70, "Water 8:20: [timeout:60], client 70 s; got \(shape.overpassQueryTimeoutSeconds) / \(shape.clientTimeoutSeconds)")
                 let inner = FakeLeadTransport()
                 inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
                 let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
@@ -143,15 +144,80 @@ enum LeadPipelineTests {
                 let fetches = audit.lines.filter { $0.action == "fetch" && ($0.target == "overpass.private.coffee" || $0.target == "overpass-api.de") }
                 try expect(fetches.count == 6 && fetches.allSatisfy { $0.result == "error:network" }, "each attempt audited as a fetch: \(fetches.map(\.text))")
                 let attempts = audit.lines.filter { $0.action == "discovery-attempt" }
-                try expect(attempts.map(\.receipt) == ["attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3", "attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3"],
+                try expect(attempts.map { $0.receipt.components(separatedBy: ",").first ?? "" } == ["attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3", "attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3"],
                            "each attempt audited with its number: \(attempts.map(\.text))")
-                try expect(attempts.allSatisfy { $0.result == "retryable" }, "attempt results: \(attempts.map(\.result))")
+                try expect(attempts.allSatisfy { $0.result == "error:network" }, "attempt results: \(attempts.map(\.result))")
                 for retry in 1...12 {
                     let high = LeadDiscovery.backoffSeconds(retry: retry, policy: policy, jitter: 1, serverWait: nil)
                     let low = LeadDiscovery.backoffSeconds(retry: retry, policy: policy, jitter: 0, serverWait: nil)
                     try expect(low <= high && high <= policy.maxDelaySeconds, "retry \(retry): \(low)...\(high) bounded by \(policy.maxDelaySeconds)")
                     if retry > 1 { try expect(low >= LeadDiscovery.backoffSeconds(retry: retry - 1, policy: policy, jitter: 0, serverWait: nil), "backoff never shrinks") }
                 }
+            }),
+            ("Search audit (Earth 8:19): the search line names the provider that actually answered; every host attempt has its real result; never ok for a failed Overpass call", {
+                let fixture = SearchFixture(config: config)
+                for server in LeadDiscovery.overpassServers { fixture.inner.fail(server.absoluteString, URLError(.notConnectedToInternet)) }
+                let selectors = try unwrap(config.segment("clinic"), "clinic segment").osmSelectors
+                let first = selectors[0].split(separator: "=").map(String.init)
+                let photonURL = try unwrap(LeadDiscovery.photonURL(key: first[0], value: first[1], latitude: 45.5, longitude: -73.6, limit: 5), "photon url")
+                fixture.inner.respond(photonURL.absoluteString, body: #"{"features":[{"type":"Feature","geometry":{"coordinates":[-73.6,45.5]},"properties":{"name":"Clinique Photon Test","osm_type":"N","osm_id":4001,"osm_key":"healthcare","osm_value":"clinic"}}]}"#,
+                                      headers: ["content-type": "application/json"])
+                _ = await fixture.run()
+                let lines = fixture.audit.lines
+                let overpassHosts = Set(LeadDiscovery.overpassServers.compactMap { $0.host })
+                let overpassAttempts = lines.filter { $0.action == "discovery-attempt" && overpassHosts.contains($0.target) }
+                try expect(overpassAttempts.count == 6 && overpassAttempts.allSatisfy { $0.result == "error:network" },
+                           "each Overpass attempt records its real result: \(overpassAttempts.map { "\($0.target) \($0.result)" })")
+                let photonAttempts = lines.filter { $0.action == "discovery-attempt" && $0.target == "photon.komoot.io" }
+                try expect(photonAttempts.first?.result == "ok" && photonAttempts.count == selectors.count, "Photon attempts audited: \(photonAttempts.map(\.result))")
+                try expect(photonAttempts.dropFirst().allSatisfy { $0.result == "error:404" }, "unanswered Photon selectors: \(photonAttempts.map(\.result))")
+                let searches = lines.filter { $0.action == "search" }
+                try expect(!searches.contains { $0.register.contains("overpass") && $0.result == "ok" }, "no search line says ok for Overpass: \(searches.map(\.text))")
+                try expect(searches.contains { $0.register == CWAuditLine.register(for: LeadDiscovery.photon) && $0.result == "ok" }, "the search line names Photon as the provider that answered: \(searches.map(\.text))")
+                try expect(searches.filter { $0.result != "ok" }.allSatisfy { $0.result.hasPrefix("error:") }, "a selector nobody answered is an error: \(searches.map(\.result))")
+                let okFixture = SearchFixture(config: config)
+                _ = await okFixture.run()
+                let okSearches = okFixture.audit.lines.filter { $0.action == "search" && $0.result == "ok" }
+                try expect(!okSearches.isEmpty && okSearches.allSatisfy { $0.register == CWAuditLine.register(for: LeadDiscovery.overpass) || $0.register == CWAuditLine.register(for: LeadDiscovery.photon) },
+                           "when private.coffee answers, it is the named provider: \(okSearches.map(\.register))")
+                try expect(okSearches.contains { $0.register == CWAuditLine.register(for: LeadDiscovery.overpass) }, "private.coffee named: \(okSearches.map(\.register))")
+                try expect(okFixture.audit.lines.filter { $0.action == "discovery-attempt" && $0.target == "overpass.private.coffee" }.allSatisfy { $0.result == "ok" }, "answered attempts are ok")
+            }),
+            ("Skip audit (Earth 8:19): every skipped candidate gets an audit line with its provider, map id and reason", {
+                let fixture = SearchFixture(config: config)
+                fixture.inner.respond(LeadDiscovery.overpass.absoluteString, body: """
+                {"elements":[{"type":"node","id":1001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Nord","healthcare":"clinic","website":"https://www.clinique-exemple.test","addr:city":"Montréal"}},{"type":"node","id":1002,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Sans Site","healthcare":"clinic"}},{"type":"node","id":1003,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Fermée Test","healthcare":"clinic","disused:healthcare":"clinic","website":"https://www.fermee.test"}}]}
+                """, headers: ["content-type": "application/json"])
+                let report = await fixture.run()
+                try expect(report.skipped["osm:node/1002"] == "no own website on the listing", "skipped \(report.skipped)")
+                let skips = fixture.audit.lines.filter { $0.action == "skip" }
+                try expect(skips.count == report.skipped.count, "one skip line per skipped candidate: \(skips.count) lines for \(report.skipped.count) skipped")
+                for (id, reason) in report.skipped {
+                    let line = try unwrap(skips.first { $0.target == id }, "skip line for \(id)")
+                    try expect(line.source == "overpass.private.coffee" && line.register == CWAuditLine.register(for: LeadDiscovery.overpass),
+                               "\(id): provider recorded, got source=\(line.source) register=\(line.register)")
+                    try expect(line.result == "skipped:" + ProspectSearchRun.reasonCode(reason) && line.receipt == "test-run", "\(id): reason recorded, got \(line.text)")
+                }
+                try expect(skips.contains { $0.target == "osm:node/1002" && $0.result == "skipped:no-own-website-on-the-listing" }, "no-website skip: \(skips.map(\.text))")
+            }),
+            ("Wait time (Earth 8:20): each Overpass host attempt logs how long the query actually waited, in ms", {
+                let inner = FakeLeadTransport()
+                inner.enqueue(LeadDiscovery.overpass.absoluteString, status: 504, body: "gateway timeout")
+                inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                let clock = FakeLeadClock()
+                let waits = [32.418, 1.5]
+                let counter = NSLock()
+                nonisolated(unsafe) var sent = 0
+                inner.onSend = { _ in
+                    let index = counter.withLock { () -> Int in sent += 1; return sent - 1 }
+                    clock.advance(waits[min(index, waits.count - 1)])
+                }
+                let audit = MemoryAuditSink()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: audit, clock: clock)
+                _ = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
+                let attempts = audit.lines.filter { $0.action == "discovery-attempt" }
+                try expect(attempts.map(\.receipt) == ["attempt-1-of-3,wait-32418ms", "attempt-2-of-3,wait-1500ms"], "wait per attempt: \(attempts.map(\.receipt))")
+                try expect(attempts.map(\.result) == ["error:504", "ok"], "results \(attempts.map(\.result))")
             }),
             ("Discovery tiles (Water 7:49): a 3 km search is split into 1 km cells from config that cover the same circle; hits outside it are dropped", {
                 let shape = config.etiquette.discoveryQuery ?? .standard

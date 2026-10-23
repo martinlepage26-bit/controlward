@@ -114,8 +114,12 @@ final class FakeLeadTransport: LeadTransport, @unchecked Sendable {
         lock.withLock { queued[url, default: []].append(LeadHTTPResponse(status: status, headers: headers, body: Data(body.utf8))) }
     }
 
+    /// Runs inside every send (e.g. to move a fake clock forward by a server's answer time).
+    var onSend: (@Sendable (URLRequest) -> Void)?
+
     func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
         lock.withLock { seen.append(request) }
+        onSend?(request)
         let key = request.url?.absoluteString ?? ""
         if let error = lock.withLock({ failures[key] }) { throw error }
         if let next = lock.withLock({ () -> LeadHTTPResponse? in

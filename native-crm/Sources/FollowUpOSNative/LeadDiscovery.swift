@@ -214,6 +214,14 @@ struct LeadDiscovery: Sendable {
     }
 
     func photon(key: String, value: String, latitude: Double, longitude: Double, limit: Int) async throws -> [LeadCandidate] {
+        guard let url = Self.photonURL(key: key, value: value, latitude: latitude, longitude: longitude, limit: limit) else { return [] }
+        let response = try await transport.fetch(url, purpose: .discovery)
+        guard (200..<300).contains(response.status) else { return [] }
+        return Self.parsePhoton(response.body, via: "photon \(key)=\(value)")
+    }
+
+    /// The Photon request for one selector: the tag, the circle centre and the limit, nothing else.
+    static func photonURL(key: String, value: String, latitude: Double, longitude: Double, limit: Int) -> URL? {
         var components = URLComponents(url: Self.photon, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "q", value: value.replacingOccurrences(of: "_", with: " ")),
@@ -222,10 +230,7 @@ struct LeadDiscovery: Sendable {
             URLQueryItem(name: "lon", value: String(format: "%.5f", longitude)),
             URLQueryItem(name: "limit", value: String(min(max(limit, 1), 50)))
         ]
-        guard let url = components.url else { return [] }
-        let response = try await transport.fetch(url, purpose: .discovery)
-        guard (200..<300).contains(response.status) else { return [] }
-        return Self.parsePhoton(response.body, via: "photon \(key)=\(value)")
+        return components.url
     }
 
     static func parseOverpass(_ data: Data, via: String) -> [LeadCandidate] {
