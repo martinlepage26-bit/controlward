@@ -24,7 +24,14 @@ struct ProspectSearchRun: Sendable {
         var skipped: [String: String] = [:]
         /// Every place discovery returned (place id + normalized domain only), for the Overview funnel.
         var discovered: [DiscoveredPlace] = []
+        /// LIVE-R8: the widest radius discovery used (the request's radius unless a top-up widened it).
+        var radiusUsed = 0
+        /// LIVE-R8: set when the sector still has fewer candidates than its share after every top-up.
+        var underFillReason: String?
     }
+
+    /// LIVE-R8 (Water 14:06): an under-filled sector is topped up from the same discovery sources at these radius multiples.
+    static let topUpFactors = [2, 4]
 
     let config: ICPConfig
     let transport: GuardedLeadTransport
@@ -44,9 +51,36 @@ struct ProspectSearchRun: Sendable {
                                     result: "refused:unknown-segment", receipt: runID))
             return report
         }
-        let (candidates, outcomes) = await LeadDiscovery(transport: transport).searchWithOutcomes(
+        let discovery = LeadDiscovery(transport: transport)
+        var (candidates, outcomes) = await discovery.searchWithOutcomes(
             selectors: segment.osmSelectors, latitude: request.latitude, longitude: request.longitude,
             radiusMeters: request.radiusMeters, limit: request.limit)
+        report.radiusUsed = request.radiusMeters
+        // LIVE-R8: top up an under-filled sector from the same sources (Overpass, Photon fallback) at a wider radius.
+        // Only Overpass takes a radius, so a top-up happens only while an Overpass server is answering.
+        func overpassAnswered(_ outcomes: [LeadDiscovery.SelectorOutcome]) -> Bool {
+            outcomes.contains { $0.result == "ok" && $0.provider != nil && $0.provider?.host != LeadDiscovery.photon.host }
+        }
+        var overpassUp = overpassAnswered(outcomes)
+        for factor in Self.topUpFactors where candidates.count < request.limit && overpassUp {
+            let radius = min(request.radiusMeters * factor, 50_000)
+            guard radius > report.radiusUsed else { break }
+            let (more, moreOutcomes) = await discovery.searchWithOutcomes(
+                selectors: segment.osmSelectors, latitude: request.latitude, longitude: request.longitude, radiusMeters: radius, limit: request.limit)
+            outcomes += moreOutcomes
+            overpassUp = overpassAnswered(moreOutcomes)
+            for candidate in more where candidates.count < request.limit && !candidates.contains(where: { $0.osmID == candidate.osmID }) {
+                candidates.append(candidate)
+            }
+            report.radiusUsed = radius
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search-topup", register: "-", target: segment.id, source: "controlward",
+                                    result: "ok", receipt: "\(runID)-r\(radius)-candidates-\(candidates.count)"))
+        }
+        if candidates.count < request.limit {
+            report.underFillReason = report.radiusUsed > request.radiusMeters || overpassUp
+                ? "under-filled after top-up to r=\(report.radiusUsed) m"
+                : "under-filled at r=\(report.radiusUsed) m: no Overpass server answered, so no top-up was possible"
+        }
         // One search line per selector naming the provider that actually answered (Earth 8:19); no provider means an error result.
         for outcome in outcomes {
             audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search", register: outcome.provider.map { CWAuditLine.register(for: $0) } ?? "-",

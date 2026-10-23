@@ -65,6 +65,7 @@ if CommandLine.arguments.contains("--probe-overpass") {
     exit(go ? 0 : 3)
 }
 
+var accounting: (check: LeadProofVerifier.Check, lines: [String])?
 if verifyOnly == nil {
     if !ProspectLeadsStore(fileURL: environment.storeURL).records.isEmpty || FileManager.default.fileExists(atPath: environment.auditURL.path) {
         fail("the leads folder is not empty; the proof needs an empty store at launch (use a new --root)")
@@ -102,12 +103,19 @@ if verifyOnly == nil {
         for (key, value) in report.refusals.sorted(by: { $0.key < $1.key }) { print("    refused \(key): \(value)") }
         for (key, value) in report.skipped.sorted(by: { $0.key < $1.key }) { print("    skipped \(key): \(value)") }
     }
+    // LIVE-R8 (Water 14:06): sample accounting, printed and checked as check 7.
+    accounting = LeadSampleAccounting.account(requested: shares.reduce(0) { $0 + $1.limit },
+                                              sectors: zip(shares, reports).map { LeadSampleAccounting.Sector(id: $0.0.id, limit: $0.0.limit, report: $0.1) },
+                                              funnelDiscovered: environment.funnel().discovered)
+    print("")
+    accounting?.lines.forEach { print($0) }
 }
 
 let inputs = environment.proofInputs()
-let checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, auditLines: inputs.lines, prospects: inputs.prospects,
+var checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, auditLines: inputs.lines, prospects: inputs.prospects,
                                       drafts: inputs.drafts, config: environment.config,
                                       listingDomains: Set(environment.discoveredPlaces().compactMap(\.domain)))
+if let accounting { checks.append(accounting.check) }
 print("")
 print("Earth's live-proof bar (audit: \(environment.auditURL.path))")
 for check in checks { print("  [\(check.passed ? "PASS" : "FAIL")] \(check.number). \(check.name): \(check.detail)") }

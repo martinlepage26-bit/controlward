@@ -98,3 +98,56 @@ enum LeadProofSample {
         return ids.enumerated().map { (id: $0.element, limit: base + ($0.offset < extra ? 1 : 0)) }
     }
 }
+
+/// LIVE-R8 (Water 14:06): the live sample's own accounting. Per-sector candidates must reconcile to the funnel's
+/// discovered count (domain folds and closed places named), every under-filled sector must say why, and every sector
+/// that ends with 0 records gets a drop-reason breakdown. Printed by bin/prove-lead-pipeline as check 7.
+enum LeadSampleAccounting {
+    struct Sector: Sendable {
+        var id: String
+        var limit: Int
+        var report: ProspectSearchRun.Report
+    }
+
+    static func account(requested: Int, sectors: [Sector], funnelDiscovered: Int,
+                        existing: [DiscoveredPlace] = []) -> (check: LeadProofVerifier.Check, lines: [String]) {
+        var lines: [String] = []
+        let total = sectors.reduce(0) { $0 + $1.report.candidates }
+        lines.append("R8 requested=\(requested) candidates=\(total)")
+        var unexplained: [String] = []
+        for sector in sectors {
+            let report = sector.report
+            var line = "R8   \(sector.id) candidates=\(report.candidates)/\(sector.limit) records=\(report.prospects.count) radius=\(report.radiusUsed) m"
+            if report.candidates < sector.limit {
+                if let reason = report.underFillReason { line = "R8   \(sector.id) candidates=\(report.candidates)/\(sector.limit) \(reason) records=\(report.prospects.count)" }
+                else { unexplained.append(sector.id) }
+            }
+            lines.append(line)
+        }
+        let within = sectors.reduce(0) { $0 + max(0, $1.report.candidates - $1.report.discovered.count) }
+        let perRun = sectors.reduce(0) { $0 + $1.report.discovered.count }
+        let merged = DiscoveredPlace.merge(sectors.flatMap(\.report.discovered), into: existing)
+        let cross = existing.count + perRun - merged.count
+        let closed = merged.filter(\.closed).count
+        let expected = total - within - cross - closed + existing.count
+        lines.append("R8 folds within-sector=\(within) cross-sector=\(cross) closed=\(closed)" + (existing.isEmpty ? "" : " existing=\(existing.count)"))
+        let reconciled = expected == funnelDiscovered
+        lines.append("R8 \(total) - \(within) - \(cross) - \(closed)" + (existing.isEmpty ? "" : " + \(existing.count)")
+                     + " = \(expected) \(reconciled ? "=" : "!=") funnel discovered \(funnelDiscovered)")
+        for sector in sectors {
+            let report = sector.report
+            for (placeID, reason) in report.skipped.sorted(by: { $0.key < $1.key }) where reason == "duplicate domain" {
+                lines.append("R8   fold \(sector.id) \(placeID): duplicate domain in the same sector")
+            }
+        }
+        for sector in sectors where sector.report.prospects.isEmpty {
+            let counts = Dictionary(grouping: sector.report.skipped.values, by: ProspectSearchRun.reasonCode).mapValues(\.count)
+            let breakdown = counts.isEmpty ? "no-candidates=1" : counts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            lines.append("R8   \(sector.id) records=0 drop reasons: \(breakdown)")
+        }
+        let passed = reconciled && unexplained.isEmpty
+        let detail = "reached=\(total)/\(requested) reconciled=\(reconciled ? "yes" : "no")" + (unexplained.isEmpty ? "" : " unexplained=[\(unexplained.joined(separator: ","))]")
+        return (LeadProofVerifier.Check(number: 7, name: "LIVE-R8 sample accounting: candidates reconcile to the funnel, gaps explained", passed: passed, detail: detail), lines)
+    }
+}
+
