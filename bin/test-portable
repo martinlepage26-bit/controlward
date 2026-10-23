@@ -18,12 +18,6 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${TEST_ROOT}/PortableMain.swift" \
   -o "${BUILD_ROOT}/PortableTests"
 
-# Argus planted reds 9 and 10 are pharos-api vitest cases. If pharos-api's dependencies are installed, run that suite
-# with a JSON report so the Swift tally can count them; otherwise set CW_PHAROS_PLANTED_REDS to a report you made.
-if [[ -z "${CW_PHAROS_PLANTED_REDS:-}" && -x "${PROJECT_ROOT}/pharos-api/node_modules/.bin/vitest" ]]; then
-  report="${BUILD_ROOT}/pharos-vitest.json"
-  (cd "${PROJECT_ROOT}/pharos-api" && ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile.json="${report}") || true
-  export CW_PHAROS_PLANTED_REDS="${report}"
-fi
+source "${SCRIPT_DIR}/pharos-planted-reds.sh"
 
 "${BUILD_ROOT}/PortableTests" "$@"

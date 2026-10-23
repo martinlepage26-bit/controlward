@@ -9,6 +9,8 @@ import FoundationNetworking
 /// it, so a healthy build prints `expected 56 failures, got 56: OK`. Any other count exits non-zero.
 /// Argus reds 9 and 10 live in pharos-api's vitest suite; they count only when CW_PHAROS_PLANTED_REDS points at that
 /// run's JSON report and the matching tests passed. Without the report they are RED-MISSED and the total is a MISMATCH.
+/// bin/test-portable and bin/test-native-app make that report via bin/pharos-planted-reds.sh (vitest from the repo root
+/// after `yarn install`, or pharos-api/node_modules); with no vitest they leave it unset, so the count fails loudly.
 enum LeadPipelinePlantedReds {
     typealias Probe = () async throws -> String?
 

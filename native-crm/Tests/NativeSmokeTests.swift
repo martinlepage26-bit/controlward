@@ -224,7 +224,7 @@ struct NativeSmokeTests {
         try expect(mailboxPassed, "Mailbox tests failed")
         try expect(mailOutcomePassed, "Mail action outcome tests failed")
         try expect(leadPipelinePassed, "Lead pipeline tests failed")
-        try expect(leadPlantedRedsPassed, "Slice 3 planted reds did not print expected 41 failures, got 41: OK")
+        try expect(leadPlantedRedsPassed, "Slice 3 planted reds did not print expected 56 failures, got 56: OK")
         try expect(mailControlPassed, "Mail control tests failed (slices 1 and 4)")
         try expect(projectControlPassed, "Project Control write tests failed (slice 2)")
         try expect(mailPlantedRedsPassed, "Slice 1/2/4 planted reds did not print 7/5/3 OK")
