@@ -800,6 +800,25 @@ enum LeadPipelineTests {
                 let limits = split.map(\.limit)
                 try expect((limits.min() ?? 0) >= 8 && (limits.max() ?? 0) - (limits.min() ?? 0) <= 1, "even shares: \(limits)")
             }),
+            ("Check 2 (14:03, cw-audit L213/L214): the fetch and score lines match the prospect's source URL when the page came back with a trailing slash, another host case, the default port or a fragment", {
+                var failures: [String] = []
+                for final in ["\(Check2Site.root)/nous-joindre/", "https://WWW.Clinique-Exemple.TEST/nous-joindre",
+                              "https://www.clinique-exemple.test:443/nous-joindre", "\(Check2Site.root)/nous-joindre#equipe"] {
+                    let result = try await Check2Site.check2(config: config, servedFrom: final)
+                    if !result.source.lowercased().contains("nous-joindre") { failures.append("\(final): source URL is \(result.source)") }
+                    if !result.passed { failures.append("\(final): \(result.detail)") }
+                }
+                try expect(failures.isEmpty, "check 2 must pass: \(failures)")
+            }),
+            ("Check 2 (14:03): a page that came back from a different path, a different path case, a deeper path or a different query string is never matched to the fetch of another URL", {
+                var failures: [String] = []
+                for final in ["\(Check2Site.root)/nous-joindre-2", "\(Check2Site.root)/Nous-joindre", "\(Check2Site.root)/nous-joindre/plan",
+                              "\(Check2Site.root)/nous-joindre?lang=en"] {
+                    let result = try await Check2Site.check2(config: config, servedFrom: final)
+                    if result.passed || !result.detail.hasSuffix("unmatched=1") { failures.append("\(final): \(result.detail)") }
+                }
+                try expect(failures.isEmpty, "check 2 must stay unmatched: \(failures)")
+            }),
             ("Planted-red tally (Water/Earth): one planted red that slips prints 'expected 56 failures, got 55: MISMATCH' and fails the run", {
                 var cases = try LeadPipelinePlantedReds.makeCases()
                 try expect(cases.count == 56, "56 planted cases, got \(cases.count)")
@@ -1359,5 +1378,27 @@ struct SearchFixture {
         inner.respond("https://overpass.private.coffee/api/interpreter", body: """
         {"elements":[{"type":"node","id":3001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Sud","healthcare":"clinic","website":"\(website)","addr:city":"Montréal"}}]}
         """, headers: ["content-type": "application/json"])
+    }
+}
+
+/// Check 2 (14:03): a synthetic clinic whose contact page carries the trigger phrase and is answered from `servedFrom`
+/// (as if the transport had followed a redirect itself). Returns check 2 over the run's own audit lines.
+enum Check2Site {
+    static let root = "https://www.clinique-exemple.test"
+
+    static func check2(config: ICPConfig, servedFrom final: String) async throws -> (passed: Bool, detail: String, source: String) {
+        let fixture = SearchFixture(config: config)
+        fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1>"
+                              + "<a href=\"/notre-equipe\">Notre équipe</a> <a href=\"/nous-joindre\">Nous joindre</a>")
+        fixture.inner.respond("\(root)/notre-equipe", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")
+        fixture.inner.respondFrom("\(root)/nous-joindre", finalURL: final,
+                                  body: "<p>Nous joindre. Une décision automatisée trie les demandes.</p><address>\(LeadKit.clinicAddress)</address>"
+                                  + "<a href=\"mailto:info@clinique-exemple.test\">info</a>")
+        let report = await fixture.run()
+        let record = try LeadPipelineTests.unwrap(report.prospects.first, "prospect served from \(final)")
+        let checks = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: fixture.audit.lines.map(\.text),
+                                              prospects: report.prospects, drafts: report.drafts, config: config)
+        let two = try LeadPipelineTests.unwrap(checks.first { $0.number == 2 }, "check 2")
+        return (two.passed, two.detail, record.sourceURL ?? "-")
     }
 }
