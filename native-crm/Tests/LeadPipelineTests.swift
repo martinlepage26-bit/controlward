@@ -652,6 +652,25 @@ enum LeadPipelineTests {
                 let run = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(licences))
                 try expect(run.prospects.first?.town == "Montréal", "map town kept: \(String(describing: run.prospects.first?.town))")
             }),
+            ("Planted-red tally (CI 9:45): a missing pharos-api vitest report reads NOT-RUN, never 'accepted'; the failure text carries the real counts", {
+                let missing = FileManager.default.temporaryDirectory.appendingPathComponent("cw-no-report-\(UUID().uuidString).json").path
+                for path in [nil, "", missing] as [String?] {
+                    guard case .missing = PharosPlantedReds.status("ARGUS-RED-9", path: path) else {
+                        throw PortableCheckFailure(description: "no report at \(String(describing: path)) must be .missing, got \(PharosPlantedReds.status("ARGUS-RED-9", path: path))")
+                    }
+                }
+                let report = FileManager.default.temporaryDirectory.appendingPathComponent("cw-report-\(UUID().uuidString).json")
+                defer { try? FileManager.default.removeItem(at: report) }
+                try Data(#"{"testResults":[{"assertionResults":[{"fullName":"ARGUS-RED-9 refused","status":"passed"},{"fullName":"ARGUS-RED-10 x","status":"failed"}]}]}"#.utf8).write(to: report)
+                try expect(PharosPlantedReds.status("ARGUS-RED-9", path: report.path) == .caught("vitest passed: ARGUS-RED-9 refused"), "caught from the report")
+                try expect(PharosPlantedReds.status("ARGUS-RED-10", path: report.path) == .notCaught, "failed vitest case is not caught")
+                try expect(PharosPlantedReds.status("ARGUS-RED-11", path: report.path) == .missing("no ARGUS-RED-11 case in the vitest report"), "absent case is missing, not accepted")
+                let line = LeadPipelinePlantedReds.missedLine(group: "ARGUS-RED", label: "9 PUSH-MIXED-RETRACT", report: .missing("CW_PHAROS_PLANTED_REDS not set"))
+                try expect(line.contains("NOT-RUN") && !line.contains("accepted") && line.contains("CW_PHAROS_PLANTED_REDS not set"), "missing tool line: \(line)")
+                try expect(LeadPipelinePlantedReds.missedLine(group: "S3-RED", label: "x").contains("RED-MISSED"), "a real miss still says RED-MISSED")
+                try expect(LeadPipelinePlantedReds.tallyMessage(expected: 56, got: 54) == "Slice 3 planted reds: expected 56 failures, got 54: MISMATCH",
+                           "real counts: \(LeadPipelinePlantedReds.tallyMessage(expected: 56, got: 54))")
+            }),
             ("Overpass probe (Water 9:02): the live rerun may start once either host answers; one attempt per host; at most every 5 minutes", {
                 func probe(_ setup: (FakeLeadTransport) -> Void) async -> (results: [OverpassProbe.HostResult], inner: FakeLeadTransport, clock: FakeLeadClock) {
                     let inner = FakeLeadTransport()

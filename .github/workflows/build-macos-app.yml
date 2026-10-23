@@ -3,10 +3,10 @@ name: Build ControlWard macOS App
 on:
   push:
     branches: [main]
-    paths: ['native-crm/**', 'bin/**', '.github/workflows/build-macos-app.yml']
+    paths: ['native-crm/**', 'bin/**', 'pharos-api/**', 'package.json', 'yarn.lock', '.nvmrc', '.github/workflows/build-macos-app.yml']
   pull_request:
     branches: [main]
-    paths: ['native-crm/**', 'bin/**', '.github/workflows/build-macos-app.yml']
+    paths: ['native-crm/**', 'bin/**', 'pharos-api/**', 'package.json', 'yarn.lock', '.nvmrc', '.github/workflows/build-macos-app.yml']
   workflow_dispatch:
 
 permissions:
@@ -22,6 +22,16 @@ jobs:
           fetch-depth: 0
       - name: Record Swift toolchain
         run: swift --version
+      # Argus planted reds 9 and 10 are pharos-api vitest cases: install the JS deps so the native suite counts 56/56.
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+      - run: yarn install --immutable
+      - name: Require vitest for the planted-red tally (fail loudly if missing)
+        run: |
+          test -x node_modules/.bin/vitest || { echo "vitest missing after yarn install - Argus reds 9 and 10 cannot run" >&2; exit 1; }
       - name: Test, package and verify ControlWard
         env:
           CONTEXTWARD_SIGN_IDENTITY: '-'
