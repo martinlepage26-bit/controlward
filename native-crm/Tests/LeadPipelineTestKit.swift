@@ -141,6 +141,8 @@ final class FakeLeadClock: LeadClock, @unchecked Sendable {
 /// RBQ fixtures. The header row is copied byte for byte from a real RBQ CSV download (Air, 2026-10-23 06:47 EDT,
 /// map section 10a); the JSON record shape is copied from the real JSON file. Every data value is synthetic.
 enum RBQFixture {
+    /// Air's map 10c / Water 7:26 AM ET: the 13 Annexe III sub-categories a "bundled" licence carries (verbatim).
+    static let annexeIIIBundle = ["2.5", "2.7", "3.2", "4.2", "5.2", "6.2", "7", "8", "9", "11.2", "12", "13.5", "17.2"]
     static let csvHeader = #""Numéro de licence","Statut de la licence","Type de licence","Date de délivrance","Restriction","Date de début de la restriction","Date de fin de la restriction","Association ou compagnie fournissant le cautionnement","Montant de la caution","Date du paiement annuel","Mandataire","Courriel","Adresse","NEQ","Nom de l'intervenant","Numéro de téléphone","Municipalité","Statut juridique","Code de région administrative","Région administrative","Nombre de sous-catégorie autorisées","Categorie","Sous-catégories","Autre nom""#
 
     /// Keys of one real JSON licence record (Air's map 10b, checked against a real download 2026-10-23): the CSV header

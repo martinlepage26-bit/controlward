@@ -97,12 +97,18 @@ enum LeadDefinition {
     /// exact sub-category codes from config (one JSON record per licence), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
         let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
-        let codes = Set(prospect.rbqCategories.map(RBQOpenData.normalizeCode))
         return config.conflictAreas.first { area in
             area.osmSelectors.contains { prospect.osmTags.contains($0) }
                 || area.keywords.contains { haystack.contains($0.lowercased()) }
-                || (area.rbqSubcategoryCodes ?? []).contains { codes.contains(RBQOpenData.normalizeCode($0)) }
+                || !rbqHeldCodes(prospect.rbqCategories, area: area).isEmpty
         }
+    }
+
+    /// The listed RBQ codes that hold a licence with these sub-categories (also used by bin/prove-rbq-hold, so the proof counts
+    /// exactly what the app holds).
+    static func rbqHeldCodes(_ licenceCodes: [String], area: ICPConfig.ConflictArea) -> [String] {
+        let codes = Set(licenceCodes.map(RBQOpenData.normalizeCode))
+        return (area.rbqSubcategoryCodes ?? []).map(RBQOpenData.normalizeCode).filter { codes.contains($0) }
     }
 
     /// S3-R3: the real-lead count excludes test leads and anything that fails LEAD_DEF.

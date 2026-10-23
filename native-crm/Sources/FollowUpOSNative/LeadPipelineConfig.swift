@@ -37,12 +37,23 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var keywords: [String]
         var region: String
         /// RBQ sub-category codes (e.g. "15.5", "2.5", "GPC") that put a licensed firm in this hold. Matched exactly against
-        /// the codes of the whole licence, after grouping the file's rows by "Numéro de licence".
+        /// the codes of the licence (one JSON record per licence), subject to `rbqCodeConditions`.
         var rbqSubcategoryCodes: [String]?
         /// Where the codes were checked: RBQ's own sub-category list (URL and date).
         var rbqSubcategorySource: String?
         /// Segments that are held unless the RBQ lookup matched a licence (fail closed: no file, no match or a parse error holds).
         var rbqRequiredSegments: [String]?
+        /// Conditions under which a listed code does NOT hold a licence (Water 7:20 / 7:26 AM ET, Air's map 10c). A code without a
+        /// condition always holds. All codes come from config; nothing about specific codes is hard-coded.
+        var rbqCodeConditions: [RBQCodeCondition]?
+    }
+    /// A listed RBQ code holds a licence unless the licence carries every code of `notHeldIfAllOf` (e.g. the full Annexe III
+    /// bundle) or any code starting with one of `notHeldIfAnyCodeStartsWith` (e.g. "1." = a general-contractor 1.x code).
+    struct RBQCodeCondition: Codable, Equatable, Sendable {
+        var code: String
+        var notHeldIfAllOf: [String]
+        var notHeldIfAnyCodeStartsWith: [String]
+        var source: String?
     }
     struct Sender: Codable, Equatable, Sendable {
         var name: String

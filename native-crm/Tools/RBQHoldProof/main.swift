@@ -32,19 +32,28 @@ var status: Int32 = 0
 for path in files {
     let url = URL(fileURLWithPath: path)
     let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? -1
-    var licences = 0, held = 0
-    var perCode: [String: Int] = [:]
+    var licences = 0, held = 0, overlap = 0
+    var perCode: [String: Int] = [:], carrying: [String: Int] = [:]
     do {
         try RBQOpenData.parse(file: url, source: source) { licence in
             licences += 1
             let codes = Set(licence.subcategories.map(RBQOpenData.normalizeCode))
-            if codes.contains(where: wanted.contains) { held += 1 }
-            for code in wanted where codes.contains(code) { perCode[code, default: 0] += 1 }
+            for code in wanted where codes.contains(code) { carrying[code, default: 0] += 1 }
+            // The same predicate the app uses (LeadDefinition.rbqHeldCodes), so these counts are what the app holds.
+            let holding = LeadDefinition.rbqHeldCodes(licence.subcategories, area: area)
+            if !holding.isEmpty { held += 1 }
+            if holding.count > 1 { overlap += 1 }
+            for code in holding { perCode[code, default: 0] += 1 }
         }
         let share = licences > 0 ? Double(held) * 100 / Double(licences) : 0
         print("\(url.lastPathComponent) (\(bytes) bytes): licences=\(licences) held=\(held) (\(String(format: "%.1f", share))%)")
-        for code in wanted { print("  code \(code): \(perCode[code, default: 0]) licence(s)") }
-        print("  not held (matched, none of the codes): \(licences - held)")
+        for condition in area.rbqCodeConditions ?? [] {
+            print("  rule for \(RBQOpenData.normalizeCode(condition.code)): not held with all of [\(condition.notHeldIfAllOf.joined(separator: ", "))] or any code starting with [\(condition.notHeldIfAnyCodeStartsWith.joined(separator: ", "))]")
+        }
+        for code in wanted { print("  code \(code): carried by \(carrying[code, default: 0]), held on it \(perCode[code, default: 0]) licence(s)") }
+        print("  held on more than one code (overlap): \(overlap)")
+        print("  check: \(wanted.map { String(perCode[$0, default: 0]) }.joined(separator: " + ")) - \(overlap) = \(wanted.reduce(0) { $0 + perCode[$1, default: 0] } - overlap) (held=\(held))")
+        print("  not held: \(licences - held)")
     } catch let refusal as LeadPipelineRefusal {
         print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): every \((area.rbqRequiredSegments ?? []).joined(separator: ", ")) firm is held")
         status = 2

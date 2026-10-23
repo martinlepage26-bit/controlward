@@ -373,6 +373,56 @@ enum LeadPipelineTests {
                 try expect(LeadDefinition.evaluate(LeadKit.readyClinic(), config: config, now: now).status == .ready, "segments outside the list need no RBQ match")
                 try expect(ProspectDisplay.attribution(for: LeadKit.readyClinic(), config: config) == nil, "no credit without RBQ data")
             }),
+            ("RBQ bundle rule (Water 7:20/7:26, Air 10c): 15.5 always held; 2.5 held only without the full Annexe III bundle and without a 1.x code; the rule is config; an unreadable index still holds all", {
+                let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
+                try expect(area.rbqSubcategoryCodes == ["15.5", "2.5"], "15.5 and 2.5 stay listed: \(String(describing: area.rbqSubcategoryCodes))")
+                // One synthetic licence of each kind, through the real JSON parser, the index and LEAD_DEF.
+                let source = try unwrap(RBQOpenData.source(config), "rbq")
+                let bundle = RBQFixture.annexeIIIBundle.map { (nil as String?, $0) }
+                let partial = RBQFixture.annexeIIIBundle.filter { $0 != "17.2" }.map { (nil as String?, $0) }
+                let kinds: [(name: String, codes: [(String?, String)], held: Bool, why: String)] = [
+                    ("Excavation Fictive Seule", [("Specialisee", "2.5")], true, "2.5 alone"),
+                    ("Terrassement Fictif Inc.", [("Specialisee", "2.5"), (nil, "SEC")], true, "2.5 with an admin code only"),
+                    ("Ouvrages Fictifs Partiels", partial, true, "2.5 with 12 of the 13 bundle codes"),
+                    ("Bâtiments Fictifs Groupés", bundle, false, "2.5 within the full bundle"),
+                    ("Entreprise Générale Fictive", [("Generale", "1.3"), ("Specialisee", "2.5")], false, "2.5 with a 1.x code"),
+                    ("Habitations Fictives Est", [("Generale", "1.1.1"), ("Specialisee", "2.5"), (nil, "4.2")], false, "2.5 with 1.1.1"),
+                    ("Plomberie Fictive Groupée", bundle + [(nil, "15.5")], true, "15.5 with the full bundle"),
+                    ("Plomberie Fictive Générale", [("Generale", "1.3"), ("Specialisee", "15.5"), (nil, "2.5")], true, "15.5 with a 1.x code and 2.5")
+                ]
+                let data = RBQFixture.json(kinds.enumerated().map { index, kind in
+                    RBQFixture.jsonRecord(licence: "0000-0001-\(10 + index)", name: kind.name, town: "Montréal", codes: kind.codes)
+                })
+                let index = RBQIndex(try RBQOpenData.parse(data: data, source: source))
+                for kind in kinds {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = kind.name
+                    record.osmTags = ["craft=builder"]
+                    index.enrich(&record, municipality: "Montréal", source: source)
+                    let status = LeadDefinition.evaluate(record, config: config, now: now).status
+                    try expect(record.rbqCheck == "matched" && (status == .conflictReview) == kind.held,
+                               "\(kind.why): expected \(kind.held ? "held" : "not held"), got \(status) (\(String(describing: record.rbqCheck)))")
+                }
+                // The rule is config (icp.json), cited.
+                let rules = area.rbqCodeConditions ?? []
+                try expect(rules.count == 1 && rules.first?.code == "2.5", "one condition, on 2.5 only (15.5 has none): \(rules.map(\.code))")
+                let rule = try unwrap(rules.first, "2.5 condition")
+                try expect(rule.notHeldIfAllOf == RBQFixture.annexeIIIBundle, "bundle is Air's 13 Annexe III codes: \(rule.notHeldIfAllOf)")
+                try expect(rule.notHeldIfAnyCodeStartsWith == ["1."], "general 1.x codes: \(rule.notHeldIfAnyCodeStartsWith)")
+                let cited = rule.source ?? ""
+                try expect(cited.contains("10c") && cited.contains("https://www.rbq.gouv.qc.ca/") && cited.contains("Annexe III"), "cites Air 10c and RBQ's list: \(cited)")
+                try expect(LeadDefinition.rbqHeldCodes(["2.5"], area: area) == ["2.5"], "proof predicate: 2.5 alone")
+                try expect(LeadDefinition.rbqHeldCodes(RBQFixture.annexeIIIBundle, area: area).isEmpty, "proof predicate: bundle")
+                try expect(LeadDefinition.rbqHeldCodes(["1.7G", "2.5"], area: area).isEmpty, "proof predicate: 1.x")
+                try expect(LeadDefinition.rbqHeldCodes(RBQFixture.annexeIIIBundle + ["1.3", "15.5"], area: area) == ["15.5"], "proof predicate: 15.5")
+                // Fail closed stays: no index or a truncated one holds every firm of the mixed batch.
+                for contents in [nil, Data(#"{"Liste Licence":[{"Licence":{"#.utf8)] as [Data?] {
+                    let out = try await EarthRBQ.appRun(contents: contents)
+                    try expect(out.prospects.count == SearchFixture.constructionBatch.count && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty,
+                               "unreadable index holds all: \(out.prospects.map(\.status))")
+                }
+            }),
             ("RBQ schema: a CSV, a missing, renamed or unknown key, a flat record or an empty file throws refused:open-data-schema", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 func refusal(_ data: Data) -> LeadPipelineRefusal? {
