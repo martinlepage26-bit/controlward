@@ -91,8 +91,15 @@ struct ProspectSearchRun: Sendable {
                 skip(candidate, "closed business (own site)")
                 continue
             }
-            place.usableWebsite = true
             var record = Self.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: runID)
+            // LIVE-R6: hard fail on any evidence URL off this candidate's own domain; the record is never scored or drafted.
+            if let offending = EvidenceDomain.offDomain(record, config: config).first {
+                audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "score", register: URLCanonical.register(offending), target: record.id,
+                                        source: "controlward", result: "refused:cross-domain-evidence", receipt: runID))
+                skip(candidate, "cross-domain evidence")
+                continue
+            }
+            place.usableWebsite = true
             if let rbqFailure {
                 record.rbqCheck = "error:\(rbqFailure)"
             } else if let source = RBQOpenData.source(config), let rbq {

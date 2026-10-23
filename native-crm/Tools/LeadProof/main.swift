@@ -6,7 +6,7 @@ import FoundationNetworking
 // bin/prove-lead-pipeline: Earth's live-proof bar in one command.
 //
 //   scripted (default): empty temp leads folder -> launch line -> live search through the same pipeline code
-//                       the app uses -> ingest into the Leads store -> local drafts -> verify the five checks.
+//                       the app uses -> ingest into the Leads store -> local drafts -> verify the six checks (check 6: LIVE-R6 evidence domain).
 //   --verify-app DIR:   verify a folder written by the app's Leads sheet instead (no network).
 //
 // It never sends: there is no send path in the pipeline, and check 5 fails on any `action=send` line.

@@ -1217,10 +1217,10 @@ enum LeadPipelineTests {
                 phoneTwin.phone = "+1 514 555-0199"
                 var original = LeadKit.readyClinic(id: "cw:osm:node/6", email: "info@clinique-exemple.test")
                 original.phone = "(514) 555-0199"
-                var test = LeadKit.readyClinic(id: "cw:test:1", email: "test@exemple.test")
+                // LIVE-R6: the test lead lives on its own domain end to end (its evidence URLs used to stay on the clinic's domain).
+                var test = try LeadR6.moved(LeadKit.readyClinic(id: "cw:test:1", email: "test@clinique-exemple.test"), to: "exemple.test", phone: "514 555 0100")
                 test.isTest = true
                 test.provenance = .test
-                test.businessDomain = "exemple.test"
                 let result = await ProspectIngest.ingest([original, LeadKit.readyClinic(id: "cw:osm:node/6", email: "x@y.test"), phoneTwin, test],
                                                          into: store, config: config, now: now, audit: audit)
                 try expect(store.records.count == 2 && result.merged.count == 2, "records \(store.records.map(\.id)) merged \(result.merged)")

@@ -76,6 +76,15 @@ enum LeadProofVerifier {
         }
         checks.append(Check(number: 5, name: "Zero send requests and no off-allowlist host",
                             passed: sends.isEmpty && offList.isEmpty, detail: "send lines=\(sends.count) off-allowlist hosts=\(Set(offList).sorted())"))
+
+        // LIVE-R6 (Earth 14:05): every record's evidence URLs are on its own site's domain; any violation is a hard fail.
+        let crossDomain = prospects.compactMap { prospect -> String? in
+            let hosts = EvidenceDomain.offDomain(prospect, config: config).map { URL(string: $0)?.host?.lowercased() ?? $0 }
+            return hosts.isEmpty ? nil : "\(prospect.id) \(Array(Set(hosts)).sorted().joined(separator: ","))"
+        }
+        checks.append(Check(number: 6, name: "Every record's evidence URLs are on its own site's domain (LIVE-R6)",
+                            passed: crossDomain.isEmpty,
+                            detail: "records=\(prospects.count) cross-domain=\(crossDomain.count)" + (crossDomain.isEmpty ? "" : " [\(crossDomain.joined(separator: "; "))]")))
         return checks
     }
 }
