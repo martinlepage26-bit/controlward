@@ -14,6 +14,7 @@ struct PipelineView: View {
     @State private var editor: LeadEditorContext?
     @State private var importError: String?
     @State private var showDiscovery = false
+    @State private var showLeads = false
     @State private var selectedOpportunity: Opportunity?
     @State private var dueOnly = false
     @State private var projectRecord: WorkspaceRecord?
@@ -44,6 +45,11 @@ struct PipelineView: View {
                         Label("Find prospects", systemImage: "globe.americas")
                     }
                     .buttonStyle(.bordered)
+                    Button { showLeads = true } label: {
+                        Label("Leads", systemImage: "person.crop.rectangle.stack")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("ControlWard's own Leads list: search, own-site evidence, local drafts. Nothing is sent.")
                     Button {
                         editor = LeadEditorContext(lead: .blank(), isNew: true)
                     } label: {
@@ -151,6 +157,7 @@ struct PipelineView: View {
                 .environmentObject(store)
         }
         .sheet(isPresented: $showDiscovery) { DiscoveryView().environmentObject(store) }
+        .sheet(isPresented: $showLeads) { ProspectLeadsView() }
         .sheet(item: $selectedOpportunity) { OpportunityEditor(opportunity: $0).environmentObject(store) }
         .alert("CSV import failed", isPresented: Binding(
             get: { importError != nil },

@@ -1,0 +1,580 @@
+{
+  "schema": "controlward.icp.v1",
+  "note": "ICP for ControlWard's own prospect search (S3-R9). Segments are read only from this file. Adding or removing a segment is a config-only change; config/icp.confirmed.json records the list Martin confirmed (D1).",
+  "segments": [
+    {
+      "id": "university",
+      "label": "Universities",
+      "priority": 1,
+      "trigger_rule": "institutional",
+      "osm_selectors": [
+        "amenity=university"
+      ],
+      "keywords": [
+        "université",
+        "university"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/nouvelles",
+        "/salle-de-presse",
+        "/carrieres",
+        "/emplois",
+        "/contact",
+        "/nous-joindre"
+      ],
+      "triggers": [
+        "job_posting",
+        "newsroom",
+        "tender",
+        "loi25_notice_or_privacy_officer"
+      ]
+    },
+    {
+      "id": "bank",
+      "label": "Banks and credit unions",
+      "priority": 1,
+      "trigger_rule": "institutional",
+      "osm_selectors": [
+        "amenity=bank",
+        "office=financial"
+      ],
+      "keywords": [
+        "banque",
+        "bank",
+        "caisse"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/nouvelles",
+        "/salle-de-presse",
+        "/carrieres",
+        "/contact",
+        "/nous-joindre"
+      ],
+      "triggers": [
+        "job_posting",
+        "newsroom",
+        "loi25_notice_or_privacy_officer"
+      ]
+    },
+    {
+      "id": "insurer",
+      "label": "Insurers",
+      "priority": 1,
+      "trigger_rule": "institutional",
+      "osm_selectors": [
+        "office=insurance"
+      ],
+      "keywords": [
+        "assurance",
+        "insurance",
+        "assureur"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/nouvelles",
+        "/salle-de-presse",
+        "/carrieres",
+        "/contact",
+        "/nous-joindre"
+      ],
+      "triggers": [
+        "job_posting",
+        "newsroom",
+        "loi25_notice_or_privacy_officer"
+      ]
+    },
+    {
+      "id": "public_body",
+      "label": "Public bodies",
+      "priority": 1,
+      "trigger_rule": "institutional",
+      "osm_selectors": [
+        "office=government"
+      ],
+      "keywords": [
+        "ministère",
+        "société d'état",
+        "agence",
+        "government",
+        "gouvernement"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/nouvelles",
+        "/salle-de-presse",
+        "/carrieres",
+        "/contact",
+        "/nous-joindre"
+      ],
+      "triggers": [
+        "tender",
+        "job_posting",
+        "newsroom",
+        "loi25_notice_or_privacy_officer"
+      ]
+    },
+    {
+      "id": "clinic",
+      "label": "Clinics and healthcare practices",
+      "priority": 1,
+      "trigger_rule": "same_day",
+      "osm_selectors": [
+        "healthcare=clinic",
+        "amenity=clinic",
+        "healthcare=dentist",
+        "healthcare=physiotherapist"
+      ],
+      "keywords": [
+        "clinique",
+        "clinic",
+        "dentaire",
+        "physiothérapie"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/equipe",
+        "/notre-equipe",
+        "/a-propos",
+        "/contact",
+        "/nous-joindre",
+        "/politique-de-confidentialite"
+      ],
+      "triggers": [
+        "ai_tool_on_own_site",
+        "job_posting",
+        "loi25_notice_or_privacy_officer"
+      ]
+    },
+    {
+      "id": "construction_trades",
+      "label": "Construction and trades",
+      "priority": 1,
+      "trigger_rule": "same_day",
+      "osm_selectors": [
+        "craft=builder",
+        "craft=electrician",
+        "craft=hvac",
+        "craft=roofer",
+        "craft=carpenter",
+        "office=construction_company"
+      ],
+      "keywords": [
+        "construction",
+        "entrepreneur",
+        "rénovation",
+        "électricien",
+        "toiture"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/equipe",
+        "/a-propos",
+        "/contact",
+        "/nous-joindre",
+        "/soumission",
+        "/politique-de-confidentialite"
+      ],
+      "triggers": [
+        "ai_tool_on_own_site",
+        "job_posting",
+        "loi25_notice_or_privacy_officer"
+      ]
+    },
+    {
+      "id": "ai_governance_need",
+      "label": "Organisations with a stated AI governance need",
+      "priority": 1,
+      "trigger_rule": "institutional",
+      "osm_selectors": [
+        "office=company",
+        "office=it"
+      ],
+      "keywords": [
+        "gouvernance de l'IA",
+        "AI governance",
+        "intelligence artificielle responsable",
+        "responsible AI",
+        "OSFI E-23",
+        "Loi 25"
+      ],
+      "allowed_contact_sources": [
+        "own_site"
+      ],
+      "own_site_paths": [
+        "/",
+        "/nouvelles",
+        "/carrieres",
+        "/contact",
+        "/nous-joindre"
+      ],
+      "triggers": [
+        "job_posting",
+        "newsroom",
+        "tender",
+        "loi25_notice_or_privacy_officer"
+      ]
+    }
+  ],
+  "trigger_rules": {
+    "institutional": {
+      "max_fetch_age_days": 90,
+      "job_posting_max_age_days": 90
+    },
+    "same_day": {
+      "max_fetch_age_days": 0,
+      "job_posting_max_age_days": 90
+    }
+  },
+  "trigger_signals": {
+    "ai_tool_on_own_site": [
+      "réservation en ligne",
+      "prendre rendez-vous en ligne",
+      "book online",
+      "online booking",
+      "réceptionniste virtuelle",
+      "ai receptionist",
+      "agent conversationnel",
+      "chatbot",
+      "scribe ia",
+      "ai scribe",
+      "soumission en ligne",
+      "instant quote",
+      "devis en ligne"
+    ],
+    "loi25_notice_or_privacy_officer": [
+      "responsable de la protection des renseignements personnels",
+      "privacy officer",
+      "loi 25"
+    ],
+    "job_posting": [
+      "gouvernance de l'ia",
+      "ai governance",
+      "gestion des risques liés à l'ia",
+      "ai risk",
+      "chef des données",
+      "chief data officer",
+      "responsable de la sécurité de l'information"
+    ],
+    "newsroom": [
+      "intelligence artificielle",
+      "artificial intelligence",
+      "gouvernance de l'ia",
+      "ai governance"
+    ],
+    "tender": [
+      "intelligence artificielle",
+      "artificial intelligence",
+      "gouvernance",
+      "governance"
+    ]
+  },
+  "draft_forbidden": [
+    {
+      "rule": "legal_advice",
+      "patterns": [
+        "(?i)legal advice",
+        "(?i)avis juridique",
+        "(?i)conseil juridique",
+        "(?i)you are (legally )?required to",
+        "(?i)vous (êtes|etes) (légalement )?tenus? de",
+        "(?i)you must comply",
+        "(?i)vous devez vous conformer",
+        "(?i)in violation of",
+        "(?i)en contravention"
+      ]
+    },
+    {
+      "rule": "compliance_claims",
+      "patterns": [
+        "(?i)fully compliant",
+        "(?i)guarantee[sd]? compliance",
+        "(?i)garanti[rt]? (la )?conformité",
+        "(?i)certified compliant",
+        "(?i)100 ?% conforme",
+        "(?i)conforme à 100",
+        "(?i)(loi 25|casl|law 25)[- ]compliant",
+        "(?i)we make you compliant"
+      ]
+    },
+    {
+      "rule": "patient_or_client_data",
+      "patterns": [
+        "(?i)\\bpatients?\\b",
+        "(?i)dossier (médical|medical|client)",
+        "(?i)medical record",
+        "(?i)client file",
+        "(?i)\\bdiagnos",
+        "(?i)health card",
+        "(?i)carte d'assurance maladie",
+        "(?i)\\bNAM\\b"
+      ]
+    },
+    {
+      "rule": "pricing",
+      "patterns": [
+        "\\$ ?\\d",
+        "\\d ?\\$",
+        "(?i)\\b\\d+ ?(cad|usd)\\b",
+        "(?i)\\bper hour\\b",
+        "(?i)\\bde l'heure\\b",
+        "(?i)\\btarifs?\\b",
+        "(?i)\\bprix\\b",
+        "(?i)\\bpricing\\b",
+        "(?i)\\bprice\\b",
+        "(?i)\\bdiscount\\b",
+        "(?i)\\brabais\\b"
+      ]
+    }
+  ],
+  "conflict_areas": [
+    {
+      "id": "sos-plomberie-excavation-lavoie",
+      "description": "all plumbing, excavation and related trades in Québec",
+      "action": "conflict_review",
+      "osm_selectors": [
+        "craft=plumber",
+        "craft=excavation",
+        "craft=drainage",
+        "craft=septic_tank",
+        "craft=water_well_drilling"
+      ],
+      "keywords": [
+        "plomberie",
+        "plombier",
+        "plumbing",
+        "plumber",
+        "excavation",
+        "drain",
+        "drainage",
+        "égout",
+        "fosse septique",
+        "puits",
+        "débouchage",
+        "terrassement"
+      ],
+      "region": "QC",
+      "rbq_category_keywords": [
+        "plomberie",
+        "excavation",
+        "terrassement",
+        "drainage",
+        "égout",
+        "fosse septique",
+        "puits",
+        "tuyauterie"
+      ]
+    }
+  ],
+  "sender": {
+    "name": "Martin Lepage",
+    "organization": "PHAROS AI",
+    "from": "ml@pharos-ai.ca",
+    "mailing_address": "2456 rue de Rouen, Montréal QC H2K 1M2",
+    "unsubscribe_mailto": "ml@pharos-ai.ca",
+    "unsubscribe_subject": "unsubscribe"
+  },
+  "loi25_gate": {
+    "open": false,
+    "note": "Closed until Martin rules on the privacy impact assessment. While closed, sends go only to Martin's own addresses.",
+    "martin_addresses": [
+      "martinlepage.ai@gmail.com",
+      "ml@pharos-ai.ca"
+    ]
+  },
+  "allowlist": {
+    "discovery_hosts": [
+      "overpass.private.coffee",
+      "photon.komoot.io"
+    ],
+    "business_domain": "per-fetch",
+    "watch_hosts": [
+      "seao.gouv.qc.ca",
+      "www.seao.gouv.qc.ca",
+      "www.seao.ca",
+      "merx.com",
+      "www.merx.com"
+    ],
+    "gmail_hosts": [
+      "gmail.googleapis.com"
+    ],
+    "disabled_sources": [
+      {
+        "id": "professional_order_directory",
+        "hosts": [
+          "www.cmq.org",
+          "cmq.org",
+          "www.odq.qc.ca",
+          "odq.qc.ca",
+          "www.oppq.qc.ca",
+          "oppq.qc.ca",
+          "www.opq.org",
+          "opq.org",
+          "www.ooq.org",
+          "ooq.org",
+          "www.ordredeschiropraticiens.qc.ca",
+          "www.ordredeschiropraticiens.ca",
+          "espace-membre-ocq.eudonet.com"
+        ],
+        "enabled": false,
+        "reason": "Held for Martin or written permission from the order (CMQ, ODQ, OPQ, OPPQ main site, optometrists, chiropractors). Named people for clinics and trades come from the business's own site."
+      },
+      {
+        "id": "rbq_register",
+        "hosts": [
+          "www.rbq.gouv.qc.ca",
+          "rbq.gouv.qc.ca"
+        ],
+        "enabled": false,
+        "reason": "The RBQ register is not used (Martin)."
+      }
+    ],
+    "denied_hosts": [
+      {
+        "pattern": "registreentreprises.gouv.qc.ca",
+        "match": "domain",
+        "reason": "Registraire des entreprises (REQ): permanently denied."
+      },
+      {
+        "pattern": "entreprises.gouv.qc.ca",
+        "match": "domain",
+        "reason": "Registraire des entreprises (REQ): permanently denied."
+      },
+      {
+        "pattern": "pes.rbq.gouv.qc.ca",
+        "match": "host",
+        "reason": "RBQ licence search: permanently denied."
+      },
+      {
+        "pattern": "connexence.com",
+        "match": "domain",
+        "reason": "Directory platform: permanently denied."
+      },
+      {
+        "pattern": "ordrepsy.qc.ca",
+        "match": "domain",
+        "reason": "Psychologists' directory: permanently denied."
+      },
+      {
+        "pattern": "algolia.net",
+        "match": "domain",
+        "reason": "Directory search API: permanently denied."
+      },
+      {
+        "pattern": "omvq.qc.ca",
+        "match": "domain",
+        "reason": "OMVQ: terms forbid commercial use; permanently denied."
+      }
+    ],
+    "open_data_sources": [
+      {
+        "id": "rbq_open_data",
+        "label": "RBQ / Données Québec, CC BY 4.0",
+        "attribution": "Source: RBQ / Données Québec, CC BY 4.0",
+        "licence_url": "https://www.donneesquebec.ca/licence/#cc-by",
+        "dataset_url": "https://www.donneesquebec.ca/recherche/dataset/licencesactives",
+        "enabled": true,
+        "host": "www.donneesquebec.ca",
+        "download_urls": [
+          "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/5183fdd4-55b1-418c-8a7d-0a70058ed68d/download/rdl01_extractiondonneesouvertes.json",
+          "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/32f6ec46-85fd-45e9-945b-965d9235840a/download/rdl01_extractiondonneesouvertes.zip"
+        ],
+        "denied_path_prefixes": [
+          "/api/",
+          "/recherche/api/"
+        ],
+        "min_seconds_between_requests": 10,
+        "max_download_age_hours": 24,
+        "max_response_bytes": 160000000,
+        "uses": [
+          "discovery",
+          "conflict_hold_by_licence_category"
+        ],
+        "fields": [
+          {
+            "role": "licence_number",
+            "label": "Numéro de licence"
+          },
+          {
+            "role": "name",
+            "label": "Nom de l'intervenant"
+          },
+          {
+            "role": "other_names",
+            "label": "Autre nom"
+          },
+          {
+            "role": "municipality",
+            "label": "Municipalité"
+          },
+          {
+            "role": "region_code",
+            "label": "Code de région administrative"
+          },
+          {
+            "role": "region",
+            "label": "Région administrative"
+          },
+          {
+            "role": "categories",
+            "label": "Catégories et sous-catégories"
+          }
+        ],
+        "never_stored_fields": [
+          "Courriel",
+          "Numéro de téléphone",
+          "Mandataire",
+          "Adresse",
+          "NEQ"
+        ],
+        "note": "Ruled on by Water and Earth, Oct 23 6:10 AM ET (Air's map, section 10). Only the two fixed download URLs; never /api/, /recherche/api/ or a query string. Courriel, phone and Mandataire never become a contact address or a named person; the address still comes from the business's own domain."
+      }
+    ]
+  },
+  "etiquette": {
+    "user_agent": "ControlWard/1.0 (own-site fetch; contact ml@pharos-ai.ca)",
+    "min_seconds_between_requests_per_host": 10,
+    "max_pages_per_site": 4,
+    "max_response_bytes": 2000000,
+    "never_fetch_domains": [
+      "linkedin.com"
+    ],
+    "linkedin_note": "confirm profile first",
+    "bot_challenge": "A Cloudflare or other bot challenge page is a hard fail for that source: no retry, no bypass."
+  },
+  "watch_feeds": [
+    {
+      "id": "seao-open-tenders",
+      "host_group": "watch",
+      "url": null,
+      "enabled": false,
+      "reason": "Feed URL not confirmed yet. Add the SEAO feed URL here and set enabled to true."
+    },
+    {
+      "id": "merx-open-tenders",
+      "host_group": "watch",
+      "url": null,
+      "enabled": false,
+      "reason": "Feed URL not confirmed yet. Add the MERX feed URL here and set enabled to true."
+    }
+  ]
+}

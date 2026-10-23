@@ -26,6 +26,20 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/MailIntake.swift" \
   "${SOURCE_ROOT}/Mailbox.swift" \
   "${SOURCE_ROOT}/MailActionOutcome.swift" \
+  "${SOURCE_ROOT}/CWAudit.swift" \
+  "${SOURCE_ROOT}/LeadPipelineConfig.swift" \
+  "${SOURCE_ROOT}/LeadPipelineModels.swift" \
+  "${SOURCE_ROOT}/LeadDefinition.swift" \
+  "${SOURCE_ROOT}/Outreach.swift" \
+  "${SOURCE_ROOT}/LeadTransport.swift" \
+  "${SOURCE_ROOT}/RBQOpenData.swift" \
+  "${SOURCE_ROOT}/SiteExtractor.swift" \
+  "${SOURCE_ROOT}/LeadDiscovery.swift" \
+  "${SOURCE_ROOT}/TenderWatcher.swift" \
+  "${SOURCE_ROOT}/ProspectLeads.swift" \
+  "${SOURCE_ROOT}/ProspectSearchRun.swift" \
+  "${SOURCE_ROOT}/LeadProof.swift" \
+  "${SOURCE_ROOT}/LeadPipelineEnvironment.swift" \
   "${SOURCE_ROOT}/BuildInfo.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
@@ -43,6 +57,9 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/CSVImportTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/PortableCheck.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/MailActionOutcomeTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/LeadPipelineTestKit.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/LeadPipelineTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/LeadPipelinePlantedReds.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
