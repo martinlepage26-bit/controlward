@@ -377,6 +377,10 @@
         "terrassement"
       ],
       "region": "QC",
+      "municipalities": [
+        "Saguenay",
+        "Jonquière"
+      ],
       "rbq_subcategory_codes": [
         "15.5",
         "2.5"

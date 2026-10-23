@@ -67,6 +67,10 @@ another segment, area or a higher `--limit`.
 - RBQ open data (Source: RBQ / Données Québec, CC BY 4.0): only the two fixed download links in icp.json, used for
   discovery and for the conflict hold by licence category. Courriel, phone, Mandataire, address and NEQ are never stored.
   The field names are taken from the published field sheet; confirm them against the first real download.
+  The licence-code hold (15.5; 2.5 under the bundle/1.x rule) applies only where the licence's Municipalité is exactly one
+  of the conflict area's `municipalities` (Saguenay, Jonquière; trimmed, case- and accent-insensitive, never a substring, so
+  Petit-Saguenay is outside), or where no location is readable (held). `bin/prove-rbq-hold` prints the held total split by
+  municipality, no-location and code.
 - Refused: LinkedIn, REQ, pes.rbq.gouv.qc.ca, connexence, the psychologues directory, algolia, OMVQ, and the held
   professional-order sites (CMQ, ODQ, OPQ, OPPQ, optométristes, chiropraticiens).
 

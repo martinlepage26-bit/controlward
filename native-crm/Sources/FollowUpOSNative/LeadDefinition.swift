@@ -100,7 +100,7 @@ enum LeadDefinition {
         return config.conflictAreas.first { area in
             area.osmSelectors.contains { prospect.osmTags.contains($0) }
                 || area.keywords.contains { haystack.contains($0.lowercased()) }
-                || !rbqHeldCodes(prospect.rbqCategories, area: area).isEmpty
+                || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: prospect.rbqMunicipality).isEmpty
         }
     }
 
@@ -113,16 +113,26 @@ enum LeadDefinition {
         case unknown
     }
 
+    /// Whole-value comparison after trimming and case/accent folding: "Petit-Saguenay" is not "Saguenay". An area without
+    /// `municipalities` applies everywhere (the region alone).
     static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
-        .inside(area.municipalities?.first ?? "QC")
+        guard let places = area.municipalities else { return .inside(area.region) }
+        let key = municipality.map(placeKey) ?? ""
+        guard !key.isEmpty else { return .unknown }
+        return places.first { placeKey($0) == key }.map(RBQAreaMatch.inside) ?? .outside
     }
 
+    static func placeKey(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    /// The codes that hold this licence where it is: none outside the area; inside it, or with no readable location, the codes.
     static func rbqHeldCodes(_ licenceCodes: [String], area: ICPConfig.ConflictArea, municipality: String?) -> [String] {
-        rbqHeldCodes(licenceCodes, area: area)
+        rbqAreaMatch(municipality, area: area) == .outside ? [] : rbqHeldCodes(licenceCodes, area: area)
     }
 
-    /// The listed RBQ codes that hold a licence with these sub-categories (also used by bin/prove-rbq-hold, so the proof counts
-    /// exactly what the app holds).
+    /// The listed RBQ codes that hold a licence with these sub-categories, wherever it is (the area rule is applied by the
+    /// overload with `municipality:`, which the app and bin/prove-rbq-hold both use).
     static func rbqHeldCodes(_ licenceCodes: [String], area: ICPConfig.ConflictArea) -> [String] {
         let codes = Set(licenceCodes.map(RBQOpenData.normalizeCode))
         return (area.rbqSubcategoryCodes ?? []).map(RBQOpenData.normalizeCode).filter { code in

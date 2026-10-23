@@ -170,6 +170,9 @@ struct RBQIndex: Sendable {
         }
         prospect.rbqCheck = "matched"
         prospect.rbqCategories = licence.subcategories
+        // The licence's own Municipalité decides the area hold; the map/own-site town only fills a blank one.
+        let town = licence.municipality.trimmingCharacters(in: .whitespacesAndNewlines)
+        prospect.rbqMunicipality = town.isEmpty ? municipality : town
         prospect.dataAttribution = source.attribution
     }
 }
