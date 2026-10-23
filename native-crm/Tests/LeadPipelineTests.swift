@@ -861,6 +861,55 @@ enum LeadPipelineTests {
                 let clean = try unwrap(pass.first { $0.number == 6 }, "check 6")
                 try expect(clean.passed && clean.detail.contains("cross-domain=0"), "clean: \(clean.detail)")
             }),
+            ("LIVE-R8 (sample accounting): a sector that under-fills inside the radius is topped up from the same discovery sources at a wider radius", {
+                let fixture = SearchFixture(config: config)
+                // One place inside 3 km and three about 5 km north: the base radius finds 1, the top-up must reach the limit of 3.
+                fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """
+                {"elements":[{"type":"node","id":1001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Nord","healthcare":"clinic","website":"https://www.clinique-exemple.test","addr:city":"Montréal"}},
+                {"type":"node","id":8001,"lat":45.545,"lon":-73.6,"tags":{"name":"Clinique Fictive Un","healthcare":"clinic","addr:city":"Montréal"}},
+                {"type":"node","id":8002,"lat":45.546,"lon":-73.6,"tags":{"name":"Clinique Fictive Deux","healthcare":"clinic","addr:city":"Montréal"}},
+                {"type":"node","id":8003,"lat":45.547,"lon":-73.6,"tags":{"name":"Clinique Fictive Trois","healthcare":"clinic","addr:city":"Montréal"}}]}
+                """, headers: ["content-type": "application/json"])
+                let guarded = GuardedLeadTransport(config: config, inner: fixture.inner, audit: fixture.audit, clock: fixture.clock)
+                let search = ProspectSearchRun(config: config, transport: guarded, audit: fixture.audit, clock: fixture.clock, suppression: SuppressionList(), runID: "r8-run")
+                let report = await search.run(.init(segmentID: "clinic", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 3))
+                try expect(report.candidates == 3, "candidates after top-up: \(report.candidates)")
+                try expect(report.prospects.count + report.skipped.count == 3, "every candidate is a record or a logged skip: records=\(report.prospects.count) skipped=\(report.skipped)")
+                let hosts = Set(fixture.inner.requests.compactMap { $0.url?.host })
+                try expect(hosts.isSubset(of: ["overpass.private.coffee", "photon.komoot.io", "www.clinique-exemple.test"]), "same allowed sources only: \(hosts.sorted())")
+                try expect(report.radiusUsed > 3000 && report.underFillReason == nil, "topped up: r=\(report.radiusUsed) reason=\(String(describing: report.underFillReason))")
+            }),
+            ("LIVE-R8 (sample accounting): per-sector candidates reconcile to the funnel's discovered count, gaps and 0-record sectors are explained", {
+                var university = ProspectSearchRun.Report(runID: "r8-u")
+                university.candidates = 3
+                university.radiusUsed = 3000
+                university.discovered = [DiscoveredPlace(placeID: "osm:node/1", domain: "un.test", usableWebsite: true),
+                                         DiscoveredPlace(placeID: "osm:node/2", domain: "deux.test", usableWebsite: true)]
+                university.prospects = [LeadKit.readyClinic(id: "cw:osm:node/1"), LeadKit.readyClinic(id: "cw:osm:node/2")]
+                university.skipped = ["osm:node/3": "duplicate domain"]
+                var insurer = ProspectSearchRun.Report(runID: "r8-i")
+                insurer.candidates = 2
+                insurer.radiusUsed = 12000
+                insurer.underFillReason = "under-filled after top-up to r=12000 m"
+                insurer.discovered = [DiscoveredPlace(placeID: "osm:node/4", domain: "quatre.test", usableWebsite: false, closed: true),
+                                      DiscoveredPlace(placeID: "osm:node/5", domain: "deux.test", usableWebsite: false)]
+                insurer.skipped = ["osm:node/4": "closed business", "osm:node/5": "own site not readable"]
+                let sectors = [LeadSampleAccounting.Sector(id: "university", limit: 3, report: university),
+                               LeadSampleAccounting.Sector(id: "insurer", limit: 3, report: insurer)]
+                let good = LeadSampleAccounting.account(requested: 6, sectors: sectors, funnelDiscovered: 2)
+                let text = good.lines.joined(separator: "\n")
+                for needle in ["requested=6 candidates=5", "university candidates=3/3", "insurer candidates=2/3 under-filled after top-up to r=12000 m",
+                               "folds within-sector=1 cross-sector=1 closed=1", "5 - 1 - 1 - 1 = 2 = funnel discovered 2",
+                               "insurer records=0 drop reasons: closed-business=1 own-site-not-readable=1"] where !text.contains(needle) {
+                    try expect(false, "missing \(needle) in:\n\(text)")
+                }
+                try expect(good.check.number == 7 && good.check.passed && good.check.detail.contains("reached=5/6 reconciled=yes"), "explained: \(good.check.detail)")
+                let off = LeadSampleAccounting.account(requested: 6, sectors: sectors, funnelDiscovered: 3)
+                try expect(!off.check.passed && off.check.detail.contains("reconciled=no"), "a funnel mismatch fails: \(off.check.detail)")
+                insurer.underFillReason = nil
+                let unexplained = LeadSampleAccounting.account(requested: 6, sectors: [sectors[0], LeadSampleAccounting.Sector(id: "insurer", limit: 3, report: insurer)], funnelDiscovered: 2)
+                try expect(!unexplained.check.passed && unexplained.check.detail.contains("unexplained=[insurer]"), "an unexplained gap fails: \(unexplained.check.detail)")
+            }),
             ("LIVE-R4 (trigger/fit): a synthetic clinic whose only match is a footer 'privacy' link gets no trigger and no fit line", {
                 let fixture = SearchFixture(config: config)
                 let root = "https://www.clinique-exemple.test"
