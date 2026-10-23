@@ -136,17 +136,34 @@ enum SiteExtractor {
 
     /// Trigger signals from icp.json found in a page's own text. Job postings only count on a careers page.
     static func triggers(in page: Page, segment: ICPConfig.Segment, config: ICPConfig) -> [ProspectTrigger] {
-        let lower = page.text.lowercased()
         let path = (URL(string: page.url)?.path ?? "").lowercased()
         var out: [ProspectTrigger] = []
         for kind in segment.triggers {
             if kind == "job_posting", !["carri", "emploi", "career", "job"].contains(where: { path.contains($0) }) { continue }
-            guard let phrase = config.triggerSignals[kind]?.first(where: { lower.contains($0.lowercased()) }) else { continue }
+            guard let phrase = config.triggerSignals[kind]?.first(where: { phraseMatches($0, in: page.text) }) else { continue }
             out.append(ProspectTrigger(kind: kind, url: page.url, fetchedAt: page.fetchedAt, origin: .pageFetch,
                                        publishedAt: kind == "job_posting" ? publishedDate(in: page.text) : nil,
                                        summary: "\(kind): “\(phrase)” on \(path.isEmpty ? "/" : path)"))
         }
         return out
+    }
+
+    /// Water 12:19, Earth/Air 12:21: a trigger phrase counts only as whole words. An all-capitals acronym
+    /// ("AI", "IA") matches only in capitals, so "j'ai", "said", "via" or "média" never count; every other
+    /// phrase matches in any case, with or without accents ("Decision automatisee" = "décision automatisée").
+    static func phraseMatches(_ phrase: String, in text: String) -> Bool {
+        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let acronym = trimmed.count >= 2 && trimmed.allSatisfy { $0.isLetter && $0.isUppercase }
+        func fold(_ value: String) -> String {
+            value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "fr_CA")).lowercased()
+        }
+        let needle = acronym ? trimmed : fold(trimmed)
+        let haystack = acronym ? text : fold(text)
+        let words = needle.split(whereSeparator: \.isWhitespace).map { NSRegularExpression.escapedPattern(for: String($0)) }
+        let pattern = "(?<![\\p{L}\\p{N}])" + words.joined(separator: "\\s+") + "(?![\\p{L}\\p{N}])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        return regex.firstMatch(in: haystack, range: NSRange(haystack.startIndex..., in: haystack)) != nil
     }
 
     /// A date written as YYYY-MM-DD on the page (used for job postings).

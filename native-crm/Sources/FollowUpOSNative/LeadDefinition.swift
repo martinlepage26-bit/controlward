@@ -174,6 +174,8 @@ enum LeadDefinition {
         }
         if prospect.contact?.titleSource == .searchOnly { return "Title seen only in search: confirm on the page before writing." }
         if prospect.consent == nil { return "No consent basis recorded: no draft." }
+        // Earth 12:19: only a trigger with a fetch time is a dated trigger; without one there is nothing to write about.
+        if prospect.trigger?.url == nil || prospect.trigger?.fetchedAt == nil { return "No trigger on the own site with a fetch time: no draft." }
         return "Low: own-site evidence, dated trigger."
     }
 }

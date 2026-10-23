@@ -71,5 +71,10 @@ enum LeadProofVerifier {
 
 /// Water 12:19 / Earth-Air 12:21: one live sample split across the configured sectors.
 enum LeadProofSample {
-    static func split(_ total: Int, across ids: [String]) -> [(id: String, limit: Int)] { [] }
+    /// Even shares in config order; the first sectors take the remainder (60 over 7 = 9,9,9,9,8,8,8).
+    static func split(_ total: Int, across ids: [String]) -> [(id: String, limit: Int)] {
+        guard !ids.isEmpty, total > 0 else { return [] }
+        let base = total / ids.count, extra = total % ids.count
+        return ids.enumerated().map { (id: $0.element, limit: base + ($0.offset < extra ? 1 : 0)) }
+    }
 }

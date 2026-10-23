@@ -90,7 +90,10 @@ if verifyOnly == nil {
     let radius = Int(argument("--radius") ?? "3000") ?? 3000
     let limit = Int(argument("--limit") ?? "3") ?? 3
     let segments = arguments("--segment").isEmpty ? environment.config.segments.map(\.id) : arguments("--segment")
-    let requests = segments.map { ProspectSearchRun.Request(segmentID: $0, latitude: latitude, longitude: longitude, radiusMeters: radius, limit: limit) }
+    // Water 12:19 / Earth-Air 12:21: --sample N splits one live sample across the sectors instead of --limit per sector.
+    let shares = Int(argument("--sample") ?? "").map { LeadProofSample.split($0, across: segments) } ?? segments.map { (id: $0, limit: limit) }
+    if argument("--sample") != nil { print("Sample: \(shares.reduce(0) { $0 + $1.limit }) sites: " + shares.map { "\($0.id)=\($0.limit)" }.joined(separator: " ")) }
+    let requests = shares.map { ProspectSearchRun.Request(segmentID: $0.id, latitude: latitude, longitude: longitude, radiusMeters: radius, limit: $0.limit) }
     print("Searching \(segments.joined(separator: ", ")) around \(latitude),\(longitude) r=\(radius) m, \(limit) sites each (10 s per host)...")
     let reports = await environment.searchAndIngest(requests, audit: audit)
     for (request, report) in zip(requests, reports) {

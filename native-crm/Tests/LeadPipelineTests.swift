@@ -778,7 +778,7 @@ enum LeadPipelineTests {
             }),
             ("Trigger phrases (Water 12:19, Earth/Air 12:21): 'AI' and 'IA' match only as whole uppercase words; other phrases match whole words in any case, with or without accents", {
                 var custom = config
-                custom.triggerSignals["ai_tool_on_own_site"] = ["AI", "IA", "décision automatisée", "chatbot"]
+                custom.triggerSignals = ["ai_tool_on_own_site": ["AI", "IA", "décision automatisée", "chatbot"]]  // only these phrases, under one kind
                 let clinic = try unwrap(custom.segments.first { $0.id == "clinic" }, "clinic")
                 func hits(_ text: String) -> [String] {
                     let page = SiteExtractor.read(html: "<p>\(text)</p>", url: URL(string: LeadKit.homePage)!, fetchedAt: now)

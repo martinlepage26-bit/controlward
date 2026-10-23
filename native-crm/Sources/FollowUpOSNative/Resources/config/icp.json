@@ -27,6 +27,7 @@
         "/nous-joindre"
       ],
       "triggers": [
+        "ai_governance_signal",
         "job_posting",
         "newsroom",
         "tender",
@@ -59,6 +60,7 @@
         "/nous-joindre"
       ],
       "triggers": [
+        "ai_governance_signal",
         "job_posting",
         "newsroom",
         "loi25_notice_or_privacy_officer"
@@ -89,6 +91,7 @@
         "/nous-joindre"
       ],
       "triggers": [
+        "ai_governance_signal",
         "job_posting",
         "newsroom",
         "loi25_notice_or_privacy_officer"
@@ -121,6 +124,7 @@
         "/nous-joindre"
       ],
       "triggers": [
+        "ai_governance_signal",
         "tender",
         "job_posting",
         "newsroom",
@@ -159,6 +163,7 @@
         "/politique-de-confidentialite"
       ],
       "triggers": [
+        "ai_governance_signal",
         "ai_tool_on_own_site",
         "job_posting",
         "loi25_notice_or_privacy_officer"
@@ -199,6 +204,7 @@
         "/politique-de-confidentialite"
       ],
       "triggers": [
+        "ai_governance_signal",
         "ai_tool_on_own_site",
         "job_posting",
         "loi25_notice_or_privacy_officer"
@@ -232,6 +238,7 @@
         "/nous-joindre"
       ],
       "triggers": [
+        "ai_governance_signal",
         "job_posting",
         "newsroom",
         "tender",
@@ -250,6 +257,18 @@
     }
   },
   "trigger_signals": {
+    "ai_governance_signal": [
+      "IA",
+      "intelligence artificielle",
+      "AI",
+      "chatbot",
+      "automatisation",
+      "décision automatisée",
+      "Loi 25",
+      "protection des renseignements personnels",
+      "privacy",
+      "responsable de la protection des renseignements"
+    ],
     "ai_tool_on_own_site": [
       "réservation en ligne",
       "prendre rendez-vous en ligne",
