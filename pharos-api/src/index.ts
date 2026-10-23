@@ -178,6 +178,21 @@ async function readBody(request: Request, maxBytes: number): Promise<{ body?: un
   try { return { body: JSON.parse(raw) }; } catch { return { error: json({ error: "invalid_json" }, 400) }; }
 }
 
+/**
+ * S3-R16: /v1/leads/push takes only synthetic test leads (`test: true`) and inbound form leads that carry
+ * their form's own source (`provenance: { kind: "inbound_form", form_source }`). Prospect search runs inside
+ * ControlWard itself, so a lead with search provenance, or with none, is refused. Mirrors LeadPushPolicy in
+ * native-crm/Sources/FollowUpOSNative/ProspectLeads.swift. The flags are checked, never stored.
+ */
+export function pushAllowed(item: unknown): boolean {
+  if (!item || typeof item !== "object") return false;
+  const record = item as { test?: unknown; provenance?: unknown };
+  if (record.test === true) return true;
+  const provenance = record.provenance as { kind?: unknown; form_source?: unknown } | null | undefined;
+  return !!provenance && typeof provenance === "object" && provenance.kind === "inbound_form"
+    && typeof provenance.form_source === "string" && provenance.form_source.trim().length > 0;
+}
+
 async function pushLeads(request: Request, env: Env): Promise<Response> {
   if (!env.DB) return json({ error: "storage_unavailable" }, 503);
   const { body, error } = await readBody(request, MAX_PUSH_BYTES);
@@ -192,6 +207,11 @@ async function pushLeads(request: Request, env: Env): Promise<Response> {
   if (retract.length > MAX_RETRACTS) return json({ error: "too_many_retractions", max: MAX_RETRACTS }, 413);
   for (const [index, sourceId] of retract.entries()) {
     if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId)) return json({ error: "invalid_retract", index }, 422);
+  }
+
+  // Refuse the whole packet before anything is written (S3-R16).
+  for (const [index, item] of packet.leads.entries()) {
+    if (!pushAllowed(item)) return json({ error: "refused:push-not-inbound", index }, 422);
   }
 
   const incoming = new Map<string, { payload: string; hash: string }>();
