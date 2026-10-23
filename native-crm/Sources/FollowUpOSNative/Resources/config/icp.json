@@ -145,7 +145,9 @@
         "physiothérapie"
       ],
       "allowed_contact_sources": [
-        "own_site"
+        "own_site",
+        "registraire_des_entreprises",
+        "professional_order_directory"
       ],
       "own_site_paths": [
         "/",
@@ -183,7 +185,9 @@
         "toiture"
       ],
       "allowed_contact_sources": [
-        "own_site"
+        "own_site",
+        "registraire_des_entreprises",
+        "professional_order_directory"
       ],
       "own_site_paths": [
         "/",
@@ -404,6 +408,7 @@
   "allowlist": {
     "discovery_hosts": [
       "overpass.private.coffee",
+      "overpass-api.de",
       "photon.komoot.io"
     ],
     "business_domain": "per-fetch",
@@ -418,6 +423,15 @@
       "gmail.googleapis.com"
     ],
     "disabled_sources": [
+      {
+        "id": "registraire_des_entreprises",
+        "hosts": [
+          "www.registreentreprises.gouv.qc.ca",
+          "registreentreprises.gouv.qc.ca"
+        ],
+        "enabled": false,
+        "reason": "Listed as a named-contact source for clinics and trades (S3-R17a) but disabled (Water, 6:30 AM ET). Enabling it is a config change gated by Earth (quoted clause, URL, fetch time). Its hosts are also on the deny list."
+      },
       {
         "id": "professional_order_directory",
         "hosts": [
@@ -548,7 +562,8 @@
         ],
         "note": "Ruled on by Water and Earth, Oct 23 6:10 AM ET (Air's map, section 10). Only the two fixed download URLs; never /api/, /recherche/api/ or a query string. Courriel, phone and Mandataire never become a contact address or a named person; the address still comes from the business's own domain."
       }
-    ]
+    ],
+    "discovery_note": "overpass.private.coffee is primary; overpass-api.de is the fallback on timeout, 429 or 5xx (Water, 6:30 AM ET). Both get category tags and coordinates only, never contact data, with the identifying User-Agent and exponential backoff (Air)."
   },
   "etiquette": {
     "user_agent": "ControlWard/1.0 (own-site fetch; contact ml@pharos-ai.ca)",
@@ -559,7 +574,12 @@
       "linkedin.com"
     ],
     "linkedin_note": "confirm profile first",
-    "bot_challenge": "A Cloudflare or other bot challenge page is a hard fail for that source: no retry, no bypass."
+    "bot_challenge": "A Cloudflare or other bot challenge page is a hard fail for that source: no retry, no bypass.",
+    "discovery_retry": {
+      "attempts_per_host": 2,
+      "base_delay_seconds": 5,
+      "max_delay_seconds": 60
+    }
   },
   "watch_feeds": [
     {

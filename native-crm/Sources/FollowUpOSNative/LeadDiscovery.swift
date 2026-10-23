@@ -14,7 +14,7 @@ struct LeadCandidate: Equatable, Sendable {
     var closed = false
 }
 
-/// Overpass first (overpass.private.coffee), then Photon (photon.komoot.io), per segment selector from icp.json.
+/// Overpass first (overpass.private.coffee, then overpass-api.de), then Photon (photon.komoot.io), per segment selector from icp.json.
 struct LeadDiscovery: Sendable {
     static let overpass = URL(string: "https://overpass.private.coffee/api/interpreter")!
     static let photon = URL(string: "https://photon.komoot.io/api/")!
@@ -47,15 +47,60 @@ struct LeadDiscovery: Sendable {
         return "[out:json][timeout:20];nwr[\"\(key)\"=\"\(value)\"][\"name\"](around:\(r),\(String(format: "%.5f", latitude)),\(String(format: "%.5f", longitude)));out center tags \(min(max(limit, 1), 200));"
     }
 
+    /// Overpass servers in order: overpass.private.coffee is primary, overpass-api.de is the fallback (Water, 6:30 AM ET).
+    static let overpassServers = [overpass, URL(string: "https://overpass-api.de/api/interpreter")!]
+
+    /// What one Overpass attempt produced.
+    enum OverpassAttempt: Equatable, Sendable {
+        case answered([LeadCandidate])
+        /// Timeout, network error, 429 or 5xx: worth another attempt after a backoff. `retryAfter` is the server's own wait.
+        case retryable(retryAfter: Double?)
+        /// A refusal (allowlist, payload, bot challenge) or another 4xx: stop asking Overpass.
+        case stop
+    }
+
+    /// Tries each server with exponential backoff (Air): same tag-and-coordinate payload every time,
+    /// the transport's identifying User-Agent, Retry-After honoured, per-host fair-use spacing kept by the transport.
     func overpass(key: String, value: String, latitude: Double, longitude: Double, radius: Int, limit: Int) async throws -> [LeadCandidate] {
         let query = Self.overpassQuery(key: key, value: value, latitude: latitude, longitude: longitude, radius: radius, limit: limit)
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         let body = Data("data=\(query.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")".utf8)
-        let response = try await transport.fetch(Self.overpass, purpose: .discovery, method: "POST", body: body,
-                                                 headers: ["Content-Type": "application/x-www-form-urlencoded"])
-        guard (200..<300).contains(response.status) else { return [] }
-        return Self.parseOverpass(response.body, via: "overpass \(key)=\(value)")
+        let policy = transport.config.etiquette.discoveryRetry ?? .standard
+        var failures = 0
+        var serverWait: Double?
+        for server in Self.overpassServers {
+            for _ in 0..<max(policy.attemptsPerHost, 1) {
+                if failures > 0 {
+                    let backoff = min(policy.baseDelaySeconds * pow(2, Double(failures - 1)), policy.maxDelaySeconds)
+                    await transport.backoff(seconds: min(max(backoff, serverWait ?? 0), policy.maxDelaySeconds))
+                }
+                switch await attempt(server, body: body, via: "overpass \(key)=\(value)") {
+                case .answered(let found): return found
+                case .stop: return []
+                case .retryable(let retryAfter):
+                    failures += 1
+                    serverWait = retryAfter
+                }
+            }
+        }
+        return []
+    }
+
+    func attempt(_ server: URL, body: Data, via: String) async -> OverpassAttempt {
+        do {
+            let response = try await transport.fetch(server, purpose: .discovery, method: "POST", body: body,
+                                                     headers: ["Content-Type": "application/x-www-form-urlencoded"])
+            if (200..<300).contains(response.status) { return .answered(Self.parseOverpass(response.body, via: via)) }
+            if response.status == 429 || response.status >= 500 {
+                return .retryable(retryAfter: response.headers["retry-after"].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) })
+            }
+            return .stop
+        } catch is LeadPipelineRefusal {
+            return .stop
+        } catch {
+            return .retryable(retryAfter: nil)
+        }
     }
 
     func photon(key: String, value: String, latitude: Double, longitude: Double, limit: Int) async throws -> [LeadCandidate] {

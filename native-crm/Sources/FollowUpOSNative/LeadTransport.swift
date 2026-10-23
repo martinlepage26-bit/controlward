@@ -100,6 +100,9 @@ final class GuardedLeadTransport: @unchecked Sendable {
         self.clock = clock
     }
 
+    /// Backoff between retries uses the same clock as the per-host pacing, so tests see every wait.
+    func backoff(seconds: Double) async { await clock.sleep(seconds: seconds) }
+
     /// Everything attempted, including refusals (which never reached the network).
     var requestLog: [RequestRecord] { lock.withLock { records } }
     var sendCount: Int { requestLog.filter { $0.isSend && $0.result == "ok" }.count }

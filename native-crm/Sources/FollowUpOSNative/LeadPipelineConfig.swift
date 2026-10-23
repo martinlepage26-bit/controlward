@@ -70,6 +70,7 @@ struct ICPConfig: Codable, Equatable, Sendable {
     }
     struct Allowlist: Codable, Equatable, Sendable {
         var discoveryHosts: [String]
+        var discoveryNote: String?
         var businessDomain: String
         var watchHosts: [String]
         var gmailHosts: [String]
@@ -106,6 +107,14 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var neverFetchDomains: [String]
         var linkedinNote: String
         var botChallenge: String?
+        /// Overpass retry policy (Air): attempts per server and exponential backoff on timeout, 429 or 5xx.
+        var discoveryRetry: DiscoveryRetry?
+    }
+    struct DiscoveryRetry: Codable, Equatable, Sendable {
+        var attemptsPerHost: Int
+        var baseDelaySeconds: Double
+        var maxDelaySeconds: Double
+        static let standard = DiscoveryRetry(attemptsPerHost: 2, baseDelaySeconds: 5, maxDelaySeconds: 60)
     }
     struct WatchFeed: Codable, Equatable, Sendable {
         var id: String
@@ -131,7 +140,9 @@ struct ICPConfig: Codable, Equatable, Sendable {
 
     /// The contact sources a segment may use today: listed for the segment and enabled in config.
     func enabledContactSources(for segment: Segment) -> [String] {
-        segment.allowedContactSources // red stub: no enabled filter yet
+        segment.allowedContactSources.filter { id in
+            id == ProspectDataSource.ownSite.rawValue || allowlist.disabledSources.first { $0.id == id }?.enabled == true
+        }
     }
 
     static func decode(_ data: Data) throws -> ICPConfig {

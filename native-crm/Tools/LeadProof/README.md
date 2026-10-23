@@ -41,9 +41,14 @@ another segment, area or a higher `--limit`.
 
 ## Sources
 
-- Discovery: Overpass (`overpass.private.coffee`), falling back to Photon (`photon.komoot.io`). Only OSM tags and
-  coordinates are sent. Photon results carry no website, so a Photon-only run finds no own site to read.
+- Discovery: Overpass (`overpass.private.coffee` primary, `overpass-api.de` fallback), then Photon (`photon.komoot.io`).
+  Only OSM tags and coordinates are sent, with the identifying User-Agent from icp.json. On a timeout, 429 or 5xx the
+  client backs off exponentially (5 s, 10 s, ... capped at 60 s, Retry-After honoured; `etiquette.discovery_retry`),
+  two attempts per server, then moves to the next. Photon results carry no website, so a Photon-only run finds no own
+  site to read.
 - People, titles, addresses and triggers come only from the business's own site (robots.txt honoured, 10 s per host).
+  `allowed_contact_sources` for clinics and trades lists `own_site`, `registraire_des_entreprises` and
+  `professional_order_directory`, but only `own_site` is enabled; the other two are disabled in config and never fetched.
   A Cloudflare or other bot challenge is a hard fail for that site; it is never bypassed.
 - RBQ open data (Source: RBQ / Données Québec, CC BY 4.0): only the two fixed download links in icp.json, used for
   discovery and for the conflict hold by licence category. Courriel, phone, Mandataire, address and NEQ are never stored.
