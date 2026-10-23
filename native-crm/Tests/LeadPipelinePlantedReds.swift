@@ -57,7 +57,35 @@ enum LeadPipelinePlantedReds {
     }
 
     static func tally(_ cases: [Case]) async -> Tally {
-        Tally(ok: true, failures: expectedTotal, lines: ["Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected 56 failures, got 56: OK"])
+        var lines: [String] = []
+        var failures = 0
+        var byGroup: [String: Int] = [:]
+        for item in cases {
+            var outcome: String?
+            var notRun: String?
+            do { outcome = try await item.probe() } catch let skipped as NotRun { notRun = skipped.reason } catch { outcome = "threw \(error)" }
+            if let notRun {
+                lines.append(missedLine(group: item.group, label: item.label, report: .missing(notRun)))
+            } else if let outcome {
+                failures += 1
+                byGroup[item.group, default: 0] += 1
+                lines.append("  RED-OK [\(item.group)] \(item.label): \(outcome)")
+            } else {
+                lines.append(missedLine(group: item.group, label: item.label))
+            }
+        }
+        var ok = cases.count == expectedTotal
+        for (group, expected) in expectedByGroup {
+            let got = byGroup[group, default: 0]
+            let declared = cases.filter { $0.group == group }.count
+            let line = got == expected && declared == expected ? "OK" : "MISMATCH"
+            if line != "OK" { ok = false }
+            lines.append("\(group): expected \(expected) failures, got \(got): \(line)")
+        }
+        ok = ok && failures == expectedTotal
+        lines.append("Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
+        if ok { lines.append("expected \(expectedTotal) failures, got \(failures): OK") }
+        return Tally(ok: ok, failures: failures, lines: lines)
     }
 
     static func run() async -> Bool {
@@ -68,35 +96,10 @@ enum LeadPipelinePlantedReds {
             lastFailures = 0
             return false
         }
-        var failures = 0
-        var byGroup: [String: Int] = [:]
-        for item in cases {
-            var outcome: String?
-            var notRun: String?
-            do { outcome = try await item.probe() } catch let skipped as NotRun { notRun = skipped.reason } catch { outcome = "threw \(error)" }
-            if let notRun {
-                print(missedLine(group: item.group, label: item.label, report: .missing(notRun)))
-            } else if let outcome {
-                failures += 1
-                byGroup[item.group, default: 0] += 1
-                print("  RED-OK [\(item.group)] \(item.label): \(outcome)")
-            } else {
-                print(missedLine(group: item.group, label: item.label))
-            }
-        }
-        var ok = cases.count == expectedTotal
-        for (group, expected) in expectedByGroup {
-            let got = byGroup[group, default: 0]
-            let declared = cases.filter { $0.group == group }.count
-            let line = got == expected && declared == expected ? "OK" : "MISMATCH"
-            if line != "OK" { ok = false }
-            print("\(group): expected \(expected) failures, got \(got): \(line)")
-        }
-        ok = ok && failures == expectedTotal
-        lastFailures = failures
-        print("Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
-        if ok { print("expected \(expectedTotal) failures, got \(failures): OK") }
-        return ok
+        let result = await tally(cases)
+        result.lines.forEach { print($0) }
+        lastFailures = result.failures
+        return result.ok
     }
 
     // MARK: - Cases
