@@ -129,6 +129,11 @@ struct ICPConfig: Codable, Equatable, Sendable {
 
     func segment(_ id: String?) -> Segment? { segments.first { $0.id == id } }
 
+    /// The contact sources a segment may use today: listed for the segment and enabled in config.
+    func enabledContactSources(for segment: Segment) -> [String] {
+        segment.allowedContactSources // red stub: no enabled filter yet
+    }
+
     static func decode(_ data: Data) throws -> ICPConfig {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

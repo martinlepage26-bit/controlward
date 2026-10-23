@@ -27,9 +27,83 @@ enum LeadPipelineTests {
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
             ("ICP config: clinic and trades take named people from the own site only", {
+                // Water, 6:30 AM ET: the list stays in config; only own_site is enabled.
                 for id in config.segments.map(\.id) where config.segment(id)?.triggerRule == "same_day" {
-                    try expect(config.segment(id)?.allowedContactSources == ["own_site"], "\(id) contact sources")
+                    let segment = try unwrap(config.segment(id), id)
+                    try expect(Set(segment.allowedContactSources) == ["own_site", "registraire_des_entreprises", "professional_order_directory"], "\(id) lists \(segment.allowedContactSources)")
+                    try expect(config.enabledContactSources(for: segment) == ["own_site"], "\(id) enabled \(config.enabledContactSources(for: segment))")
                 }
+            }),
+            ("Sources: a disabled contact source is never fetched", {
+                let disabledIDs = ["registraire_des_entreprises", "professional_order_directory"]
+                let hosts = config.allowlist.disabledSources.filter { disabledIDs.contains($0.id) && !$0.enabled }.flatMap(\.hosts)
+                try expect(Set(config.allowlist.disabledSources.filter { !$0.enabled }.map(\.id)).isSuperset(of: disabledIDs), "both listed as disabled")
+                try expect(!hosts.isEmpty, "disabled hosts present")
+                let inner = FakeLeadTransport()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                for host in hosts {
+                    for purpose in [FetchPurpose.ownSite(domain: host), .discovery, .watch] {
+                        do { _ = try await guarded.fetch(URL(string: "https://\(host)/")!, purpose: purpose); throw PortableCheckFailure(description: "\(host) fetched") }
+                        catch let refusal as LeadPipelineRefusal { try expect(refusal.code.hasPrefix("refused:"), refusal.code) }
+                    }
+                }
+                try expect(inner.requests.isEmpty, "0 requests, got \(inner.urls)")
+                var record = LeadKit.readyClinic()
+                record.contact?.source = .registraire
+                try expect(LeadDefinition.namedPerson(record, segment: try unwrap(config.segment("clinic"), "clinic"), config: config) == "no named person", "registraire person refused")
+                let fixture = SearchFixture(config: config)
+                _ = await fixture.run()
+                let disabledHosts = Set(config.allowlist.disabledSources.filter { !$0.enabled }.flatMap(\.hosts))
+                try expect(!fixture.inner.requests.contains { disabledHosts.contains($0.url?.host ?? "") }, "search run touched a disabled source")
+            }),
+            ("Discovery: overpass.private.coffee is primary, answers alone and gets an identifying User-Agent", {
+                let inner = FakeLeadTransport()
+                inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                let clock = FakeLeadClock()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
+                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                try expect(found.count == 1, "found \(found.count)")
+                try expect(inner.requests.compactMap { $0.url?.host } == ["overpass.private.coffee"], "hosts \(inner.urls)")
+                let agent = inner.requests.first?.value(forHTTPHeaderField: "User-Agent") ?? ""
+                try expect(agent.hasPrefix("ControlWard/") && agent.contains("contact "), "identifying UA, got \(agent)")
+                try expect(clock.sleeps.isEmpty, "no backoff on success: \(clock.sleeps)")
+            }),
+            ("Discovery: a private.coffee timeout retries with backoff, then falls back to overpass-api.de with tags and coordinates only", {
+                try expect(config.allowlist.discoveryHosts.contains("overpass-api.de"), "overpass-api.de allowlisted")
+                let inner = FakeLeadTransport()
+                inner.fail(LeadDiscovery.overpass.absoluteString, URLError(.timedOut))
+                inner.respond("https://overpass-api.de/api/interpreter", body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                let clock = FakeLeadClock()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
+                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                try expect(found.count == 1, "found \(found.count)")
+                try expect(inner.requests.compactMap { $0.url?.host } == ["overpass.private.coffee", "overpass.private.coffee", "overpass-api.de"], "hosts \(inner.urls)")
+                try expect(clock.sleeps == [5, 10], "exponential backoff 5 s then 10 s, got \(clock.sleeps)")
+                try expect(inner.requests.allSatisfy { ($0.value(forHTTPHeaderField: "User-Agent") ?? "").hasPrefix("ControlWard/") }, "UA on every Overpass request (overpass-api.de answers 406 without one)")
+                let bodies = inner.requests.compactMap { $0.httpBody.map { String(decoding: $0, as: UTF8.self) } }
+                let query = LeadDiscovery.overpassQuery(key: "healthcare", value: "clinic", latitude: 45.5, longitude: -73.6, radius: 3000, limit: 5)
+                try expect(bodies.count == 3 && Set(bodies).count == 1, "same payload to both servers")
+                try expect(bodies[2].removingPercentEncoding == "data=" + query, "payload is the tag query only: \(bodies[2])")
+                try expect(!bodies[2].contains("%40") && !bodies[2].contains("@") && !bodies[2].lowercased().contains("clinique"), "no contact data")
+                try expect(!inner.urls.contains { $0.contains("photon") }, "Photon not needed")
+            }),
+            ("Discovery: 429 honours Retry-After and 5xx backs off before the retry", {
+                let inner = FakeLeadTransport()
+                inner.enqueue(LeadDiscovery.overpass.absoluteString, status: 429, body: "rate limited", headers: ["retry-after": "30"])
+                inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                let clock = FakeLeadClock()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
+                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                try expect(found.count == 1 && inner.requests.count == 2, "retried once: \(inner.urls)")
+                try expect(clock.sleeps == [30], "Retry-After 30 s honoured, got \(clock.sleeps)")
+                let inner5 = FakeLeadTransport()
+                inner5.enqueue(LeadDiscovery.overpass.absoluteString, status: 504, body: "gateway timeout")
+                inner5.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                let clock5 = FakeLeadClock()
+                let guarded5 = GuardedLeadTransport(config: config, inner: inner5, audit: MemoryAuditSink(), clock: clock5)
+                let found5 = await LeadDiscovery(transport: guarded5).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                try expect(found5.count == 1 && inner5.requests.compactMap { $0.url?.host } == ["overpass.private.coffee", "overpass.private.coffee"], "504 retried on the same server: \(inner5.urls)")
+                try expect(clock5.sleeps.first == 5 && clock5.sleeps.reduce(0, +) >= 10, "5 s backoff, then the 10 s per-host fair-use spacing: \(clock5.sleeps)")
             }),
             ("ICP source scan: no hard-coded segment list in Sources", {
                 let files = (try FileManager.default.contentsOfDirectory(at: LeadKit.sourcesDirectory, includingPropertiesForKeys: nil))

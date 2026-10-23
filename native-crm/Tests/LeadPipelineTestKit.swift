@@ -14,6 +14,11 @@ enum LeadKit {
 
     static let sourcesDirectory: URL = configDirectory.deletingLastPathComponent().deletingLastPathComponent()
 
+    /// One synthetic clinic as an Overpass answer (made-up name, .test domain).
+    static let overpassOneClinic = """
+    {"elements":[{"type":"node","id":2001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Sud","healthcare":"clinic","website":"https://www.clinique-sud.test"}}]}
+    """
+
     static func config() throws -> ICPConfig { try ICPConfig.load(directory: configDirectory) }
 
     static func confirmed() throws -> ICPConfirmed {
@@ -86,6 +91,8 @@ final class FakeLeadTransport: LeadTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var script: [String: LeadHTTPResponse] = [:]
     private var seen: [URLRequest] = []
+    private var failures: [String: any Error] = [:]
+    private var queued: [String: [LeadHTTPResponse]] = [:]
 
     var requests: [URLRequest] { lock.withLock { seen } }
     var urls: [String] { requests.compactMap { $0.url?.absoluteString } }
@@ -94,9 +101,22 @@ final class FakeLeadTransport: LeadTransport, @unchecked Sendable {
         lock.withLock { script[url] = LeadHTTPResponse(status: status, headers: headers, body: Data(body.utf8)) }
     }
 
+    /// The URL throws `error` (e.g. a timeout) instead of answering.
+    func fail(_ url: String, _ error: any Error) { lock.withLock { failures[url] = error } }
+
+    /// One-shot answer served before the scripted one (e.g. a 429, then success).
+    func enqueue(_ url: String, status: Int, body: String, headers: [String: String] = [:]) {
+        lock.withLock { queued[url, default: []].append(LeadHTTPResponse(status: status, headers: headers, body: Data(body.utf8))) }
+    }
+
     func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
         lock.withLock { seen.append(request) }
         let key = request.url?.absoluteString ?? ""
+        if let error = lock.withLock({ failures[key] }) { throw error }
+        if let next = lock.withLock({ () -> LeadHTTPResponse? in
+            guard var list = queued[key], !list.isEmpty else { return nil }
+            let first = list.removeFirst(); queued[key] = list; return first
+        }) { return next }
         return lock.withLock { script[key] } ?? LeadHTTPResponse(status: 404, headers: [:], body: Data())
     }
 }
