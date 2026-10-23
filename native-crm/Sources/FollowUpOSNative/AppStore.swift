@@ -17,6 +17,8 @@ enum WorkspaceRecoveryState: Equatable {
 final class AppStore: ObservableObject {
     @Published private(set) var workspace: PersistentWorkspace
     @Published var notice: String?
+    /// The last CSV import's result; stays until Martin closes it (CSV-5).
+    @Published var lastCSVImport: CSVImportResult?
     @Published private(set) var recoveryState: WorkspaceRecoveryState
 
     /// Connectors whose API key is in the secret store. The key itself is never held here.
@@ -1545,6 +1547,12 @@ final class AppStore: ObservableObject {
             showNotice("Could not save CRM data: \(error.localizedDescription)")
         }
     }
+
+    func dismissCSVImport() {}
+
+#if CONTEXTWARD_ACCEPTANCE
+    func showNoticeForTesting(_ message: String) { showNotice(message) }
+#endif
 
     private func showNotice(_ message: String) {
         noticeTask?.cancel()

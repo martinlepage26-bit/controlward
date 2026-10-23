@@ -236,6 +236,54 @@ private extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
+// MARK: - CSV import result (Slice CSV, Water 9:42 AM ET)
+
+/// One row the import did not take as a lead, or took with a warning. `row` counts the header as row 1.
+struct CSVRowNote: Equatable, Sendable {
+    var row: Int
+    var reason: String
+}
+
+/// What one CSV import did, kept on the store until Martin closes it.
+struct CSVImportResult: Equatable, Sendable {
+    var fileName: String
+    var finishedAt: Date
+    var imported = 0
+    /// Not imported and not reviewable as a person (e.g. `no-name`).
+    var skipped: [CSVRowNote] = []
+    /// Not imported; needs Martin's review (placeholder or role names, `duplicate-lead`).
+    var flagged: [CSVRowNote] = []
+    /// Imported, with a field left empty: `row 7, quote: "about 5k"`.
+    var warnings: [String] = []
+    var ignoredColumns: [String] = []
+    /// The header(s) that actually filled `company`.
+    var companyColumns: [String] = []
+    /// Set when the save failed; nothing from the file was kept.
+    var failure: String?
+    /// Set when the same bytes were already imported this session; nothing was imported.
+    var alreadyImportedAt: Date?
+    var summary = ""
+}
+
+/// The lines the import result panel shows (CSV-5).
+enum CSVImportPresentation {
+    static func lines(_ result: CSVImportResult) -> [String] { [] }
+}
+
+/// Names that are placeholders or role descriptions, not people (CSV-7).
+enum CSVNameCheck {
+    static func flag(_ name: String) -> String? { nil }
+}
+
+/// Strict value readers for CSV-4: nil when the text is not one of the accepted forms.
+enum CSVValue {
+    enum AmountReading: Equatable { case empty, value(Double), unreadable }
+    /// `day` is `yyyy-MM-dd`.
+    enum DateReading: Equatable { case empty, day(String), ambiguous, unreadable }
+    static func amount(_ raw: String) -> AmountReading { .empty }
+    static func date(_ raw: String) -> DateReading { .empty }
+}
+
 // MARK: - LeadGen Codable schema (F5)
 
 struct LeadGenEvent: Decodable, Sendable {

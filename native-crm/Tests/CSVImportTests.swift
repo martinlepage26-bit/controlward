@@ -36,6 +36,14 @@ enum CSVImportTests {
             ("CSV: unrecognized headers say so", unknownHeadersNotice),
             ("CSV: Lantern CRLF export with BOM imports", baeaCRLFWithBOM),
             ("CSV: empty Lantern file reports nothing imported", baeaEmptyNotice),
+            ("CSV-1: organisation headers (EN/FR) fill company; first non-empty wins and is named", csv1OrganisationHeaders),
+            ("CSV-2: nameless rows are skipped with their row numbers, not dropped", csv2NamelessRows),
+            ("CSV-3: unrecognised columns are named in the result", csv3IgnoredColumns),
+            ("CSV-4: unreadable amount or date warns with row, column and raw value; ambiguous dates never guessed", csv4Values),
+            ("CSV-5: the import result stays until closed (no 2.6 s notice)", csv5PersistentResult),
+            ("CSV-6: a failed save is a failed import and keeps none of the file's leads", csv6SaveFailure),
+            ("CSV-7: placeholder and role names go to review, not into the pipeline", csv7PlaceholderNames),
+            ("CSV-8: the same file twice imports nothing the second time; existing leads are flagged duplicate-lead", csv8Reimport),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -261,14 +269,15 @@ enum CSVImportTests {
         let (store, directory) = try freshStore()
         let url = try file("empty.csv", Data("name,email\r\n".utf8), in: directory)
         try expect(try store.importCSV(from: url) == 0, "header-only file imported leads")
-        try expect(store.notice == "No valid leads found in CSV.", "header-only notice: \(String(describing: store.notice))")
+        try expect(store.lastCSVImport?.summary == "No valid leads found in CSV.", "header-only result: \(String(describing: store.lastCSVImport?.summary))")
     }
 
     static func unknownHeadersNotice() throws {
         let (store, directory) = try freshStore()
         let url = try file("unknown.csv", Data("foo,bar\n1,2\n".utf8), in: directory)
         try expect(try store.importCSV(from: url) == 0, "unknown headers imported leads")
-        try expect(store.notice?.hasPrefix("No recognized columns") == true, "unknown headers notice: \(String(describing: store.notice))")
+        try expect(store.lastCSVImport?.summary.hasPrefix("No recognized columns") == true, "unknown headers result: \(String(describing: store.lastCSVImport?.summary))")
+        try expect(store.lastCSVImport?.ignoredColumns == ["foo", "bar"], "unknown headers named: \(String(describing: store.lastCSVImport?.ignoredColumns))")
     }
 
     // MARK: - Lantern import
@@ -286,5 +295,139 @@ enum CSVImportTests {
         let url = try file("baea-empty.csv", Data("audit,language\r\n".utf8), in: directory)
         try expect(try store.importBAEACSV(from: url) == 0, "empty Lantern file imported audits")
         try expect(store.notice == "No Lantern scores found.", "empty Lantern notice: \(String(describing: store.notice))")
+    }
+
+    // MARK: - Slice CSV (Water 9:42 AM ET). Made-up rows only.
+
+    private static func importResult(_ csv: String, name: String = "leads.csv", store: AppStore? = nil) throws -> (AppStore, CSVImportResult) {
+        let (fresh, directory) = try freshStore()
+        let target = store ?? fresh
+        let url = try file(name, Data(csv.utf8), in: directory)
+        _ = try target.importCSV(from: url)
+        guard let result = target.lastCSVImport else { throw SmokeTestFailure.failed("no import result kept on the store") }
+        return (target, result)
+    }
+
+    static func csv1OrganisationHeaders() throws {
+        for header in ["organization", "org", "organisation", "institution", "employer", "account", "firm", "agency", "établissement", "etablissement",
+                       "employeur", "entreprise", "compagnie", "Organisation Name", "ÉTABLISSEMENT", " Org ", "Employer_", "company"] {
+            let (store, _) = try importResult("name,\(header)\nAlex Exemple,Société Fictive\n")
+            try expect(store.leads.first?.company == "Société Fictive", "header \"\(header)\" did not fill company: \(String(describing: store.leads.first?.company))")
+        }
+        let (store, result) = try importResult("name,org,employer\nAlex Exemple,,Employeur Fictif\nBea Exemple,Org Fictive,Autre Fictif\n")
+        try expect(store.leads.first { $0.name == "Alex Exemple" }?.company == "Employeur Fictif", "second column used when the first is empty")
+        try expect(store.leads.first { $0.name == "Bea Exemple" }?.company == "Org Fictive", "first non-empty wins")
+        try expect(result.companyColumns == ["org", "employer"], "result names the company columns used: \(result.companyColumns)")
+    }
+
+    static func csv2NamelessRows() throws {
+        let (store, result) = try importResult("name,email\nAlex Exemple,a@example.test\n,b@example.test\nBea Exemple,c@example.test\n  ,d@example.test\nCy Exemple,e@example.test\n")
+        try expect(result.imported == 3 && store.leads.count == 3, "imported 3, got \(result.imported)")
+        try expect(result.skipped == [CSVRowNote(row: 3, reason: "no-name"), CSVRowNote(row: 5, reason: "no-name")], "skipped rows: \(result.skipped)")
+    }
+
+    static func csv3IgnoredColumns() throws {
+        let (_, result) = try importResult("name,Favourite colour,email,Notes2\nAlex Exemple,blue,a@example.test,x\n")
+        try expect(result.ignoredColumns == ["Favourite colour", "Notes2"], "ignored columns: \(result.ignoredColumns)")
+        try expect(result.imported == 1, "the known columns still import")
+    }
+
+    static func csv4Values() throws {
+        for raw in ["5000", "5 000", "5,000.00", "5 000,00 $", "$5,000"] {
+            try expect(CSVValue.amount(raw) == .value(5_000), "amount \"\(raw)\": \(CSVValue.amount(raw))")
+        }
+        for raw in ["about 5k", "5k", "TBD", "five thousand"] {
+            try expect(CSVValue.amount(raw) == .unreadable, "amount \"\(raw)\" should be unreadable: \(CSVValue.amount(raw))")
+        }
+        for raw in ["2026-10-23", "23/10/2026", "Oct 23, 2026"] {
+            try expect(CSVValue.date(raw) == .day("2026-10-23"), "date \"\(raw)\": \(CSVValue.date(raw))")
+        }
+        try expect(CSVValue.date("03/04/2026") == .ambiguous, "03/04/2026 is ambiguous: \(CSVValue.date("03/04/2026"))")
+        try expect(CSVValue.date("next week") == .unreadable && CSVValue.date("") == .empty && CSVValue.amount(" ") == .empty, "unreadable and empty")
+        let csv = "name,quote,date\nA Exemple,5000,2026-10-23\nB Exemple,1,2026-10-23\nC Exemple,2,2026-10-23\nD Exemple,3,2026-10-23\nE Exemple,4,2026-10-23\nF Exemple,about 5k,03/04/2026\nG Exemple,6,someday\n"
+        let (store, result) = try importResult(csv)
+        try expect(result.imported == 7, "rows with bad values still import: \(result.imported)")
+        try expect(store.leads.first { $0.name == "F Exemple" }?.quoteAmount == nil, "unreadable quote left empty")
+        try expect(result.warnings == ["row 7, quote: \"about 5k\"", "row 7, date: \"03/04/2026\" (ambiguous day/month, not guessed)", "row 8, date: \"someday\""],
+                   "warnings: \(result.warnings)")
+    }
+
+    static func csv5PersistentResult() throws {
+        let (store, result) = try importResult("name,email,colour\nAlex Exemple,a@example.test,red\n,b@example.test,blue\nNone identified,c@example.test,green\n", name: "salon.csv")
+        try expect(store.notice == nil, "no 2.6 s notice for a CSV import: \(String(describing: store.notice))")
+        try expect(result.fileName == "salon.csv" && result.imported == 1 && result.skipped.count == 1 && result.flagged.count == 1, "counts: \(result)")
+        let lines = CSVImportPresentation.lines(result)
+        for needle in ["salon.csv", "Imported 1", "Skipped 1", "Flagged 1", "row 3: no-name", "row 4: placeholder", "ignored column: colour"] {
+            try expect(lines.contains { $0.contains(needle) }, "panel shows \"\(needle)\": \(lines)")
+        }
+        // Nothing clears it but Martin: other store work and time do not.
+        store.showNoticeForTesting("another notice")
+        try expect(store.lastCSVImport == result, "result still there after other activity")
+        store.dismissCSVImport()
+        try expect(store.lastCSVImport == nil, "closed by Martin")
+    }
+
+    static func csv6SaveFailure() throws {
+        let (store, directory) = try freshStore()
+        let before = store.leads.count
+        // Force the save to throw: the data folder becomes a plain file.
+        let data = directory.appendingPathComponent("data")
+        try? FileManager.default.removeItem(at: data)
+        try Data("not a folder".utf8).write(to: data)
+        let url = try file("fail.csv", Data("name,email\nAlex Exemple,a@example.test\nBea Exemple,b@example.test\n".utf8), in: directory)
+        _ = try? store.importCSV(from: url)
+        let result = store.lastCSVImport
+        try expect(result?.failure != nil && result?.imported == 0, "result says the import failed: \(String(describing: result))")
+        try expect(result?.summary.hasPrefix("Import failed") == true && result?.summary.contains("Imported") == false, "no success text: \(String(describing: result?.summary))")
+        try expect(store.leads.count == before && !store.leads.contains { $0.name == "Alex Exemple" }, "none of the file's leads kept: \(store.leads.map(\.name))")
+    }
+
+    static func csv7PlaceholderNames() throws {
+        let names = ["None identified", "n/a", "N/A", "TBD", "Unknown", "-", "Role only", "Alex Exemple; Bea Exemple", "CRO (Jane Doe)",
+                     "Chief Risk Officer", "Directeur général", "Privacy Officer", "one two three four five six seven",
+                     "Jean-François Tremblay", "Mary O'Neil"]
+        let csv = "name,org\n" + names.map { "\"\($0)\",Org Fictive" }.joined(separator: "\n") + "\n"
+        let (store, result) = try importResult(csv)
+        try expect(Set(store.leads.map(\.name)) == ["Jean-François Tremblay", "Mary O'Neil"], "only the two people import: \(store.leads.map(\.name))")
+        try expect(result.flagged.map(\.row) == Array(2...14), "flagged rows: \(result.flagged)")
+        let reasons = Dictionary(uniqueKeysWithValues: result.flagged.map { ($0.row, $0.reason) })
+        try expect(reasons[2] == "placeholder" && reasons[9] == "semicolon" && reasons[10] == "person-in-parentheses" && reasons[11] == "title-only"
+                   && reasons[12] == "title-only" && reasons[13] == "title-only" && reasons[14] == "more-than-6-words", "reasons: \(reasons)")
+        for name in names.prefix(13) { try expect(CSVNameCheck.flag(name) != nil, "\"\(name)\" not flagged") }
+        for name in ["Jean-François Tremblay", "Mary O'Neil", "Élise Côté", "Anne-Marie St-Pierre"] { try expect(CSVNameCheck.flag(name) == nil, "\"\(name)\" flagged") }
+    }
+
+    /// The header line and row shapes of the 42-row file imported on 2026-10-23, with made-up values.
+    static let sessionHeader = "lead_id,approval_status,priority,batch,batch1_rank,name,title,org,offer,trigger_and_link,trigger_live,within_90_days,title_source,contact_route,fit,risk,chi_call,draft_connection_fr,draft_connection_en,draft_followup_fr,draft_followup_en,batch1_trigger_summary"
+    static func sessionFixture() -> String {
+        let rows = (1...42).map { index -> String in
+            let rank = index <= 20 ? String(index) : ""
+            return "L-\(String(format: "%03d", index)),pending review,P\(index % 3 + 1),batch \(index % 2 + 1),\(rank),Personne Fictive \(index),,Organisation Fictive \(index),offre,\"https://example.test/\(index)\",,,,,,\"risque fictif\",,,,,,"
+        }
+        return ([sessionHeader] + rows).joined(separator: "\r\n") + "\r\n"
+    }
+
+    static func csv8Reimport() throws {
+        let (store, directory) = try freshStore()
+        let url = try file("leads-today.csv", Data(sessionFixture().utf8), in: directory)
+        let first = try store.importCSV(from: url)
+        let second = try store.importCSV(from: url)
+        try expect(first == 42 && second == 0 && store.leads.count == 42, "42 then 0: \(first), \(second), \(store.leads.count)")
+        let result = try unwrapResult(store)
+        try expect(result.alreadyImportedAt != nil && result.summary.contains("already imported at"), "second result: \(result.summary)")
+        // A copy under another name has the same bytes: still already imported.
+        let copy = try file("leads-today-copy.csv", Data(sessionFixture().utf8), in: directory)
+        try expect(try store.importCSV(from: copy) == 0, "same bytes, other name")
+        // Different bytes, one row matching an existing lead by normalised name and company.
+        let other = try file("other.csv", Data("name,org\n personne fictive 7 ,ORGANISATION FICTIVE 7\nNouvelle Personne,Org Nouvelle\n".utf8), in: directory)
+        try expect(try store.importCSV(from: other) == 1, "only the new lead imports")
+        let flagged = try unwrapResult(store).flagged
+        try expect(flagged == [CSVRowNote(row: 2, reason: "duplicate-lead")], "duplicate flagged, no merge: \(flagged)")
+        try expect(store.leads.count == 43, "no merge, no second copy: \(store.leads.count)")
+    }
+
+    private static func unwrapResult(_ store: AppStore) throws -> CSVImportResult {
+        guard let result = store.lastCSVImport else { throw SmokeTestFailure.failed("no import result") }
+        return result
     }
 }
