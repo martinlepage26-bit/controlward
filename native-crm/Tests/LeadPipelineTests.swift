@@ -800,7 +800,42 @@ enum LeadPipelineTests {
                 let limits = split.map(\.limit)
                 try expect((limits.min() ?? 0) >= 8 && (limits.max() ?? 0) - (limits.min() ?? 0) <= 1, "even shares: \(limits)")
             }),
-            ("Check 2 (14:03, cw-audit L213/L214): the fetch and score lines match the prospect's source URL when the page came back with a trailing slash, another host case, the default port or a fragment", {
+            ("LIVE-R4 (trigger/fit): a synthetic clinic whose only match is a footer 'privacy' link gets no trigger and no fit line", {
+                let fixture = SearchFixture(config: config)
+                let root = "https://www.clinique-exemple.test"
+                fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1><p>Prendre rendez-vous en ligne.</p>"
+                                      + "<a href=\"/notre-equipe\">Notre équipe</a> <a href=\"/nous-joindre\">Nous joindre</a>"
+                                      + "<footer><a href=\"/privacy\">Privacy</a> · <a href=\"/privacy-policy\">Privacy policy</a></footer>")
+                fixture.inner.respond("\(root)/notre-equipe", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")
+                fixture.inner.respond("\(root)/nous-joindre", body: "<p>Nous joindre</p><address>\(LeadKit.clinicAddress)</address><a href=\"mailto:info@clinique-exemple.test\">info</a>")
+                let report = await fixture.run()
+                let record = try unwrap(report.prospects.first, "prospect")
+                try expect(record.trigger == nil && record.fit == nil, "no trigger and no fit from a footer link: \(String(describing: record.trigger)) fit=\(String(describing: record.fit))")
+                try expect(record.status != .ready && record.reasons.contains("no trigger URL with fetch time") && report.drafts.isEmpty,
+                           "stays Fix without a draft: \(record.status) \(record.reasons) drafts=\(report.drafts.count)")
+            }),
+            ("LIVE-R4 (trigger/fit): nav, header and footer text and link text never count, bare 'privacy' never counts; an AI phrase or a specific Loi 25 phrase in body text does", {
+                let clinic = try unwrap(config.segments.first { $0.id == "clinic" }, "clinic")
+                func kinds(_ html: String) -> [String] {
+                    let page = SiteExtractor.read(html: html, url: URL(string: LeadKit.homePage)!, fetchedAt: now)
+                    return SiteExtractor.triggers(in: page, segment: clinic, config: config).map(\.kind).filter { $0 == "ai_governance_signal" }
+                }
+                var failures: [String] = []
+                for html in ["<nav><a href=\"/ia\">Intelligence artificielle</a></nav><p>Bienvenue à la clinique.</p>",
+                             "<header><p>Chatbot</p></header><p>Bienvenue à la clinique.</p>",
+                             "<p>Bienvenue à la clinique.</p><footer><p>Loi 25</p><a href=\"/vie-privee\">Protection des renseignements personnels</a></footer>",
+                             "<p>Bienvenue. <a href=\"/ia\">Notre politique sur l'IA</a></p>",
+                             "<p>We respect your privacy.</p>", "<p>Privacy</p>"] where !kinds(html).isEmpty {
+                    failures.append("counted: \(html)")
+                }
+                for html in ["<p>Conformément à la Loi 25, notre responsable de la protection des renseignements répond à vos questions.</p>",
+                             "<p>Nous utilisons l'IA pour trier les demandes.</p>",
+                             "<main><p>Our privacy team reviews every AI tool we use.</p></main><footer><a href=\"/privacy\">Privacy</a></footer>"] where kinds(html).isEmpty {
+                    failures.append("missed: \(html)")
+                }
+                try expect(failures.isEmpty, "\(failures)")
+            }),
+            ("LIVE-R7 (URL canonicalisation, check 2, cw-audit L213/L214): the fetch and score lines match the prospect's source URL when the page came back with a trailing slash, another host case, the default port or a fragment", {
                 var failures: [String] = []
                 for final in ["\(Check2Site.root)/nous-joindre/", "https://WWW.Clinique-Exemple.TEST/nous-joindre",
                               "https://www.clinique-exemple.test:443/nous-joindre", "\(Check2Site.root)/nous-joindre#equipe"] {
@@ -810,7 +845,7 @@ enum LeadPipelineTests {
                 }
                 try expect(failures.isEmpty, "check 2 must pass: \(failures)")
             }),
-            ("Check 2 (14:03): a page that came back from a different path, a different path case, a deeper path or a different query string is never matched to the fetch of another URL", {
+            ("LIVE-R7 (URL canonicalisation, check 2): a page that came back from a different path, a different path case, a deeper path or a different query string is never matched to the fetch of another URL", {
                 var failures: [String] = []
                 for final in ["\(Check2Site.root)/nous-joindre-2", "\(Check2Site.root)/Nous-joindre", "\(Check2Site.root)/nous-joindre/plan",
                               "\(Check2Site.root)/nous-joindre?lang=en"] {
