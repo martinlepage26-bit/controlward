@@ -825,6 +825,42 @@ enum LeadPipelineTests {
                 let empty = try unwrap(none.first { $0.number == 3 }, "check 3")
                 try expect(!empty.passed && empty.detail.contains("ready=0") && empty.detail.contains("drafted=0"), "zero Ready is counted: \(empty.detail)")
             }),
+            ("LIVE-R6 (cross-record merge): two prospects on different own domains that share a phone line stay two records, each with only its own evidence", {
+                let first = LeadR6.record(LeadKit.readyClinic(), phone: "514 555 0100")
+                let second = try LeadR6.moved(LeadKit.readyClinic(id: "cw:osm:way/3003"), to: "universite-fictive.test", phone: "514 555 0100")
+                let store = ProspectLeadsStore()
+                let result = await ProspectIngest.ingest([first, second], into: store, config: config, now: now, audit: MemoryAuditSink())
+                // Each prospect id belongs to one organisation: evidence under an id must stay on that organisation's own domain.
+                let owner = ["cw:osm:node/1001": LeadKit.clinicDomain, "cw:osm:way/3003": "universite-fictive.test"]
+                let leaks = store.records.flatMap { record in LeadR6.urls(record).filter { url in
+                    !HostMatch.belongs(URL(string: url)?.host ?? "-", to: owner[record.id] ?? "-") }.map { "\(record.id) <- \($0)" } }
+                try expect(leaks.isEmpty, "no record carries another prospect's evidence: \(leaks)")
+                try expect(store.records.count == 2 && result.merged.isEmpty, "two organisations stay two records: count=\(store.records.count) merged=\(result.merged)")
+                let ids = Dictionary(uniqueKeysWithValues: store.records.map { ($0.id, $0.businessDomain ?? "-") })
+                try expect(ids["cw:osm:node/1001"] == LeadKit.clinicDomain && ids["cw:osm:way/3003"] == "universite-fictive.test", "each id keeps its own domain: \(ids)")
+            }),
+            ("LIVE-R6 (evidence domain invariant): ingest refuses a record with an evidence URL off its own domain and audits refused:cross-domain-evidence", {
+                var tampered = LeadKit.readyClinic(id: "cw:osm:node/4004")
+                tampered.trigger?.url = "https://www.universite-fictive.test/nouvelles"
+                let audit = MemoryAuditSink()
+                let store = ProspectLeadsStore()
+                let result = await ProspectIngest.ingest([tampered, LeadKit.readyClinic()], into: store, config: config, now: now, audit: audit)
+                try expect(store.records.map(\.id) == ["cw:osm:node/1001"], "only the clean record is stored: \(store.records.map(\.id))")
+                try expect(result.rejected["cw:osm:node/4004"] == "refused:cross-domain-evidence", "rejected: \(result.rejected)")
+                try expect(audit.lines.contains { $0.target == "cw:osm:node/4004" && $0.result == "refused:cross-domain-evidence" },
+                           "audited: \(audit.lines.map(\.text))")
+            }),
+            ("LIVE-R6 (proof check 6): any record with an evidence URL off its own domain is a hard fail; clean records pass with cross-domain=0", {
+                var tampered = LeadKit.readyClinic(id: "cw:osm:node/4004")
+                tampered.snapshots.append(SiteSnapshot(url: "https://www.universite-fictive.test/", fetchedAt: now, text: "Université Fictive"))
+                let fail = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: [], prospects: [LeadKit.readyClinic(), tampered], drafts: [], config: config)
+                let check6 = try unwrap(fail.first { $0.number == 6 }, "check 6")
+                try expect(!check6.passed && check6.detail.contains("cross-domain=1") && check6.detail.contains("cw:osm:node/4004 www.universite-fictive.test"),
+                           "check 6 fails and names the record and host: \(check6.detail)")
+                let pass = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: [], prospects: [LeadKit.readyClinic()], drafts: [], config: config)
+                let clean = try unwrap(pass.first { $0.number == 6 }, "check 6")
+                try expect(clean.passed && clean.detail.contains("cross-domain=0"), "clean: \(clean.detail)")
+            }),
             ("LIVE-R4 (trigger/fit): a synthetic clinic whose only match is a footer 'privacy' link gets no trigger and no fit line", {
                 let fixture = SearchFixture(config: config)
                 let root = "https://www.clinique-exemple.test"
@@ -1460,5 +1496,32 @@ enum Check2Site {
                                               prospects: report.prospects, drafts: report.drafts, config: config)
         let two = try LeadPipelineTests.unwrap(checks.first { $0.number == 2 }, "check 2")
         return (two.passed, two.detail, record.sourceURL ?? "-")
+    }
+}
+
+/// LIVE-R6 helpers: a second synthetic organisation on its own domain, and every evidence URL a record carries.
+enum LeadR6 {
+    static func record(_ record: ProspectRecord, phone: String) -> ProspectRecord {
+        var copy = record
+        copy.phone = phone
+        return copy
+    }
+
+    static func moved(_ record: ProspectRecord, to domain: String, phone: String) throws -> ProspectRecord {
+        let json = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
+            .replacingOccurrences(of: LeadKit.clinicDomain, with: domain)
+            .replacingOccurrences(of: "Clinique Exemple Nord", with: "Université Fictive")
+        var copy = try JSONDecoder().decode(ProspectRecord.self, from: Data(json.utf8))
+        copy.phone = phone
+        return copy
+    }
+
+    static func urls(_ record: ProspectRecord) -> [String] {
+        var out = [record.sourceURL, record.addressSourceURL, record.contact?.sourceURL, record.route?.sourceURL, record.trigger?.url].compactMap { $0 }
+        out += record.snapshots.map(\.url)
+        if let research = record.research {
+            out += research.observedFacts.evidence.values.flatMap { $0.map(\.url) } + research.assessment.supportingEvidence.map(\.url)
+        }
+        return out
     }
 }
