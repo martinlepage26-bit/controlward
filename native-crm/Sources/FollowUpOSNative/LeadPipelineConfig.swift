@@ -36,8 +36,11 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var osmSelectors: [String]
         var keywords: [String]
         var region: String
-        /// Words in the RBQ licence "Catégories et sous-catégories" field that put a firm on hold.
-        var rbqCategoryKeywords: [String]?
+        /// RBQ sub-category codes (e.g. "15.5", "2.5", "GPC") that put a licensed firm in this hold. Matched exactly against
+        /// the codes of the whole licence, after grouping the file's rows by "Numéro de licence".
+        var rbqSubcategoryCodes: [String]?
+        /// Where the codes were checked: RBQ's own sub-category list (URL and date).
+        var rbqSubcategorySource: String?
     }
     struct Sender: Codable, Equatable, Sendable {
         var name: String
@@ -95,6 +98,9 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var uses: [String]
         var fields: [FieldLabel]
         var neverStoredFields: [String]
+        /// Every column the real file is known to have. A column outside this list stops the parse (refused:open-data-header).
+        var knownHeaders: [String]?
+        var headerNote: String?
         var note: String?
         struct FieldLabel: Codable, Equatable, Sendable { var role: String; var label: String }
         func label(_ role: String) -> String? { fields.first { $0.role == role }?.label }

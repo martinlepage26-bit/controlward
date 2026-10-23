@@ -9,7 +9,10 @@ struct RBQLicence: Codable, Equatable, Sendable {
     var municipality: String
     var regionCode: String
     var region: String
-    var categories: [String]
+    /// "Categorie" values seen on the licence's rows (Specialisee / Generale).
+    var licenceClasses: [String] = []
+    /// Sub-category codes of the whole licence ("15.5", "2.5", "GPC" ...), grouped across rows.
+    var subcategories: [String]
     /// Always `RBQ / Données Québec, CC BY 4.0`.
     var provenance: String
 }
@@ -58,12 +61,12 @@ enum RBQOpenData {
     }
 
     /// Stream-parses the cached file in 1 MB chunks; only one record is held at a time.
-    static func parse(file: URL, source: ICPConfig.OpenDataSource, each: (RBQLicence) -> Void) throws {
+    static func parse(file: URL, source: ICPConfig.OpenDataSource, chunkSize: Int = 1 << 20, each: (RBQLicence) -> Void) throws {
         try checkFieldMap(source)
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var splitter = JSONRecordSplitter()
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
             splitter.feed(chunk) { if let licence = licence(from: $0, source: source) { each(licence) } }
         }
     }
@@ -100,7 +103,7 @@ enum RBQOpenData {
         guard !name.isEmpty else { return nil }
         return RBQLicence(licenceNumber: value("licence_number"), name: name, otherNames: list("other_names"),
                           municipality: value("municipality"), regionCode: value("region_code"), region: value("region"),
-                          categories: list("categories"), provenance: source.label)
+                          subcategories: list("subcategory_list"), provenance: source.label)
     }
 
     private static func stringValue(_ raw: Any) -> String {
@@ -149,7 +152,7 @@ struct RBQIndex: Sendable {
     /// Adds licence categories and the attribution to a prospect. Never touches contact, route, address or person.
     func enrich(_ prospect: inout ProspectRecord, municipality: String?, source: ICPConfig.OpenDataSource) {
         guard let licence = match(name: prospect.organisation, municipality: municipality) else { return }
-        prospect.rbqCategories = licence.categories
+        prospect.rbqCategories = licence.subcategories
         prospect.dataAttribution = source.attribution
     }
 }

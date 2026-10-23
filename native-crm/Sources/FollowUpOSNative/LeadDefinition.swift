@@ -90,7 +90,7 @@ enum LeadDefinition {
         return config.conflictAreas.first { area in
             area.osmSelectors.contains { prospect.osmTags.contains($0) }
                 || area.keywords.contains { haystack.contains($0.lowercased()) }
-                || (area.rbqCategoryKeywords ?? []).contains { licence.contains($0.lowercased()) }
+                || (area.rbqSubcategoryCodes ?? []).contains { licence.contains($0.lowercased()) }
         }
     }
 

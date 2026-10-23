@@ -132,3 +132,54 @@ final class FakeLeadClock: LeadClock, @unchecked Sendable {
     func advance(_ seconds: Double) { lock.withLock { current = current.addingTimeInterval(seconds) } }
     func sleep(seconds: Double) async { lock.withLock { slept.append(seconds); current = current.addingTimeInterval(seconds) } }
 }
+
+/// RBQ fixtures. The header row is copied byte for byte from a real RBQ CSV download (Air, 2026-10-23 06:47 EDT,
+/// map section 10a); the JSON record shape is copied from the real JSON file. Every data value is synthetic.
+enum RBQFixture {
+    static let csvHeader = #""Numéro de licence","Statut de la licence","Type de licence","Date de délivrance","Restriction","Date de début de la restriction","Date de fin de la restriction","Association ou compagnie fournissant le cautionnement","Montant de la caution","Date du paiement annuel","Mandataire","Courriel","Adresse","NEQ","Nom de l'intervenant","Numéro de téléphone","Municipalité","Statut juridique","Code de région administrative","Région administrative","Nombre de sous-catégorie autorisées","Categorie","Sous-catégories","Autre nom""#
+
+    /// One CSV row (one licence x one sub-category), all values synthetic.
+    static func csvRow(licence: String, name: String, town: String, category: String, code: String, otherName: String = "") -> String {
+        let values = [licence, "Valide", "Entrepreneur", "2001-01-01", "", "", "", "", "", "2026-01-01", "Mandataire Fictif",
+                      "secret@exemple-rbq.test", "1 rue Nulle", "0000000000", name, "514-555-0100", town, "Société par actions",
+                      "06", "Montréal (06)", "3", category, code, otherName]
+        return values.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }.joined(separator: ",")
+    }
+
+    static func csv(_ rows: [String], header: String = csvHeader) -> Data { Data(([header] + rows).joined(separator: "\n").appending("\n").utf8) }
+
+    /// One JSON record in the real file's shape: {"Licence":{..., "Catégories et sous-catégories":[{"Categorie":..,"Sous-catégories":..}]}}.
+    static func jsonRecord(licence: String, name: String, town: String, codes: [(String?, String)], dropping: String? = nil) -> String {
+        let list = codes.map { category, code in
+            category.map { #"{"Categorie":"\#($0)","Sous-catégories":"\#(code)"}"# } ?? #"{"Sous-catégories":"\#(code)"}"#
+        }.joined(separator: ",")
+        var fields: [(String, String)] = [
+            ("Numéro de licence", "\"\(licence)\""), ("Statut de la licence", "\"Valide\""), ("Type de licence", "\"Entrepreneur\""),
+            ("Date de délivrance", "\"2001-01-01\""), ("Restriction", "\"\""), ("Date de début de la restriction", "\"\""),
+            ("Date de fin de la restriction", "\"\""), ("Association ou compagnie fournissant le cautionnement", "null"), ("Montant de la caution", "null"),
+            ("Date du paiement annuel", "\"2026-01-01\""), ("Mandataire", "\"Mandataire Fictif\""), ("Courriel", "\"secret@exemple-rbq.test\""),
+            ("Adresse", "\"1 rue Nulle\""), ("NEQ", "\"0000000000\""), ("Nom de l'intervenant", "\"\(name)\""), ("Numéro de téléphone", "\"514-555-0100\""),
+            ("Municipalité", "\"\(town)\""), ("Statut juridique", "\"Société par actions\""), ("Code de région administrative", "\"06\""),
+            ("Région administrative", "\"Montréal (06)\""), ("Nombre de sous-catégorie autorisées", "\(codes.count)"),
+            ("Catégories et sous-catégories", "[\(list)]"), ("Autre nom", "null")
+        ]
+        if let dropping { fields.removeAll { $0.0 == dropping } }
+        return #"{"Licence":{"# + fields.map { "\"\($0.0)\":\($0.1)" }.joined(separator: ",") + "}}"
+    }
+
+    static func json(_ records: [String]) -> Data { Data((#"{"Liste Licence":["# + records.joined(separator: ",") + "]}").utf8) }
+
+    /// Excerpt of RBQ's official sub-category list (annexes II and III), copied from
+    /// https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/
+    /// on 2026-10-23 06:50 EDT. Every code the config holds on must appear here with a plumbing or excavation title.
+    static let officialSubcategories: [String: String] = [
+        "2.4": "Entrepreneur en systèmes d’assainissement autonome",
+        "2.5": "Entrepreneur en excavation et terrassement",
+        "2.6": "Entrepreneur en pieux et fondations spéciales",
+        "2.7": "Entrepreneur en travaux d’emplacement",
+        "11.2": "Entrepreneur en équipements et produits spéciaux",
+        "15.4": "Entrepreneur en systèmes de chauffage hydronique",
+        "15.5": "Entrepreneur en plomberie",
+        "16.0": "Entrepreneur en électricité"
+    ]
+}

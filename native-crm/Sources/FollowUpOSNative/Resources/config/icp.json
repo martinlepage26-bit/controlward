@@ -377,16 +377,11 @@
         "terrassement"
       ],
       "region": "QC",
-      "rbq_category_keywords": [
-        "plomberie",
-        "excavation",
-        "terrassement",
-        "drainage",
-        "égout",
-        "fosse septique",
-        "puits",
-        "tuyauterie"
-      ]
+      "rbq_subcategory_codes": [
+        "15.5",
+        "2.5"
+      ],
+      "rbq_subcategory_source": "RBQ official sub-category list (Règlement sur la qualification professionnelle des entrepreneurs et des constructeurs-propriétaires, annexes II and III): https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/ (checked 2026-10-23 06:50 EDT). 15.5 = Entrepreneur en plomberie (annexe II); 2.5 = Entrepreneur en excavation et terrassement (annexe III). Matched exactly against the licence's 'Sous-catégories' codes after grouping by 'Numéro de licence'. Not listed, for Martin to decide: 2.4 systèmes d'assainissement autonome, 2.6 pieux et fondations spéciales, 2.7 travaux d'emplacement, 15.4 chauffage hydronique."
     }
   ],
   "sender": {
@@ -521,7 +516,7 @@
         "max_response_bytes": 160000000,
         "uses": [
           "discovery",
-          "conflict_hold_by_licence_category"
+          "conflict_hold_by_licence_subcategory_code"
         ],
         "fields": [
           {
@@ -549,8 +544,20 @@
             "label": "Région administrative"
           },
           {
-            "role": "categories",
+            "role": "category",
+            "label": "Categorie"
+          },
+          {
+            "role": "subcategory",
+            "label": "Sous-catégories"
+          },
+          {
+            "role": "subcategory_list",
             "label": "Catégories et sous-catégories"
+          },
+          {
+            "role": "json_record",
+            "label": "Licence"
           }
         ],
         "never_stored_fields": [
@@ -560,7 +567,35 @@
           "Adresse",
           "NEQ"
         ],
-        "note": "Ruled on by Water and Earth, Oct 23 6:10 AM ET (Air's map, section 10). Only the two fixed download URLs; never /api/, /recherche/api/ or a query string. Courriel, phone and Mandataire never become a contact address or a named person; the address still comes from the business's own domain."
+        "note": "Ruled on by Water and Earth, Oct 23 6:10 AM ET (Air's map, section 10). Only the two fixed download URLs; never /api/, /recherche/api/ or a query string. Courriel, phone and Mandataire never become a contact address or a named person; the address still comes from the business's own domain.",
+        "known_headers": [
+          "Numéro de licence",
+          "Statut de la licence",
+          "Type de licence",
+          "Date de délivrance",
+          "Restriction",
+          "Date de début de la restriction",
+          "Date de fin de la restriction",
+          "Association ou compagnie fournissant le cautionnement",
+          "Montant de la caution",
+          "Date du paiement annuel",
+          "Mandataire",
+          "Courriel",
+          "Adresse",
+          "NEQ",
+          "Nom de l'intervenant",
+          "Numéro de téléphone",
+          "Municipalité",
+          "Statut juridique",
+          "Code de région administrative",
+          "Région administrative",
+          "Nombre de sous-catégorie autorisées",
+          "Categorie",
+          "Sous-catégories",
+          "Autre nom",
+          "Catégories et sous-catégories"
+        ],
+        "header_note": "Labels checked by Air against a real download, 2026-10-23 06:47 EDT (map section 10a). CSV (zip): one row per licence and sub-category, columns 'Categorie' and 'Sous-catégories'. JSON (the file ControlWard fetches): {\"Liste Licence\":[{\"Licence\":{...}}]}, one record per licence, sub-categories nested in 'Catégories et sous-catégories' as [{\"Categorie\",\"Sous-catégories\"}]. Rows are grouped by 'Numéro de licence' before the hold. A missing mapped label or a column not in known_headers stops the parse (refused:open-data-header); nothing is skipped silently."
       }
     ],
     "discovery_note": "overpass.private.coffee is primary; overpass-api.de is the fallback on timeout, 429 or 5xx (Water, 6:30 AM ET). Both get category tags and coordinates only, never contact data, with the identifying User-Agent and exponential backoff (Air)."
