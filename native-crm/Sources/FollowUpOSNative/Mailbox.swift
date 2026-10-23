@@ -70,6 +70,8 @@ struct MailCommandReceipt: Equatable, Sendable {
     var draftID: String?
     /// inbox, archive, trash, draft, or sent. Trash still has the message.
     var location: String?
+    /// The id the mailbox gave a sent message (the `receipt=` of a send's audit line).
+    var messageID: String? = nil
 }
 
 enum MailboxError: LocalizedError, Equatable {
@@ -1274,8 +1276,9 @@ struct GmailMailboxClient<HTTP: MailHTTPSending>: Sendable {
             let raw = Base64URL.encode(Data(try Self.rfc822(from: from, compose: compose, inReplyTo: replyHeader).utf8))
             var message: [String: Any] = ["raw": raw]
             if let threadID { message["threadId"] = threadID }
-            _ = try await send(url: try Self.url("messages", "send"), method: "POST", json: message)
-            return MailCommandReceipt(action: command.action, sourceID: command.sourceID, draftID: nil, location: "sent")
+            let sent = try await send(url: try Self.url("messages", "send"), method: "POST", json: message)
+            let sentID = (try? JSONSerialization.jsonObject(with: sent) as? [String: Any])?["id"] as? String
+            return MailCommandReceipt(action: command.action, sourceID: command.sourceID, draftID: nil, location: "sent", messageID: sentID)
         }
     }
 

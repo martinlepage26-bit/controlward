@@ -27,6 +27,9 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/Mailbox.swift" \
   "${SOURCE_ROOT}/MailActionOutcome.swift" \
   "${SOURCE_ROOT}/CWAudit.swift" \
+  "${SOURCE_ROOT}/MailActionRunner.swift" \
+  "${SOURCE_ROOT}/MailActionPresentation.swift" \
+  "${SOURCE_ROOT}/ProjectControlWrites.swift" \
   "${SOURCE_ROOT}/LeadPipelineConfig.swift" \
   "${SOURCE_ROOT}/LeadPipelineModels.swift" \
   "${SOURCE_ROOT}/LeadDefinition.swift" \
@@ -61,6 +64,10 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/LeadPipelineTestKit.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadPipelineTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadPipelinePlantedReds.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/MailControlTestKit.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/MailControlTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/ProjectControlTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/MailControlPlantedReds.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 

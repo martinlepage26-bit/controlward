@@ -8,6 +8,9 @@ struct PortableTestMain {
         ok = await MailActionOutcomeTests.run() && ok
         ok = await LeadPipelineTests.run() && ok
         ok = await LeadPipelinePlantedReds.run() && ok
+        ok = await MailControlTests.run() && ok
+        ok = await ProjectControlTests.run() && ok
+        ok = await MailControlPlantedReds.run() && ok
         if !ok {
             print("PORTABLE TESTS FAILED")
             exit(1)

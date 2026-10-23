@@ -1,24 +1,7 @@
 import Foundation
 import WebKit
 
-struct ProjectModuleRecord: Decodable, Identifiable, Sendable {
-    var id: String
-    var title: String
-    var status: String
-    var workspace: String
-}
-struct ProjectModuleSnapshot: Decodable, Sendable {
-    var connected: Bool
-    var online: Bool
-    var register: String
-    var pulledAt: String?
-    var projects: [ProjectModuleRecord]
-}
-struct ProjectModuleReceipt: Decodable, Sendable {
-    var id: String
-    var duplicate: Bool
-    var register: String
-}
+// ProjectModuleRecord, ProjectModuleSnapshot and ProjectModuleReceipt live in ProjectControlWrites.swift (portable).
 
 @MainActor
 extension WorkspaceWebController {

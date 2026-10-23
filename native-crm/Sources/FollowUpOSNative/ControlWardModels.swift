@@ -58,14 +58,7 @@ struct RecordProjectLink: Codable, Equatable, Identifiable, Sendable {
     var projectTitle: String
 }
 
-struct ProjectCapture: Codable, Equatable, Sendable {
-    var source: String
-    var sourceID: String
-    var summary: String
-    var link: String = ""
-    var metadata: [String: String] = [:]
-    enum CodingKeys: String, CodingKey { case source, sourceID = "source_id", summary, link, metadata }
-}
+// ProjectCapture lives in ProjectControlWrites.swift so the portable tests can compile it.
 
 struct ProjectCaptureReceipt: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
