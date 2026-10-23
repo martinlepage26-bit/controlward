@@ -65,22 +65,9 @@ final class MailActionModel: ObservableObject {
         do {
             _ = try await connector.perform(command)
             support = connector.supports()
-            if command.action == .trash {
-                do { try store.forgetMailMetadata(id: localID) }
-                catch { status = "Moved to Trash in the mailbox. The local metadata row could not be removed." ; return nil }
-                status = "Moved to Trash. The message is still in the mailbox Trash and was not erased."
-            } else if command.action.sends {
-                status = "Sent."
-            } else if command.action == .editDraft {
-                status = "Draft saved. Nothing was sent."
-            } else if command.action == .archive {
-                status = "Archived."
-            } else if command.action == .markRead {
-                status = "Marked read."
-            } else if command.action == .markUnread {
-                status = "Marked unread."
-            }
-            return nil
+            let outcome = MailActionOutcomes.afterRemoteSuccess(command.action) { try store.forgetMailMetadata(id: localID) }
+            status = outcome.status
+            return outcome.failure
         } catch {
             let message = error.localizedDescription
             status = message
