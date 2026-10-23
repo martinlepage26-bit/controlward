@@ -159,6 +159,8 @@ struct ProspectRecord: Codable, Equatable, Identifiable, Sendable {
     var rbqCategories: [String] = []
     /// The matched licence's Municipalité (or the map/own-site town when the licence has none). Used only for the area hold.
     var rbqMunicipality: String?
+    /// The firm's town from the map listing (`addr:city`), for the conflict area when no licence town is readable.
+    var town: String?
     /// Outcome of the RBQ licence lookup for segments the conflict hold needs it for: "matched", "no-match",
     /// "unavailable" (no RBQ file) or "error:<code>" (file present but unreadable). Anything but "matched" holds the prospect.
     var rbqCheck: String?

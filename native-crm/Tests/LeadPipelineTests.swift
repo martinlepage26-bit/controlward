@@ -22,7 +22,7 @@ enum LeadPipelineTests {
             ("ICP config: seven confirmed segments, equal priority, valid", {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
-                try expect(config.conflictAreas.first?.description == "all plumbing, excavation and related trades in Québec", "default conflict area")
+                try expect(config.conflictAreas.first?.description == "plumbing, excavation and related trades in the city of Saguenay (its boroughs and merged former towns)", "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
                 try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "2456 rue de Rouen, Montréal QC H2K 1M2", "sender identity")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
@@ -613,6 +613,77 @@ enum LeadPipelineTests {
                 // Fail closed is unchanged: no index holds every construction firm.
                 let out = try await EarthRBQ.appRun(contents: nil)
                 try expect(out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty, "no index still holds all: \(out.prospects.map(\.status))")
+            }),
+            ("Conflict area (Water 9:02): keyword and map-tag holds follow the Saguenay area; unreadable town held; elsewhere not held", {
+                let area = try unwrap(config.conflictAreas.first, "conflict area")
+                try expect(area.municipalities == ["Saguenay", "Jonquière", "Chicoutimi", "Chicoutimi-Nord", "La Baie", "Laterrière", "Shipshaw",
+                                                   "Lac-Kénogami", "Canton-Tremblay", "Arvida", "Kénogami"], "one list in icp.json: \(String(describing: area.municipalities))")
+                // A matched licence with no listed code, so only the keyword or map tag and the town decide.
+                func firm(_ name: String, tags: [String], town: String?) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = name
+                    record.osmTags = tags
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                let cases: [(record: ProspectRecord, held: Bool, why: String)] = [
+                    (firm("Services Fictifs Lima", tags: ["craft=plumber"], town: "Chicoutimi"), true, "map-data plumber in Chicoutimi"),
+                    (firm("Plomberie Fictive Mike", tags: ["craft=builder"], town: "Montréal"), false, "keyword firm in Montréal"),
+                    (firm("Plomberie Fictive November", tags: ["craft=builder"], town: nil), true, "keyword firm with no town"),
+                    (firm("Plomberie Fictive Oscar", tags: ["craft=builder"], town: "  "), true, "keyword firm with a blank town"),
+                    (firm("Services Fictifs Papa", tags: ["craft=plumber"], town: "Petit-Saguenay"), false, "map-data plumber in Petit-Saguenay"),
+                    (firm("Excavation Fictive Quebec", tags: ["craft=builder"], town: "arvida"), true, "keyword firm in 'arvida' (normalised)"),
+                    (firm("Services Fictifs Romeo", tags: ["craft=excavation"], town: "Laval"), false, "map-data excavation in Laval")
+                ]
+                for item in cases {
+                    let status = LeadDefinition.evaluate(item.record, config: config, now: now).status
+                    try expect((status == .conflictReview) == item.held, "\(item.why): expected \(item.held ? "held" : "not held"), got \(status)")
+                    try expect((LeadDefinition.conflictArea(for: item.record, config: config) != nil) == item.held, "outreach check: \(item.why)")
+                }
+                // The search run keeps the map listing's town on the record.
+                let source = try unwrap(RBQOpenData.source(config), "rbq")
+                let licences = try RBQOpenData.parse(data: RBQFixture.json([
+                    RBQFixture.jsonRecord(licence: "0000-0000-09", name: SearchFixture.builderName, town: "", codes: [("Specialisee", "1.3")])
+                ]), source: source)
+                let run = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(licences))
+                try expect(run.prospects.first?.town == "Montréal", "map town kept: \(String(describing: run.prospects.first?.town))")
+            }),
+            ("Overpass probe (Water 9:02): the live rerun may start once either host answers; one attempt per host; at most every 5 minutes", {
+                func probe(_ setup: (FakeLeadTransport) -> Void) async -> (results: [OverpassProbe.HostResult], inner: FakeLeadTransport, clock: FakeLeadClock) {
+                    let inner = FakeLeadTransport()
+                    setup(inner)
+                    let clock = FakeLeadClock()
+                    let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
+                    return (await OverpassProbe.probe(LeadDiscovery(transport: guarded, jitter: { 0 })), inner, clock)
+                }
+                let api = "https://overpass-api.de/api/interpreter"
+                let second = await probe { inner in
+                    inner.fail(LeadDiscovery.overpass.absoluteString, URLError(.timedOut))
+                    inner.respond(api, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                }
+                try expect(second.results.map(\.result) == ["error:network", "ok"] && second.results.map { $0.server.host ?? "" } == ["overpass.private.coffee", "overpass-api.de"],
+                           "private.coffee times out, overpass-api.de answers: \(second.results)")
+                try expect(OverpassProbe.liveRunMayStart(second.results), "either host answering is enough")
+                try expect(second.inner.requests.compactMap { $0.url?.host } == ["overpass.private.coffee", "overpass-api.de"] && second.clock.sleeps.isEmpty,
+                           "one attempt per host, no backoff: \(second.inner.urls) \(second.clock.sleeps)")
+                let first = await probe { $0.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"]) }
+                try expect(first.results.map(\.result) == ["ok"] && first.inner.requests.count == 1 && OverpassProbe.liveRunMayStart(first.results),
+                           "private.coffee answers: stop there: \(first.results)")
+                let neither = await probe { inner in
+                    inner.fail(LeadDiscovery.overpass.absoluteString, URLError(.timedOut))
+                    inner.respond(api, status: 502, body: "at capacity")
+                }
+                try expect(neither.results.map(\.result) == ["error:network", "error:502"] && !OverpassProbe.liveRunMayStart(neither.results),
+                           "neither answers: no live run: \(neither.results)")
+                try expect(!OverpassProbe.liveRunMayStart([]), "no probe, no live run")
+                let t = LeadKit.now
+                try expect(OverpassProbe.mayProbe(lastProbe: nil, now: t) && !OverpassProbe.mayProbe(lastProbe: t.addingTimeInterval(-299), now: t)
+                           && OverpassProbe.mayProbe(lastProbe: t.addingTimeInterval(-300), now: t), "at most one probe every 5 minutes")
+                let body = String(decoding: second.inner.requests.first?.httpBody ?? Data(), as: UTF8.self).removingPercentEncoding ?? ""
+                try expect(body.contains("[timeout:60]") && body.contains("out center tags 1;"), "small query with the configured limit: \(body)")
             }),
             ("RBQ schema: a CSV, a missing, renamed or unknown key, a flat record or an empty file throws refused:open-data-schema", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")

@@ -104,6 +104,11 @@ enum LeadDefinition {
         }
     }
 
+    /// The firm's town for the conflict area: the licence's Municipalité, else the map listing's town; nil when neither reads.
+    static func firmTown(_ prospect: ProspectRecord) -> String? {
+        prospect.rbqMunicipality
+    }
+
     /// Where a licence sits relative to the area's `municipalities`.
     enum RBQAreaMatch: Equatable, Sendable {
         /// Whole-value match on one configured municipality (the configured spelling).

@@ -330,3 +330,25 @@ struct LeadDiscovery: Sendable {
         }
     }
 }
+
+/// Water 9:02 AM ET: both Overpass servers stay in config; the live proof may start as soon as one probe on either server
+/// answers, and probes run at most once every 5 minutes (the servers' usage policy).
+enum OverpassProbe {
+    static let minimumIntervalSeconds: Double = 300
+
+    /// One server's probe: its real result (ok, error:<status>, error:network or a refusal code) and measured wait.
+    struct HostResult: Equatable, Sendable {
+        var server: URL
+        var result: String
+        var waitMilliseconds: Int?
+    }
+
+    /// One small query, one attempt per server (no retries), servers in config order, stopping at the first that answers.
+    static func probe(_ discovery: LeadDiscovery, latitude: Double = 45.5017, longitude: Double = -73.5673) async -> [HostResult] {
+        []
+    }
+
+    static func liveRunMayStart(_ results: [HostResult]) -> Bool { false }
+
+    static func mayProbe(lastProbe: Date?, now: Date) -> Bool { true }
+}
