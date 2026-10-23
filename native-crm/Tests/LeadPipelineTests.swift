@@ -484,7 +484,7 @@ enum LeadPipelineTests {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let held = "Rénovations Fictives inc.", clear = "Menuiserie Fictive Ouest"
                 let data = RBQFixture.json([
-                    RBQFixture.jsonRecord(licence: "0000-0000-05", name: held, town: "Montréal", codes: [("Specialisee", "16"), (nil, "GPC"), (nil, "2.5")]),
+                    RBQFixture.jsonRecord(licence: "0000-0000-05", name: held, town: "Saguenay", codes: [("Specialisee", "16"), (nil, "GPC"), (nil, "2.5")]),
                     RBQFixture.jsonRecord(licence: "0000-0000-06", name: clear, town: "Montréal", codes: [("Specialisee", "6.2"), (nil, "11.2"), (nil, "GPC")])
                 ])
                 let index = RBQIndex(try RBQOpenData.parse(data: data, source: source))
@@ -499,7 +499,7 @@ enum LeadPipelineTests {
                 var heldProspect = prospect(held)
                 let route = heldProspect.route
                 try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held before any RBQ lookup (fail closed)")
-                index.enrich(&heldProspect, municipality: "Montréal", source: source)
+                index.enrich(&heldProspect, municipality: "Saguenay", source: source)
                 try expect(heldProspect.rbqCheck == "matched" && heldProspect.rbqCategories == ["16", "GPC", "2.5"], "codes \(heldProspect.rbqCategories) \(String(describing: heldProspect.rbqCheck))")
                 try expect(heldProspect.route == route && heldProspect.contact?.source == .ownSite, "enrich never touches contact data")
                 try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held on 2.5")
@@ -541,7 +541,7 @@ enum LeadPipelineTests {
                     ("Plomberie Fictive Générale", [("Generale", "1.3"), ("Specialisee", "15.5"), (nil, "2.5")], true, "15.5 with a 1.x code and 2.5")
                 ]
                 let data = RBQFixture.json(kinds.enumerated().map { index, kind in
-                    RBQFixture.jsonRecord(licence: "0000-0001-\(10 + index)", name: kind.name, town: "Montréal", codes: kind.codes)
+                    RBQFixture.jsonRecord(licence: "0000-0001-\(10 + index)", name: kind.name, town: "Saguenay", codes: kind.codes)
                 })
                 let index = RBQIndex(try RBQOpenData.parse(data: data, source: source))
                 for kind in kinds {
@@ -549,7 +549,7 @@ enum LeadPipelineTests {
                     record.segment = "construction_trades"
                     record.organisation = kind.name
                     record.osmTags = ["craft=builder"]
-                    index.enrich(&record, municipality: "Montréal", source: source)
+                    index.enrich(&record, municipality: "Saguenay", source: source)
                     let status = LeadDefinition.evaluate(record, config: config, now: now).status
                     try expect(record.rbqCheck == "matched" && (status == .conflictReview) == kind.held,
                                "\(kind.why): expected \(kind.held ? "held" : "not held"), got \(status) (\(String(describing: record.rbqCheck)))")
@@ -572,6 +572,47 @@ enum LeadPipelineTests {
                     try expect(out.prospects.count == SearchFixture.constructionBatch.count && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty,
                                "unreadable index holds all: \(out.prospects.map(\.status))")
                 }
+            }),
+            ("RBQ area rule (Martin 8:39, Water 8:41): the code hold applies only in Saguenay or Jonquière (whole, normalised Municipalité), or with no location; never a substring", {
+                let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
+                let source = try unwrap(RBQOpenData.source(config), "rbq")
+                let bundle = RBQFixture.annexeIIIBundle.map { (nil as String?, $0) }
+                // Neutral names (no conflict keyword), so only the licence code and its place decide.
+                let kinds: [(name: String, town: String, codes: [(String?, String)], held: Bool, why: String)] = [
+                    ("Services Fictifs Alpha", "Jonquière", [("Specialisee", "15.5")], true, "15.5 in Jonquière"),
+                    ("Services Fictifs Bravo", "Montréal", [("Specialisee", "15.5")], false, "15.5 in Montréal"),
+                    ("Services Fictifs Charlie", "", [("Specialisee", "15.5")], true, "15.5 with no location"),
+                    ("Services Fictifs Delta", "Petit-Saguenay", [("Specialisee", "15.5")], false, "15.5 in Petit-Saguenay (no substring match)"),
+                    ("Services Fictifs Echo", "Saguenay", [("Specialisee", "15.5")], true, "15.5 in Saguenay"),
+                    ("Services Fictifs Foxtrot", " SAGUENAY ", [("Specialisee", "15.5")], true, "15.5 in ' SAGUENAY ' (case and spaces)"),
+                    ("Services Fictifs Golf", "Jonquiere", [("Specialisee", "15.5")], true, "15.5 in 'Jonquiere' (accent-normalised)"),
+                    ("Services Fictifs Hotel", "Saguenay", [("Specialisee", "2.5")], true, "2.5 alone in Saguenay"),
+                    ("Services Fictifs India", "Laval", [("Specialisee", "2.5")], false, "2.5 alone in Laval"),
+                    ("Services Fictifs Juliett", "Saguenay", bundle, false, "2.5 within the full bundle in Saguenay"),
+                    ("Services Fictifs Kilo", "Saguenay-Lac-Saint-Jean", [("Specialisee", "15.5")], false, "15.5 in a longer name containing Saguenay")
+                ]
+                let data = RBQFixture.json(kinds.enumerated().map { index, kind in
+                    RBQFixture.jsonRecord(licence: "0000-0002-\(10 + index)", name: kind.name, town: kind.town, codes: kind.codes)
+                })
+                let index = RBQIndex(try RBQOpenData.parse(data: data, source: source))
+                for kind in kinds {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = kind.name
+                    record.osmTags = ["craft=builder"]
+                    index.enrich(&record, municipality: nil, source: source)
+                    let status = LeadDefinition.evaluate(record, config: config, now: now).status
+                    try expect(record.rbqCheck == "matched" && (status == .conflictReview) == kind.held,
+                               "\(kind.why): expected \(kind.held ? "held" : "not held"), got \(status) (\(String(describing: record.rbqCheck)))")
+                    try expect(LeadDefinition.rbqHeldCodes(kind.codes.map(\.1), area: area, municipality: kind.town).isEmpty == !kind.held, "proof predicate: \(kind.why)")
+                }
+                try expect(LeadDefinition.rbqAreaMatch("Petit-Saguenay", area: area) == .outside && LeadDefinition.rbqAreaMatch(nil, area: area) == .unknown
+                           && LeadDefinition.rbqAreaMatch("  ", area: area) == .unknown && LeadDefinition.rbqAreaMatch("jonquière", area: area) == .inside("Jonquière"),
+                           "area match classes")
+                try expect(area.municipalities == ["Saguenay", "Jonquière"], "conflict area is Martin's two values: \(String(describing: area.municipalities))")
+                // Fail closed is unchanged: no index holds every construction firm.
+                let out = try await EarthRBQ.appRun(contents: nil)
+                try expect(out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty, "no index still holds all: \(out.prospects.map(\.status))")
             }),
             ("RBQ schema: a CSV, a missing, renamed or unknown key, a flat record or an empty file throws refused:open-data-schema", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
@@ -612,7 +653,7 @@ enum LeadPipelineTests {
                 let clear = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(licences))
                 try expect(clear.prospects.first?.rbqCheck == "matched" && clear.prospects.first?.status != .conflictReview, "a matched licence without listed codes is not held")
                 let plumbing = try RBQOpenData.parse(data: RBQFixture.json([
-                    RBQFixture.jsonRecord(licence: "0000-0000-09", name: SearchFixture.builderName, town: "Montréal", codes: [("Generale", "1.3"), ("Specialisee", "15.5")])
+                    RBQFixture.jsonRecord(licence: "0000-0000-09", name: SearchFixture.builderName, town: "Jonquière", codes: [("Generale", "1.3"), ("Specialisee", "15.5")])
                 ]), source: source)
                 let held = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(plumbing))
                 try expect(held.prospects.first?.status == .conflictReview && held.drafts.isEmpty, "a silent site with a 15.5 licence is held")

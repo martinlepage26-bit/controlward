@@ -46,6 +46,9 @@ struct ICPConfig: Codable, Equatable, Sendable {
         /// Conditions under which a listed code does NOT hold a licence (Water 7:20 / 7:26 AM ET, Air's map 10c). A code without a
         /// condition always holds. All codes come from config; nothing about specific codes is hard-coded.
         var rbqCodeConditions: [RBQCodeCondition]?
+        /// Where the RBQ code hold applies (Martin 8:39 / Water 8:41 AM ET): whole-value matches on the licence's Municipalité,
+        /// case- and accent-normalised, never a substring. A licence with no readable location is held (fail closed).
+        var municipalities: [String]?
     }
     /// A listed RBQ code holds a licence unless the licence carries every code of `notHeldIfAllOf` (e.g. the full Annexe III
     /// bundle) or any code starting with one of `notHeldIfAnyCodeStartsWith` (e.g. "1." = a general-contractor 1.x code).

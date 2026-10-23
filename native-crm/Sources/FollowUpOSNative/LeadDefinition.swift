@@ -104,6 +104,23 @@ enum LeadDefinition {
         }
     }
 
+    /// Where a licence sits relative to the area's `municipalities`.
+    enum RBQAreaMatch: Equatable, Sendable {
+        /// Whole-value match on one configured municipality (the configured spelling).
+        case inside(String)
+        case outside
+        /// No readable location: held (fail closed).
+        case unknown
+    }
+
+    static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
+        .inside(area.municipalities?.first ?? "QC")
+    }
+
+    static func rbqHeldCodes(_ licenceCodes: [String], area: ICPConfig.ConflictArea, municipality: String?) -> [String] {
+        rbqHeldCodes(licenceCodes, area: area)
+    }
+
     /// The listed RBQ codes that hold a licence with these sub-categories (also used by bin/prove-rbq-hold, so the proof counts
     /// exactly what the app holds).
     static func rbqHeldCodes(_ licenceCodes: [String], area: ICPConfig.ConflictArea) -> [String] {
