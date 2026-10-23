@@ -381,7 +381,11 @@
         "15.5",
         "2.5"
       ],
-      "rbq_subcategory_source": "RBQ official sub-category list (Règlement sur la qualification professionnelle des entrepreneurs et des constructeurs-propriétaires, annexes II and III): https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/ (checked 2026-10-23 06:50 EDT). 15.5 = Entrepreneur en plomberie (annexe II); 2.5 = Entrepreneur en excavation et terrassement (annexe III). Matched exactly against the licence's 'Sous-catégories' codes after grouping by 'Numéro de licence'. Not listed, for Martin to decide: 2.4 systèmes d'assainissement autonome, 2.6 pieux et fondations spéciales, 2.7 travaux d'emplacement, 15.4 chauffage hydronique."
+      "rbq_subcategory_source": "RBQ official sub-category list (Règlement sur la qualification professionnelle des entrepreneurs et des constructeurs-propriétaires, annexes II and III): https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/ (checked 2026-10-23 06:50 EDT). 15.5 = Entrepreneur en plomberie (annexe II); 2.5 = Entrepreneur en excavation et terrassement (annexe III). Matched exactly against the 'Sous-catégories' codes nested in the licence's 'Catégories et sous-catégories' list (JSON file). Not listed, for Martin to decide: 2.4 systèmes d'assainissement autonome, 2.6 pieux et fondations spéciales, 2.7 travaux d'emplacement, 15.4 chauffage hydronique.",
+      "rbq_required_segments": [
+        "construction_trades"
+      ],
+      "rbq_required_note": "Fail closed (Argus gate 2026-10-23 must-fix 1, Water 6:54 AM ET): a prospect in these segments is held for review unless the RBQ lookup matched its licence. No RBQ file, no licence match, or a file that does not parse holds it; it never passes by default."
     }
   ],
   "sender": {
@@ -504,8 +508,7 @@
         "enabled": true,
         "host": "www.donneesquebec.ca",
         "download_urls": [
-          "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/5183fdd4-55b1-418c-8a7d-0a70058ed68d/download/rdl01_extractiondonneesouvertes.json",
-          "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/32f6ec46-85fd-45e9-945b-965d9235840a/download/rdl01_extractiondonneesouvertes.zip"
+          "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/5183fdd4-55b1-418c-8a7d-0a70058ed68d/download/rdl01_extractiondonneesouvertes.json"
         ],
         "denied_path_prefixes": [
           "/api/",
@@ -567,7 +570,7 @@
           "Adresse",
           "NEQ"
         ],
-        "note": "Ruled on by Water and Earth, Oct 23 6:10 AM ET (Air's map, section 10). Only the two fixed download URLs; never /api/, /recherche/api/ or a query string. Courriel, phone and Mandataire never become a contact address or a named person; the address still comes from the business's own domain.",
+        "note": "Ruled on by Water and Earth, Oct 23 6:10 AM ET (Air's map, section 10). Only the one fixed JSON download URL (the CSV/zip link was dropped, Oct 23 6:55 AM ET); never /api/, /recherche/api/ or a query string. Courriel, phone and Mandataire never become a contact address or a named person; the address still comes from the business's own domain.",
         "known_headers": [
           "Numéro de licence",
           "Statut de la licence",
@@ -590,12 +593,14 @@
           "Code de région administrative",
           "Région administrative",
           "Nombre de sous-catégorie autorisées",
-          "Categorie",
-          "Sous-catégories",
           "Autre nom",
           "Catégories et sous-catégories"
         ],
-        "header_note": "Labels checked by Air against a real download, 2026-10-23 06:47 EDT (map section 10a). CSV (zip): one row per licence and sub-category, columns 'Categorie' and 'Sous-catégories'. JSON (the file ControlWard fetches): {\"Liste Licence\":[{\"Licence\":{...}}]}, one record per licence, sub-categories nested in 'Catégories et sous-catégories' as [{\"Categorie\",\"Sous-catégories\"}]. Rows are grouped by 'Numéro de licence' before the hold. A missing mapped label or a column not in known_headers stops the parse (refused:open-data-header); nothing is skipped silently."
+        "header_note": "Shape checked by Air against a real download, 2026-10-23 06:47 EDT (map section 10b): {\"Liste Licence\":[{\"Licence\":{...}}]}, one record per licence, sub-categories nested in 'Catégories et sous-catégories' as [{\"Categorie\":...,\"Sous-catégories\":...}]. Only this JSON file is read; a CSV is refused. A missing mapped label, a key not in known_headers or known_subcategory_keys, a record outside the 'Licence' wrapper, or an empty file stops the parse with refused:open-data-schema, and the hold then fails closed.",
+        "known_subcategory_keys": [
+          "Categorie",
+          "Sous-catégories"
+        ]
       }
     ],
     "discovery_note": "overpass.private.coffee is primary; overpass-api.de is the fallback on timeout, 429 or 5xx (Water, 6:30 AM ET). Both get category tags and coordinates only, never contact data, with the identifying User-Agent and exponential backoff (Air)."

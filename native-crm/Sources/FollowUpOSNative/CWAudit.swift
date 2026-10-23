@@ -73,6 +73,9 @@ final class MemoryAuditSink: CWAuditSink, @unchecked Sendable {
 final class FileAuditSink: CWAuditSink, @unchecked Sendable {
     let url: URL
     private let lock = NSLock()
+    private var failed: [String] = []
+    /// Every write that did not reach the file (red stub: always empty).
+    var failures: [String] { lock.withLock { failed } }
     init(url: URL) { self.url = url }
     func write(_ line: CWAuditLine) {
         lock.withLock {

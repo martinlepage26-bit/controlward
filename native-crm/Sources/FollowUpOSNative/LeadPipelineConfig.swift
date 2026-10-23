@@ -41,6 +41,8 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var rbqSubcategoryCodes: [String]?
         /// Where the codes were checked: RBQ's own sub-category list (URL and date).
         var rbqSubcategorySource: String?
+        /// Segments that are held unless the RBQ lookup matched a licence (fail closed: no file, no match or a parse error holds).
+        var rbqRequiredSegments: [String]?
     }
     struct Sender: Codable, Equatable, Sendable {
         var name: String
@@ -100,6 +102,8 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var neverStoredFields: [String]
         /// Every column the real file is known to have. A column outside this list stops the parse (refused:open-data-header).
         var knownHeaders: [String]?
+        /// Keys allowed in one entry of the nested sub-category list ("Categorie", "Sous-catégories").
+        var knownSubcategoryKeys: [String]?
         var headerNote: String?
         var note: String?
         struct FieldLabel: Codable, Equatable, Sendable { var role: String; var label: String }

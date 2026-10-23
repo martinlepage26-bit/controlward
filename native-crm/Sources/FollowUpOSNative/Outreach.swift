@@ -214,12 +214,25 @@ enum OutreachDraftGate {
     }
 }
 
+/// SHA-256 as lowercase hex (red stub).
+enum SHA256Hex {
+    static func digest(_ data: Data) -> String { "" }
+}
+
 /// Martin's go-ahead for one exact message (S3-R7).
 struct OutreachApproval: Codable, Equatable, Sendable {
     var approver: String
     var approvalID: String
     var messageID: String
+    /// SHA-256 over the approved recipient, subject, body and List-Unsubscribe (red stub: not checked yet).
+    var contentHash: String = ""
     var text: String { "approver=\(approver) approval=\(approvalID)" }
+
+    static func contentHash(_ draft: OutreachDraft) -> String { "" }
+
+    static func grant(for draft: OutreachDraft, approvalID: String, approver: String = "martin") -> OutreachApproval {
+        OutreachApproval(approver: approver, approvalID: approvalID, messageID: draft.messageID, contentHash: contentHash(draft))
+    }
 }
 
 /// Checks a send before any request (S3-R6, S3-R7, S3-R8, S3-R11).

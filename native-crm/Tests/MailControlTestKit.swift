@@ -115,3 +115,23 @@ enum ProjectFixture {
         ProjectCapture(source: source, sourceID: id, summary: "Synthetic summary 7f3a", metadata: ["record_type": "contacts"])
     }
 }
+
+/// S1-R7 source scan: no mail HTML may be rendered or imported except through MailBodyText (plain text after the sanitizer).
+/// WKWebView itself is allowed (the Project Control bridge loads its own https page); loading an HTML string is not.
+enum HTMLImportScan {
+    static let patterns = ["DocumentType.html", "NSAttributedString(data:"]
+
+    static func findings(in source: String) -> [String] { patterns.filter { source.contains($0) } }
+
+    /// Scans every .swift file under `directory`. Returns how many files were read and "file: pattern" for each hit.
+    static func scanSources(_ directory: URL) -> (files: Int, findings: [String]) {
+        let files = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "swift" }
+        var hits: [String] = []
+        for file in files {
+            let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+            hits += findings(in: text).map { "\(file.lastPathComponent): \($0)" }
+        }
+        return (files.count, hits)
+    }
+}

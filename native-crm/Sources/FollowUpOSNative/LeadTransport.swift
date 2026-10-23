@@ -9,6 +9,8 @@ struct LeadHTTPResponse: Sendable {
     var body: Data
     /// Set by `GuardedLeadTransport` when the response arrives; the same instant is the audit line's `ts`.
     var fetchedAt = Date(timeIntervalSince1970: 0)
+    /// The URL the body actually came from, when the transport knows it (after a redirect it differs from the request).
+    var url: URL?
 }
 
 /// The only network seam of the lead pipeline. Foundation-only so it builds and tests on Linux too.
@@ -18,6 +20,9 @@ protocol LeadTransport: Sendable {
 
 /// Ephemeral session: no cookies and no URL cache, so fetched pages never land in a shared cache.
 struct URLSessionLeadTransport: LeadTransport {
+    /// Red stub: the default session follows redirects on its own.
+    static let followsRedirects = true
+
     /// One ephemeral session for the process: no cookies, no cache. Creating and dropping a session per request
     /// crashes swift-corelibs-foundation on Linux (_MultiHandle over-release) and wastes connections on macOS.
     private static let session: URLSession = {
@@ -152,6 +157,9 @@ final class GuardedLeadTransport: @unchecked Sendable {
     }
 
     // MARK: - Admission
+
+    /// Own-site host check (SSRF). Red stub: admits everything.
+    static func ownSiteHostRefusal(_ url: URL) -> LeadPipelineRefusal? { nil }
 
     func admit(_ url: URL, host: String, purpose: FetchPurpose, method: String, body: Data?) throws {
         guard let scheme = url.scheme?.lowercased(), scheme == "https" || (scheme == "http" && purpose != .gmail) else {

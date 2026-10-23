@@ -82,7 +82,7 @@ enum LeadKit {
     }
 
     static func approval(_ draft: OutreachDraft, id: String = "A-1") -> OutreachApproval {
-        OutreachApproval(approver: "martin", approvalID: id, messageID: draft.messageID)
+        OutreachApproval.grant(for: draft, approvalID: id)
     }
 }
 
@@ -99,6 +99,11 @@ final class FakeLeadTransport: LeadTransport, @unchecked Sendable {
 
     func respond(_ url: String, status: Int = 200, body: String, headers: [String: String] = ["content-type": "text/html; charset=utf-8"]) {
         lock.withLock { script[url] = LeadHTTPResponse(status: status, headers: headers, body: Data(body.utf8)) }
+    }
+
+    /// The transport answers `url` with a body that came from `finalURL` (as if it had followed a redirect itself).
+    func respondFrom(_ url: String, finalURL: String, body: String) {
+        lock.withLock { script[url] = LeadHTTPResponse(status: 200, headers: ["content-type": "text/html"], body: Data(body.utf8), url: URL(string: finalURL)) }
     }
 
     /// The URL throws `error` (e.g. a timeout) instead of answering.
@@ -138,7 +143,14 @@ final class FakeLeadClock: LeadClock, @unchecked Sendable {
 enum RBQFixture {
     static let csvHeader = #""Numéro de licence","Statut de la licence","Type de licence","Date de délivrance","Restriction","Date de début de la restriction","Date de fin de la restriction","Association ou compagnie fournissant le cautionnement","Montant de la caution","Date du paiement annuel","Mandataire","Courriel","Adresse","NEQ","Nom de l'intervenant","Numéro de téléphone","Municipalité","Statut juridique","Code de région administrative","Région administrative","Nombre de sous-catégorie autorisées","Categorie","Sous-catégories","Autre nom""#
 
-    /// One CSV row (one licence x one sub-category), all values synthetic.
+    /// Keys of one real JSON licence record (Air's map 10b, checked against a real download 2026-10-23): the CSV header
+    /// without 'Categorie' and 'Sous-catégories', which are nested in 'Catégories et sous-catégories'.
+    static var jsonKeys: [String] {
+        csvHeader.dropFirst().dropLast().components(separatedBy: "\",\"").filter { $0 != "Categorie" && $0 != "Sous-catégories" }
+            + ["Catégories et sous-catégories"]
+    }
+
+    /// One CSV row (one licence x one sub-category), all values synthetic. Only used to prove a CSV file is refused.
     static func csvRow(licence: String, name: String, town: String, category: String, code: String, otherName: String = "") -> String {
         let values = [licence, "Valide", "Entrepreneur", "2001-01-01", "", "", "", "", "", "2026-01-01", "Mandataire Fictif",
                       "secret@exemple-rbq.test", "1 rue Nulle", "0000000000", name, "514-555-0100", town, "Société par actions",
@@ -149,7 +161,8 @@ enum RBQFixture {
     static func csv(_ rows: [String], header: String = csvHeader) -> Data { Data(([header] + rows).joined(separator: "\n").appending("\n").utf8) }
 
     /// One JSON record in the real file's shape: {"Licence":{..., "Catégories et sous-catégories":[{"Categorie":..,"Sous-catégories":..}]}}.
-    static func jsonRecord(licence: String, name: String, town: String, codes: [(String?, String)], dropping: String? = nil) -> String {
+    static func jsonRecord(licence: String, name: String, town: String, codes: [(String?, String)], dropping: String? = nil,
+                           otherNames: String = "null", renaming: (String, String)? = nil, extra: (String, String)? = nil) -> String {
         let list = codes.map { category, code in
             category.map { #"{"Categorie":"\#($0)","Sous-catégories":"\#(code)"}"# } ?? #"{"Sous-catégories":"\#(code)"}"#
         }.joined(separator: ",")
@@ -161,9 +174,11 @@ enum RBQFixture {
             ("Adresse", "\"1 rue Nulle\""), ("NEQ", "\"0000000000\""), ("Nom de l'intervenant", "\"\(name)\""), ("Numéro de téléphone", "\"514-555-0100\""),
             ("Municipalité", "\"\(town)\""), ("Statut juridique", "\"Société par actions\""), ("Code de région administrative", "\"06\""),
             ("Région administrative", "\"Montréal (06)\""), ("Nombre de sous-catégorie autorisées", "\(codes.count)"),
-            ("Catégories et sous-catégories", "[\(list)]"), ("Autre nom", "null")
+            ("Catégories et sous-catégories", "[\(list)]"), ("Autre nom", otherNames)
         ]
         if let dropping { fields.removeAll { $0.0 == dropping } }
+        if let (from, to) = renaming { fields = fields.map { $0.0 == from ? (to, $0.1) : $0 } }
+        if let extra { fields.append(extra) }
         return #"{"Licence":{"# + fields.map { "\"\($0.0)\":\($0.1)" }.joined(separator: ",") + "}}"
     }
 
@@ -182,4 +197,24 @@ enum RBQFixture {
         "15.5": "Entrepreneur en plomberie",
         "16.0": "Entrepreneur en électricité"
     ]
+}
+
+/// Earth 6:59: runs the app path (LeadPipelineEnvironment.searchAndIngest) for the construction_trades segment with the
+/// cached RBQ index missing (contents nil) or replaced by the given bytes. Every firm it finds must come back held.
+enum EarthRBQ {
+    struct Outcome { var prospects: [ProspectRecord]; var drafts: [OutreachDraft]; var audit: [CWAuditLine] }
+    static func appRun(contents: Data?) async throws -> Outcome {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-earth-rbq-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
+        if let contents {
+            try FileManager.default.createDirectory(at: env.rbqDirectory, withIntermediateDirectories: true)
+            try contents.write(to: RBQOpenData.cacheFile(in: env.rbqDirectory))
+        }
+        let fixture = SearchFixture.builder(config: env.config)
+        let audit = MemoryAuditSink()
+        let reports = await env.searchAndIngest([.init(segmentID: "construction_trades", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
+                                                inner: fixture.inner, audit: audit, clock: fixture.clock)
+        return Outcome(prospects: reports.flatMap(\.prospects), drafts: reports.flatMap(\.drafts), audit: audit.lines)
+    }
 }

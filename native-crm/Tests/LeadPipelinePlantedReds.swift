@@ -3,9 +3,12 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Slice 3 planted reds (wind-acceptance-tests.md §3, slice total amended 6:11 AM ET): 41 bad inputs, each of which
-/// the pipeline must refuse. A case "fails" when the code refuses it, so a healthy build prints
-/// `expected 41 failures, got 41: OK`. Any other count exits non-zero.
+/// Slice 3 planted reds (wind-acceptance-tests.md §3, slice total amended 6:11 AM ET): 41 bad inputs, plus Argus's 13
+/// (gate file controlward-18-2026-10-23.md; total amended to 54 by Water, 6:53 AM ET), plus Earth's 2 RBQ fail-closed
+/// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth). A case "fails" when the code refuses
+/// it, so a healthy build prints `expected 56 failures, got 56: OK`. Any other count exits non-zero.
+/// Argus reds 9 and 10 live in pharos-api's vitest suite; they count only when CW_PHAROS_PLANTED_REDS points at that
+/// run's JSON report and the matching tests passed. Without the report they are RED-MISSED and the total is a MISMATCH.
 enum LeadPipelinePlantedReds {
     typealias Probe = () async throws -> String?
 
@@ -16,11 +19,11 @@ enum LeadPipelinePlantedReds {
         var probe: Probe
     }
 
-    static let expectedTotal = 41
+    static let expectedTotal = 56
     static let expectedByGroup: [(String, Int)] = [
         ("S3-RED (original)", 4), ("S3-RED-PC", 1), ("S3-RED-SRC", 2), ("S3-RED-SPAM", 5), ("S3-RED-SEQ", 2), ("S3-RED-FROM", 1),
         ("S3-RED-ICP", 3), ("S3-RED-ADDR", 3), ("S3-RED-LOI25", 3), ("S3-RED-LEADREC", 5), ("S3-RED-FRESH", 3), ("S3-RED-HOLD", 2),
-        ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1)
+        ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2)
     ]
 
     static func run() async -> Bool {
@@ -52,7 +55,7 @@ enum LeadPipelinePlantedReds {
             print("\(group): expected \(expected) failures, got \(got): \(line)")
         }
         ok = ok && failures == expectedTotal
-        print("Slice 3 planted reds: expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
+        print("Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
         if ok { print("expected \(expectedTotal) failures, got \(failures): OK") }
         return ok
     }
@@ -335,6 +338,131 @@ enum LeadPipelinePlantedReds {
                                           "provenance": ["kind": "controlward_search", "fetcher": "controlward:test-run"]]
             return LeadPushPolicy.check(payload)?.code
         }
+
+        // ARGUS (gate file /workspace/argus/gate/controlward-18-2026-10-23.md, reds 1-13)
+        let rbqSource = RBQOpenData.source(config)
+        add("ARGUS-RED", "1 RBQ-REAL-SHAPE: a real-shape JSON record parsed to nothing") {
+            guard let rbqSource else { return nil }
+            let data = RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0001-01", name: "Plomberie Fictive Centre", town: "Montréal", codes: [("Specialisee", "15.5")])])
+            let parsed = (try? RBQOpenData.parse(data: data, source: rbqSource)) ?? []
+            return parsed.count == 1 && parsed[0].subcategories == ["15.5"] ? "parsed=1 codes=15.5" : nil
+        }
+        add("ARGUS-RED", "2 RBQ-RENAMED-LABEL: a renamed category label silently ignored") {
+            guard let rbqSource else { return nil }
+            let data = RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0001-02", name: "Plomberie Fictive Centre", town: "Montréal", codes: [("Specialisee", "15.5")],
+                                                              renaming: ("Catégories et sous-catégories", "Catégories"))])
+            do { _ = try RBQOpenData.parse(data: data, source: rbqSource); return nil }
+            catch let refusal as LeadPipelineRefusal { return refusal.code == "refused:open-data-schema" ? refusal.code : nil }
+        }
+        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a silent construction site with no RBQ file gets Ready and a draft") {
+            let fixture = SearchFixture.builder(config: config)
+            let report = await fixture.run(segment: "construction_trades", rbq: nil)
+            guard let prospect = report.prospects.first else { return nil }
+            return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-")), 0 drafts" : nil
+        }
+        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a construction prospect with no licence match passes") {
+            let fixture = SearchFixture.builder(config: config)
+            let report = await fixture.run(segment: "construction_trades", rbq: RBQIndex([]))
+            guard let prospect = report.prospects.first else { return nil }
+            return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-"))" : nil
+        }
+        add("ARGUS-RED", "5 SSRF-IP-LITERAL: an own-site fetch to 127.0.0.1, 169.254.169.254, [::1], 10/8, 192.168/16 or x.local") {
+            let inner = FakeLeadTransport()
+            let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+            var codes: [String] = []
+            for raw in ["http://127.0.0.1/", "http://169.254.169.254/", "http://[::1]/", "http://10.1.2.3/", "http://192.168.0.1/", "http://x.local/"] {
+                let url = URL(string: raw)!
+                do { _ = try await guarded.fetch(url, purpose: .ownSite(domain: url.host ?? "")); return nil }
+                catch let refusal as LeadPipelineRefusal { codes.append(refusal.code) }
+            }
+            return inner.requests.isEmpty && codes.allSatisfy({ $0 == "refused:own-site-host" }) ? "6x refused:own-site-host, 0 requests" : nil
+        }
+        add("ARGUS-RED", "6 REDIRECT-OFF-SITE: a 302 to another host is followed and attributed to the site") {
+            let fixture = SearchFixture(config: config)
+            fixture.inner.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://autre-site.example.test/"])
+            fixture.inner.respond("https://autre-site.example.test/", body: "<p>Prendre rendez-vous en ligne</p>")
+            let guarded = GuardedLeadTransport(config: config, inner: fixture.inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+            var code = "none"
+            do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)) }
+            catch let refusal as LeadPipelineRefusal { code = refusal.code }
+            let report = await fixture.run()
+            let leaked = report.prospects.flatMap(\.snapshots).contains { $0.url.contains("autre-site") } || fixture.inner.urls.contains { $0.contains("autre-site") }
+            return code == "refused:redirect-off-site" && !leaked ? "\(code), no off-site snapshot" : nil
+        }
+        add("ARGUS-RED", "7 ROBOTS-5XX: robots.txt answers 503 and the site is crawled anyway") {
+            let inner = FakeLeadTransport()
+            inner.respond("https://www.clinique-exemple.test/robots.txt", status: 503, body: "", headers: ["content-type": "text/plain"])
+            inner.respond(LeadKit.homePage, body: "<p>a</p>")
+            let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+            do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); return nil }
+            catch let refusal as LeadPipelineRefusal { return refusal.code == "refused:robots" && !inner.urls.contains(LeadKit.homePage) ? refusal.code : nil }
+        }
+        add("ARGUS-RED", "8 APPROVAL-CONTENT-MISMATCH: an approved draft whose body changed under the same message id") {
+            var cfg = config
+            cfg.loi25Gate.open = true
+            let draft = LeadKit.draft(for: LeadKit.readyClinic(), config: cfg)
+            let approval = LeadKit.approval(draft)
+            var edited = draft
+            edited.body = edited.body.replacingOccurrences(of: "\n\n--", with: "\nUne phrase ajoutée après l'approbation.\n\n--")
+            guard edited.body != draft.body, OutreachSendGate.check(draft, approval: approval, config: cfg, suppression: SuppressionList()) == nil else { return nil }
+            return OutreachSendGate.check(edited, approval: approval, config: cfg, suppression: SuppressionList())?.code
+        }
+        add("ARGUS-RED", "9 PUSH-MIXED-RETRACT (pharos-api vitest): one refused lead drops the packet's retractions") {
+            PharosPlantedReds.passed("ARGUS-RED-9")
+        }
+        add("ARGUS-RED", "10 PUSH-TEST-STORED-AS-REAL (pharos-api vitest): a test lead is served like a real one") {
+            PharosPlantedReds.passed("ARGUS-RED-10")
+        }
+        add("ARGUS-RED", "11 PUSH-POLICY-PARITY: Swift accepts form_source \"   \" (or test:1) that pharos-api refuses") {
+            let blank = LeadPushPolicy.check(["provenance": ["kind": "inbound_form", "form_source": "   "]])
+            let one = LeadPushPolicy.check(["test": NSNumber(value: 1)])
+            return blank != nil && one != nil ? "\(blank!.code) (blank form source and test:1)" : nil
+        }
+        add("ARGUS-RED", "12 AUDIT-WRITE-FAIL: an audit line that cannot be written disappears silently") {
+            let blocker = FileManager.default.temporaryDirectory.appendingPathComponent("cw-audit-red-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: blocker) }
+            try Data("file".utf8).write(to: blocker)
+            let sink = FileAuditSink(url: blocker.appendingPathComponent("x/audit.log"))
+            sink.write(CWAuditLine(ts: now, surface: "leads", action: "fetch", result: "ok"))
+            return sink.failures.isEmpty ? nil : "failure surfaced: \(sink.failures[0])"
+        }
+        add("ARGUS-RED", "13 S1-R7-SCAN-WIDE: NSAttributedString(html: in a source file passes the scan") {
+            let findings = HTMLImportScan.findings(in: "let text = NSAttributedString(html: data, documentAttributes: nil)")
+            return findings.isEmpty ? nil : "caught: \(findings.joined(separator: ", "))"
+        }
+        // EARTH (6:59 AM ET findings on 75285c4): the index missing or unreadable, through the app path, holds every construction firm.
+        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): no cached RBQ file and a construction firm gets Ready and a draft") {
+            let out = try await EarthRBQ.appRun(contents: nil)
+            return !out.prospects.isEmpty && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty
+                ? "\(out.prospects.count) held (rbq \(out.prospects.first?.rbqCheck ?? "-")), 0 drafts" : nil
+        }
+        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated cache and a bad-header cache drop the firm or let it through") {
+            let truncated = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8))
+            let badHeader = try await EarthRBQ.appRun(contents: RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-08", name: "Plomberie Fictive Centre", town: "Montréal",
+                                                                                                    codes: [("Specialisee", "15.5")], renaming: ("Numéro de licence", "No licence"))]))
+            for out in [truncated, badHeader] {
+                guard !out.prospects.isEmpty, out.prospects.allSatisfy({ $0.status == .conflictReview }), out.drafts.isEmpty,
+                      out.audit.contains(where: { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }) else { return nil }
+            }
+            return "truncated and bad-header: held, rbq-load refused:open-data-schema"
+        }
         return cases
+    }
+}
+
+/// Reads the pharos-api vitest JSON report named by CW_PHAROS_PLANTED_REDS (vitest --reporter=json).
+enum PharosPlantedReds {
+    static func passed(_ marker: String) -> String? {
+        guard let path = ProcessInfo.processInfo.environment["CW_PHAROS_PLANTED_REDS"], !path.isEmpty,
+              let data = FileManager.default.contents(atPath: path),
+              let report = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let files = report["testResults"] as? [[String: Any]] else { return nil }
+        for file in files {
+            for test in (file["assertionResults"] as? [[String: Any]]) ?? [] {
+                let title = (test["fullName"] as? String) ?? (test["title"] as? String) ?? ""
+                if title.contains(marker) { return test["status"] as? String == "passed" ? "vitest passed: \(title)" : nil }
+            }
+        }
+        return nil
     }
 }

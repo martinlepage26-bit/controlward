@@ -124,13 +124,12 @@ enum LeadPipelineTests {
                 }
                 try expect(config.deniedHost("www.rbq.gouv.qc.ca") == nil && config.deniedHost("rbq.gouv.qc.ca") == nil, "pes host rule is exact")
             }),
-            ("Allowlist: RBQ open data is on, with exactly Air's two download links", {
+            ("Allowlist: RBQ open data is on, with exactly one download link: the JSON file", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq source")
                 try expect(source.host == "www.donneesquebec.ca" && source.minSecondsBetweenRequests == 10 && source.maxDownloadAgeHours == 24, "host, delay, daily")
                 try expect(source.downloadUrls == [
-                    "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/5183fdd4-55b1-418c-8a7d-0a70058ed68d/download/rdl01_extractiondonneesouvertes.json",
-                    "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/32f6ec46-85fd-45e9-945b-965d9235840a/download/rdl01_extractiondonneesouvertes.zip"
-                ], "download URLs")
+                    "https://www.donneesquebec.ca/recherche/dataset/755b45d6-7aee-46df-a216-748a0191c79f/resource/5183fdd4-55b1-418c-8a7d-0a70058ed68d/download/rdl01_extractiondonneesouvertes.json"
+                ], "download URLs \(source.downloadUrls)")
                 try expect(source.attribution == "Source: RBQ / Données Québec, CC BY 4.0" && source.label == "RBQ / Données Québec, CC BY 4.0", "attribution strings")
                 try expect(Set(source.neverStoredFields).isSuperset(of: ["Courriel", "Numéro de téléphone", "Mandataire"]), "never-stored fields")
             }),
@@ -265,7 +264,7 @@ enum LeadPipelineTests {
                 }
                 try expect(inner.requests.isEmpty, "0 requests")
             }),
-            ("Guard: RBQ only through the two fixed links; never /api/, /recherche/api/ or a query string", {
+            ("Guard: RBQ only through the one fixed JSON link; never /api/, /recherche/api/ or a query string", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let inner = FakeLeadTransport()
                 inner.respond(source.downloadUrls[0], body: "[]", headers: ["content-type": "application/json"])
@@ -289,7 +288,7 @@ enum LeadPipelineTests {
                 try await RBQOpenData.refreshCache(config: config, transport: guarded, directory: directory, now: clock.now.addingTimeInterval(25 * 3600))
                 try expect(inner.requests.count == 2 && inner.urls.allSatisfy { $0 == source.downloadUrls[0] }, "daily re-download: \(inner.urls)")
             }),
-            ("RBQ config: holds on sub-category codes 15.5 and 2.5, each on RBQ's official list, source URL cited", {
+            ("RBQ config: holds on sub-category codes 15.5 and 2.5, each on RBQ's official list, source URL cited; construction trades fail closed", {
                 let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
                 let codes = area.rbqSubcategoryCodes ?? []
                 try expect(codes == ["15.5", "2.5"], "codes \(codes)")
@@ -298,39 +297,22 @@ enum LeadPipelineTests {
                     try expect(title.contains("plomberie") || title.contains("excavation"), "\(code) is \(title)")
                 }
                 try expect((area.rbqSubcategorySource ?? "").contains("https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/"), "source URL cited")
+                try expect(area.rbqRequiredSegments == ["construction_trades"], "fail-closed segments \(String(describing: area.rbqRequiredSegments))")
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
-                let header = RBQFixture.csvHeader.dropFirst().dropLast().components(separatedBy: "\",\"")
-                for role in ["licence_number", "name", "other_names", "municipality", "region_code", "region", "category", "subcategory"] {
+                for role in ["licence_number", "name", "other_names", "municipality", "region_code", "region", "subcategory_list"] {
                     let label = try unwrap(source.label(role), role)
-                    try expect(header.contains(label), "\(role) label '\(label)' is in the real header row")
+                    try expect(RBQFixture.jsonKeys.contains(label), "\(role) label '\(label)' is a key of the real JSON record")
                 }
-                try expect(source.label("subcategory_list") == "Catégories et sous-catégories" && source.label("json_record") == "Licence", "JSON shape labels")
-                try expect(Set(header).isSubset(of: Set(source.knownHeaders ?? [])), "known headers cover the real row")
+                try expect(source.label("category") == "Categorie" && source.label("subcategory") == "Sous-catégories" && source.label("json_record") == "Licence", "nested labels")
+                try expect(Set(source.knownHeaders ?? []) == Set(RBQFixture.jsonKeys), "known headers are exactly the JSON record keys")
+                try expect(source.knownSubcategoryKeys == ["Categorie", "Sous-catégories"], "nested keys \(String(describing: source.knownSubcategoryKeys))")
             }),
-            ("RBQ CSV parser: real header row, rows grouped by licence, never-stored fields not kept", {
-                let source = try unwrap(RBQOpenData.source(config), "rbq")
-                let data = RBQFixture.csv([
-                    RBQFixture.csvRow(licence: "0000-0000-01", name: "Plomberie Fictive Est inc.", town: "Montréal", category: "Specialisee", code: "15.5", otherName: "PFE \"test\", enr."),
-                    RBQFixture.csvRow(licence: "0000-0000-01", name: "Plomberie Fictive Est inc.", town: "Montréal", category: "", code: "GPC", otherName: "PFE \"test\", enr."),
-                    RBQFixture.csvRow(licence: "0000-0000-02", name: "Toitures Fictives", town: "Laval", category: "Generale", code: "1.3")
-                ])
-                let parsed = try RBQOpenData.parse(data: data, source: source)
-                try expect(parsed.count == 2, "two licences from three rows: \(parsed.count)")
-                let first = try unwrap(parsed.first { $0.licenceNumber == "0000-0000-01" }, "licence 01")
-                try expect(first.subcategories == ["15.5", "GPC"] && first.licenceClasses == ["Specialisee"], "codes \(first.subcategories) classes \(first.licenceClasses)")
-                try expect(first.otherNames == ["PFE \"test\", enr."] && first.municipality == "Montréal" && first.regionCode == "06", "fields \(first)")
-                let encoded = String(decoding: try JSONEncoder().encode(parsed), as: UTF8.self)
-                try expect(!encoded.contains("secret@") && !encoded.contains("555-0100") && !encoded.contains("Mandataire Fictif") && !encoded.contains("rue Nulle"), "never-stored fields leaked")
-                try expect(first.provenance == "RBQ / Données Québec, CC BY 4.0", "provenance")
-                var badMap = source
-                badMap.fields.append(.init(role: "email", label: "Courriel"))
-                try expect((try? RBQOpenData.parse(data: data, source: badMap)) == nil, "mapping Courriel is refused")
-            }),
-            ("RBQ JSON parser: real record shape {\"Licence\":{...}} with nested sub-categories, streamed from a file", {
+            ("RBQ JSON parser: real shape {\"Liste Licence\":[{\"Licence\":{...}}]}, nested codes, streamed from a file, never-stored fields not kept", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let data = RBQFixture.json([
-                    RBQFixture.jsonRecord(licence: "0000-0000-03", name: "Excavation Fictive Sud", town: "Longueuil", codes: [("Specialisee", "16"), (nil, "2.5"), (nil, "SEC")]),
-                    RBQFixture.jsonRecord(licence: "0000-0000-04", name: "Ébénisterie Fictive", town: "Laval", codes: [("Specialisee", "12"), (nil, "11.2")])
+                    RBQFixture.jsonRecord(licence: "0000-0000-03", name: "Excavation Fictive Sud", town: "Longueuil", codes: [("Specialisee", "16"), (nil, "2.5"), (nil, "SEC")],
+                                          otherNames: #"["EFS \"test\", enr."]"#),
+                    RBQFixture.jsonRecord(licence: "0000-0000-04", name: "Ébénisterie Fictive", town: "Laval", codes: [("Specialisee", "12"), (nil, "11.2"), (nil, "GPC")])
                 ])
                 let file = FileManager.default.temporaryDirectory.appendingPathComponent("cw-rbq-\(UUID().uuidString).json")
                 defer { try? FileManager.default.removeItem(at: file) }
@@ -339,23 +321,24 @@ enum LeadPipelineTests {
                 try RBQOpenData.parse(file: file, source: source, chunkSize: 7) { parsed.append($0) }
                 try expect(parsed.count == 2, "two licences: \(parsed.count)")
                 try expect(parsed[0].name == "Excavation Fictive Sud" && parsed[0].subcategories == ["16", "2.5", "SEC"], "nested codes \(parsed.first?.subcategories ?? [])")
-                try expect(parsed[1].subcategories == ["12", "11.2"] && parsed[1].licenceClasses == ["Specialisee"], "non-numeric and dotted codes")
+                try expect(parsed[0].otherNames == ["EFS \"test\", enr."] && parsed[0].municipality == "Longueuil" && parsed[0].regionCode == "06", "fields \(parsed[0])")
+                try expect(parsed[1].subcategories == ["12", "11.2", "GPC"] && parsed[1].licenceClasses == ["Specialisee"], "non-numeric and dotted codes")
+                try expect(parsed[0].provenance == "RBQ / Données Québec, CC BY 4.0", "provenance")
                 let encoded = String(decoding: try JSONEncoder().encode(parsed), as: UTF8.self)
-                try expect(!encoded.contains("secret@") && !encoded.contains("555-0100") && !encoded.contains("Mandataire Fictif"), "never-stored fields leaked")
+                try expect(!encoded.contains("secret@") && !encoded.contains("555-0100") && !encoded.contains("Mandataire Fictif") && !encoded.contains("rue Nulle"), "never-stored fields leaked")
+                var badMap = source
+                badMap.fields.append(.init(role: "email", label: "Courriel"))
+                try expect((try? RBQOpenData.parse(data: data, source: badMap)) == nil, "mapping Courriel is refused")
             }),
-            ("RBQ hold: rows of one licence spread across the file are grouped, so a 2.5 row held later still holds the firm; a licence without listed codes is not held", {
+            ("RBQ hold: a matched licence with 15.5 or 2.5 is held, a matched licence with none of the listed codes is not; the JSON has one record per licence", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let held = "Rénovations Fictives inc.", clear = "Menuiserie Fictive Ouest"
-                let data = RBQFixture.csv([
-                    RBQFixture.csvRow(licence: "0000-0000-05", name: held, town: "Montréal", category: "Specialisee", code: "16"),
-                    RBQFixture.csvRow(licence: "0000-0000-06", name: clear, town: "Montréal", category: "Specialisee", code: "6.2"),
-                    RBQFixture.csvRow(licence: "0000-0000-05", name: held, town: "Montréal", category: "", code: "GPC"),
-                    RBQFixture.csvRow(licence: "0000-0000-06", name: clear, town: "Montréal", category: "", code: "11.2"),
-                    RBQFixture.csvRow(licence: "0000-0000-06", name: clear, town: "Montréal", category: "", code: "GPC"),
-                    RBQFixture.csvRow(licence: "0000-0000-05", name: held, town: "Montréal", category: "", code: "2.5")
+                let data = RBQFixture.json([
+                    RBQFixture.jsonRecord(licence: "0000-0000-05", name: held, town: "Montréal", codes: [("Specialisee", "16"), (nil, "GPC"), (nil, "2.5")]),
+                    RBQFixture.jsonRecord(licence: "0000-0000-06", name: clear, town: "Montréal", codes: [("Specialisee", "6.2"), (nil, "11.2"), (nil, "GPC")])
                 ])
                 let index = RBQIndex(try RBQOpenData.parse(data: data, source: source))
-                try expect(index.count == 2, "index holds one entry per licence: \(index.count)")
+                try expect(index.count == 2, "one record per licence: \(index.count)")
                 func prospect(_ name: String) -> ProspectRecord {
                     var record = LeadKit.readyClinic()
                     record.segment = "construction_trades"
@@ -365,57 +348,227 @@ enum LeadPipelineTests {
                 }
                 var heldProspect = prospect(held)
                 let route = heldProspect.route
-                try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status != .conflictReview, "not held before RBQ data")
+                try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held before any RBQ lookup (fail closed)")
                 index.enrich(&heldProspect, municipality: "Montréal", source: source)
-                try expect(heldProspect.rbqCategories == ["16", "GPC", "2.5"], "grouped codes \(heldProspect.rbqCategories)")
+                try expect(heldProspect.rbqCheck == "matched" && heldProspect.rbqCategories == ["16", "GPC", "2.5"], "codes \(heldProspect.rbqCategories) \(String(describing: heldProspect.rbqCheck))")
                 try expect(heldProspect.route == route && heldProspect.contact?.source == .ownSite, "enrich never touches contact data")
-                try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held on 2.5 after grouping")
+                try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held on 2.5")
                 try expect(ProspectDisplay.attribution(for: heldProspect, config: config) == "Source: RBQ / Données Québec, CC BY 4.0", "credit")
                 try expect(ProspectDisplay.lines(for: heldProspect, config: config).last == "Source: RBQ / Données Québec, CC BY 4.0", "credit shown on the row")
                 var clearProspect = prospect(clear)
-                let before = LeadDefinition.evaluate(clearProspect, config: config, now: now).status
                 index.enrich(&clearProspect, municipality: "Montréal", source: source)
-                try expect(clearProspect.rbqCategories == ["6.2", "11.2", "GPC"], "clear codes \(clearProspect.rbqCategories)")
-                let after = LeadDefinition.evaluate(clearProspect, config: config, now: now).status
-                try expect(after != .conflictReview && after == before, "no listed code, not held: \(after)")
+                try expect(clearProspect.rbqCheck == "matched" && clearProspect.rbqCategories == ["6.2", "11.2", "GPC"], "clear codes \(clearProspect.rbqCategories)")
+                let after = LeadDefinition.evaluate(clearProspect, config: config, now: now)
+                try expect(after.status == .ready, "matched, no listed code: not held: \(after)")
+                var stranger = prospect("Entreprise Inconnue")
+                index.enrich(&stranger, municipality: "Montréal", source: source)
+                try expect(stranger.rbqCheck == "no-match" && LeadDefinition.evaluate(stranger, config: config, now: now).status == .conflictReview, "no match holds")
                 for (codes, expected) in [(["15.5"], true), (["15.50"], false), (["2.55"], false), (["12.5"], false), (["GPC", "SEC"], false), ([" 2.5 "], true)] {
                     var record = prospect("Entreprise Fictive")
+                    record.rbqCheck = "matched"
                     record.rbqCategories = codes
                     let status = LeadDefinition.evaluate(record, config: config, now: now).status
                     try expect((status == .conflictReview) == expected, "codes \(codes): \(status)")
                 }
+                try expect(LeadDefinition.evaluate(LeadKit.readyClinic(), config: config, now: now).status == .ready, "segments outside the list need no RBQ match")
                 try expect(ProspectDisplay.attribution(for: LeadKit.readyClinic(), config: config) == nil, "no credit without RBQ data")
             }),
-            ("RBQ header: a missing or unknown column fails loudly with refused:open-data-header, never a silent skip", {
+            ("RBQ schema: a CSV, a missing, renamed or unknown key, a flat record or an empty file throws refused:open-data-schema", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
-                let row = RBQFixture.csvRow(licence: "0000-0000-07", name: "Plomberie Fictive Nord", town: "Montréal", category: "Specialisee", code: "15.5")
                 func refusal(_ data: Data) -> LeadPipelineRefusal? {
                     do { _ = try RBQOpenData.parse(data: data, source: source); return nil } catch { return error as? LeadPipelineRefusal }
                 }
-                let oldGuess = RBQFixture.csvHeader.replacingOccurrences(of: #""Categorie","Sous-catégories""#, with: #""Catégories et sous-catégories","Nombre""#)
-                let missing = refusal(RBQFixture.csv([row], header: oldGuess))
-                try expect(missing?.code == "refused:open-data-header" && (missing?.detail ?? "").contains("Sous-catégories"), "missing column: \(String(describing: missing))")
-                let unknown = refusal(RBQFixture.csv([row + #","x""#], header: RBQFixture.csvHeader + #","Colonne inconnue""#))
-                try expect(unknown?.code == "refused:open-data-header" && (unknown?.detail ?? "").contains("Colonne inconnue"), "unknown column: \(String(describing: unknown))")
+                let ok = RBQFixture.jsonRecord(licence: "0000-0000-07", name: "Plomberie Fictive Nord", town: "Montréal", codes: [("Specialisee", "15.5")])
+                try expect(refusal(RBQFixture.json([ok])) == nil, "the real shape parses")
+                let csv = refusal(RBQFixture.csv([RBQFixture.csvRow(licence: "0000-0000-07", name: "Plomberie Fictive Nord", town: "Montréal", category: "Specialisee", code: "15.5")]))
+                try expect(csv?.code == "refused:open-data-schema", "CSV: \(String(describing: csv))")
+                let renamed = refusal(RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-08", name: "X", town: "Laval", codes: [("Specialisee", "15.5")],
+                                                                             renaming: ("Catégories et sous-catégories", "Categories"))]))
+                try expect(renamed?.code == "refused:open-data-schema" && (renamed?.detail ?? "").contains("Catégories et sous-catégories"), "renamed: \(String(describing: renamed))")
                 let noName = refusal(RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-08", name: "X", town: "Laval", codes: [("Specialisee", "15.5")], dropping: "Nom de l'intervenant")]))
-                try expect(noName?.code == "refused:open-data-header" && (noName?.detail ?? "").contains("Nom de l'intervenant"), "JSON missing key: \(String(describing: noName))")
-                let flat = refusal(Data(#"{"records":[{"Numéro de licence":"1","Nom de l'intervenant":"X"}]}"#.utf8))
-                try expect(flat?.code == "refused:open-data-header", "JSON without the Licence wrapper: \(String(describing: flat))")
-                try expect(refusal(Data())?.code == "refused:open-data-header" && refusal(RBQFixture.csv([]))?.code == "refused:open-data-header", "empty file or header only")
-                // The app path: a cached file with a bad header stops the search instead of running without the hold.
+                try expect(noName?.code == "refused:open-data-schema" && (noName?.detail ?? "").contains("Nom de l'intervenant"), "missing key: \(String(describing: noName))")
+                let unknown = refusal(RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-08", name: "X", town: "Laval", codes: [("Specialisee", "15.5")], extra: ("Colonne inconnue", "1"))]))
+                try expect(unknown?.code == "refused:open-data-schema" && (unknown?.detail ?? "").contains("Colonne inconnue"), "unknown key: \(String(describing: unknown))")
+                let nested = refusal(RBQFixture.json([ok.replacingOccurrences(of: #""Sous-catégories":"15.5""#, with: #""Code":"15.5""#)]))
+                try expect(nested?.code == "refused:open-data-schema", "renamed nested key: \(String(describing: nested))")
+                let flat = refusal(Data(#"{"Liste Licence":[{"Numéro de licence":"1","Nom de l'intervenant":"X"}]}"#.utf8))
+                try expect(flat?.code == "refused:open-data-schema", "record without the Licence wrapper: \(String(describing: flat))")
+                try expect(refusal(Data())?.code == "refused:open-data-schema" && refusal(RBQFixture.json([]))?.code == "refused:open-data-schema", "empty file or no records")
+                try expect(refusal(Data(#"{"Liste Licence":[{"Licence":{"#.utf8))?.code == "refused:open-data-schema", "truncated file")
+            }),
+            ("RBQ fails closed in a run: no file, an unreadable file or no licence match holds a construction prospect with no draft", {
+                for (rbq, failure, expected) in [(nil as RBQIndex?, nil as String?, "unavailable"), (nil, "refused:open-data-schema", "error:refused:open-data-schema"),
+                                                 (RBQIndex([]), nil, "no-match")] {
+                    let fixture = SearchFixture.builder(config: config)
+                    let report = await fixture.run(segment: "construction_trades", rbq: rbq, rbqFailure: failure)
+                    let prospect = try unwrap(report.prospects.first, "prospect (\(expected))")
+                    try expect(prospect.rbqCheck == expected && prospect.status == .conflictReview && report.drafts.isEmpty,
+                               "\(expected): rbqCheck=\(String(describing: prospect.rbqCheck)) status=\(prospect.status) drafts=\(report.drafts.count)")
+                }
+                let source = try unwrap(RBQOpenData.source(config), "rbq")
+                let licences = try RBQOpenData.parse(data: RBQFixture.json([
+                    RBQFixture.jsonRecord(licence: "0000-0000-09", name: SearchFixture.builderName, town: "Montréal", codes: [("Specialisee", "1.3")])
+                ]), source: source)
+                let clear = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(licences))
+                try expect(clear.prospects.first?.rbqCheck == "matched" && clear.prospects.first?.status != .conflictReview, "a matched licence without listed codes is not held")
+                let plumbing = try RBQOpenData.parse(data: RBQFixture.json([
+                    RBQFixture.jsonRecord(licence: "0000-0000-09", name: SearchFixture.builderName, town: "Montréal", codes: [("Generale", "1.3"), ("Specialisee", "15.5")])
+                ]), source: source)
+                let held = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(plumbing))
+                try expect(held.prospects.first?.status == .conflictReview && held.drafts.isEmpty, "a silent site with a 15.5 licence is held")
+                // The app path: an unreadable cache no longer stops the run; it holds construction trades and audits the refusal.
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-leads-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: root) }
                 let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
                 try FileManager.default.createDirectory(at: env.rbqDirectory, withIntermediateDirectories: true)
-                try RBQFixture.csv([row], header: oldGuess).write(to: RBQOpenData.cacheFile(in: env.rbqDirectory))
+                try RBQFixture.csv([]).write(to: RBQOpenData.cacheFile(in: env.rbqDirectory))
                 do { _ = try env.cachedRBQIndex(); try expect(false, "bad cache accepted") }
-                catch let error as LeadPipelineRefusal { try expect(error.code == "refused:open-data-header", "cache: \(error)") }
-                let fixture = SearchFixture(config: config)
+                catch let error as LeadPipelineRefusal { try expect(error.code == "refused:open-data-schema", "cache: \(error)") }
+                let fixture = SearchFixture.builder(config: config)
                 let audit = MemoryAuditSink()
-                let reports = await env.searchAndIngest([.init(segmentID: "clinic", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
+                let reports = await env.searchAndIngest([.init(segmentID: "construction_trades", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
                                                         inner: fixture.inner, audit: audit, clock: fixture.clock)
-                try expect(reports.isEmpty && fixture.inner.requests.isEmpty, "no search without a readable RBQ file: \(reports.count) reports, \(fixture.inner.requests.count) requests")
-                try expect(audit.lines.contains { $0.result == "refused:open-data-header" }, "refusal audited")
+                try expect(reports.first?.prospects.first?.status == .conflictReview && reports.first?.drafts.isEmpty == true, "held, not refused: \(reports.map(\.prospects))")
+                try expect(audit.lines.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }, "refusal audited")
+            }),
+            ("RBQ fails closed in the app (Earth 6:59): a missing, truncated or bad-header cached index holds every construction/trades firm and audits why", {
+                for (label, contents, expectedLoad) in [("missing", nil as Data?, nil as String?),
+                                                        ("truncated", Data(#"{"Liste Licence":[{"Licence":{"#.utf8), "refused:open-data-schema"),
+                                                        ("bad header", RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-07", name: SearchFixture.builderName, town: "Montréal",
+                                                                                                             codes: [("Specialisee", "15.5")], renaming: ("Catégories et sous-catégories", "Categories"))]),
+                                                         "refused:open-data-schema")] {
+                    let held = try await EarthRBQ.appRun(contents: contents)
+                    try expect(!held.prospects.isEmpty && held.prospects.allSatisfy({ $0.status == .conflictReview }) && held.drafts.isEmpty,
+                               "\(label): \(held.prospects.map { "\($0.status)/\($0.rbqCheck ?? "-")" }) drafts=\(held.drafts.count)")
+                    if let expectedLoad {
+                        try expect(held.audit.contains { $0.action == "rbq-load" && $0.result == expectedLoad }, "\(label): rbq-load audited as \(expectedLoad)")
+                    }
+                }
+            }),
+            ("Own-site SSRF: IP literals (v4, v6, decimal, octal, hex), single-label and internal hosts, and non-default ports are refused before the network", {
+                let inner = FakeLeadTransport()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                let bad = ["http://127.0.0.1/", "http://169.254.169.254/latest/meta-data/", "http://[::1]/", "http://[fd00::1]/", "http://[::ffff:127.0.0.1]/",
+                           "http://10.0.0.5/", "http://192.168.1.1/", "http://172.16.0.1/", "http://2130706433/", "http://0177.0.0.1/", "http://0x7f.0.0.1/",
+                           "http://0x7f000001/", "http://127.1/", "http://intranet/", "http://localhost/", "http://printer.local/", "http://x.localhost/",
+                           "http://db.internal/", "http://nas.lan/", "http://router.home.arpa/", "https://www.clinique-exemple.test:8443/", "http://www.clinique-exemple.test:22/"]
+                for raw in bad {
+                    let url = try unwrap(URL(string: raw), raw)
+                    let host = url.host ?? ""
+                    do { _ = try await guarded.fetch(url, purpose: .ownSite(domain: HostMatch.registrable(host))); try expect(false, "\(raw) admitted") }
+                    catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", "\(raw): \(refusal.code)") }
+                }
+                try expect(inner.requests.isEmpty, "nothing reached the network: \(inner.urls)")
+                for good in ["https://www.clinique-exemple.test/", "https://www.clinique-exemple.test:443/", "http://www.clinique-exemple.test:80/", "https://clinique-123.test/"] {
+                    try expect(GuardedLeadTransport.ownSiteHostRefusal(URL(string: good)!) == nil, "\(good) is an ordinary site")
+                }
+                let fixture = SearchFixture(config: config)
+                fixture.listWebsite("http://192.168.0.10:8080/admin")
+                let report = await fixture.run()
+                try expect(report.skipped["osm:node/3001"] == "website host not fetchable" && !fixture.inner.urls.contains { $0.contains("192.168") },
+                           "listing with an internal website: \(report.skipped)")
+            }),
+            ("Redirects: an off-site hop is refused with no snapshot; a same-domain hop is re-admitted and robots-checked; at most 3 hops", {
+                let inner = FakeLeadTransport()
+                inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                inner.respond("https://clinique-exemple.test/robots.txt", body: "User-agent: *\nDisallow: /prive\n", headers: ["content-type": "text/plain"])
+                inner.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://autre-site.example.test/accueil"])
+                inner.respond(LeadKit.teamPage, status: 301, body: "", headers: ["location": "https://clinique-exemple.test/prive"])
+                inner.respond("https://www.clinique-exemple.test/a-propos", status: 302, body: "", headers: ["location": "/nous-joindre"])
+                inner.respond(LeadKit.contactPage, body: "<p>Nous joindre</p>")
+                inner.respond("https://www.clinique-exemple.test/r1", status: 302, body: "", headers: ["location": "/r2"])
+                inner.respond("https://www.clinique-exemple.test/r2", status: 302, body: "", headers: ["location": "/r3"])
+                inner.respond("https://www.clinique-exemple.test/r3", status: 302, body: "", headers: ["location": "/r4"])
+                inner.respond("https://www.clinique-exemple.test/r4", status: 302, body: "", headers: ["location": "/r5"])
+                inner.respond("https://www.clinique-exemple.test/ip", status: 302, body: "", headers: ["location": "http://169.254.169.254/"])
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                func code(_ raw: String) async -> String {
+                    do { let r = try await guarded.fetch(URL(string: raw)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); return "ok:\(r.status):\(r.url?.absoluteString ?? "-")" }
+                    catch let refusal as LeadPipelineRefusal { return refusal.code } catch { return "error" }
+                }
+                for (raw, expected, label) in [(LeadKit.homePage, "refused:redirect-off-site", "off-site"),
+                                               ("https://www.clinique-exemple.test/ip", "refused:redirect-off-site", "redirect to an IP literal"),
+                                               (LeadKit.teamPage, "refused:robots", "same-domain hop is robots-checked"),
+                                               ("https://www.clinique-exemple.test/a-propos", "ok:200:\(LeadKit.contactPage)", "same-site hop followed, final URL kept"),
+                                               ("https://www.clinique-exemple.test/r1", "refused:redirect-limit", "more than 3 hops")] {
+                    let got = await code(raw)
+                    try expect(got == expected, "\(label): \(got)")
+                }
+                try expect(!inner.urls.contains { $0.contains("autre-site") || $0.contains("169.254") || $0.hasSuffix("/prive") || $0.hasSuffix("/r5") }, "\(inner.urls)")
+                // A transport that followed a redirect on its own: the final URL is checked too.
+                let sneaky = FakeLeadTransport()
+                sneaky.respond("https://www.clinique-exemple.test/robots.txt", body: "", headers: ["content-type": "text/plain"])
+                sneaky.respondFrom(LeadKit.homePage, finalURL: "https://autre-site.example.test/", body: "<p>Ailleurs</p>")
+                let guarded2 = GuardedLeadTransport(config: config, inner: sneaky, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                do { _ = try await guarded2.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "followed off-site") }
+                catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:redirect-off-site", refusal.code) }
+                // In a run, the off-site page never becomes a snapshot.
+                let fixture = SearchFixture(config: config)
+                fixture.inner.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://autre-site.example.test/"])
+                let report = await fixture.run()
+                try expect(!report.prospects.flatMap(\.snapshots).contains { $0.url.contains("autre-site") } && !fixture.inner.urls.contains { $0.contains("autre-site") }, "no off-site snapshot")
+                try expect(URLSessionLeadTransport.followsRedirects == false, "the real transport hands every 30x to the guard")
+            }),
+            ("Robots: a robots.txt that answers 5xx or does not answer disallows the whole site; 404 allows it", {
+                for (status, fails) in [(503, true), (500, true), (404, false)] {
+                    let inner = FakeLeadTransport()
+                    inner.respond("https://www.clinique-exemple.test/robots.txt", status: status, body: "", headers: ["content-type": "text/plain"])
+                    inner.respond(LeadKit.homePage, body: "<p>a</p>")
+                    let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                    var code = "ok"
+                    do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)) }
+                    catch let refusal as LeadPipelineRefusal { code = refusal.code }
+                    try expect((code == "refused:robots") == fails && inner.urls.contains(LeadKit.homePage) == !fails, "robots \(status): \(code)")
+                }
+                let inner = FakeLeadTransport()
+                inner.fail("https://www.clinique-exemple.test/robots.txt", URLError(.timedOut))
+                inner.respond(LeadKit.homePage, body: "<p>a</p>")
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "fetched without robots") }
+                catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:robots", refusal.code) }
+            }),
+            ("Send gate: the approval is bound to a SHA-256 of recipient, subject, body and List-Unsubscribe", {
+                try expect(SHA256Hex.digest(Data("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 known answer")
+                try expect(SHA256Hex.digest(Data()) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "SHA-256 empty")
+                try expect(SHA256Hex.digest(Data(String(repeating: "a", count: 1000).utf8)) == "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3", "SHA-256 multi-block")
+                var cfg = config
+                cfg.loi25Gate.open = true
+                let draft = LeadKit.draft(for: LeadKit.readyClinic(), config: cfg)
+                let approval = LeadKit.approval(draft)
+                try expect(approval.contentHash.count == 64 && OutreachSendGate.check(draft, approval: approval, config: cfg, suppression: SuppressionList()) == nil, "approved draft passes")
+                for change in ["body", "subject", "to", "unsubscribe"] {
+                    var edited = draft
+                    switch change {
+                    case "body": edited.body += "\nP.S."
+                    case "subject": edited.subject += " !"
+                    case "to": edited.to = "autre@clinique-exemple.test"
+                    default: edited.listUnsubscribe = "<mailto:autre@exemple.test>"
+                    }
+                    try expect(OutreachSendGate.check(edited, approval: approval, config: cfg, suppression: SuppressionList())?.code == "refused:approval-content-mismatch", "changed \(change)")
+                }
+                var legacy = approval
+                legacy.contentHash = ""
+                try expect(OutreachSendGate.check(draft, approval: legacy, config: cfg, suppression: SuppressionList())?.code == "refused:approval-content-mismatch", "an approval without a hash")
+            }),
+            ("Push policy: Swift LeadPushPolicy refuses a blank form source and a test flag that is not a real boolean, like pharos-api", {
+                let refused: [[String: Any]] = [["provenance": ["kind": "inbound_form", "form_source": "   "]], ["provenance": ["kind": "inbound_form", "form_source": "\n\t"]],
+                                                ["test": "true"], ["test": 1], ["test": NSNumber(value: 1)], ["provenance": ["kind": "inbound_form"]], [:]]
+                for payload in refused { try expect(LeadPushPolicy.check(payload)?.code == "refused:push-not-inbound", "\(payload) must be refused") }
+                let decoded = try JSONSerialization.jsonObject(with: Data(#"[{"test":true},{"test":1},{"test":"true"}]"#.utf8)) as? [[String: Any]] ?? []
+                try expect(decoded.map { LeadPushPolicy.check($0) == nil } == [true, false, false], "JSON true only")
+                try expect(LeadPushPolicy.check(["test": true]) == nil && LeadPushPolicy.check(["provenance": ["kind": "inbound_form", "form_source": "pharos-ai.example.test/contact"]]) == nil, "allowed")
+            }),
+            ("Audit: a CW-AUDIT line that cannot be written is a visible failure, never silent", {
+                let blocker = FileManager.default.temporaryDirectory.appendingPathComponent("cw-audit-block-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: blocker) }
+                try Data("not a directory".utf8).write(to: blocker)
+                let sink = FileAuditSink(url: blocker.appendingPathComponent("sub/audit.log"))
+                sink.write(CWAuditLine(ts: now, surface: "leads", action: "fetch", result: "ok"))
+                try expect(sink.failures.count == 1, "failures: \(sink.failures)")
+                let good = FileAuditSink(url: FileManager.default.temporaryDirectory.appendingPathComponent("cw-audit-\(UUID().uuidString).log"))
+                defer { try? FileManager.default.removeItem(at: good.url) }
+                good.write(CWAuditLine(ts: now, surface: "leads", action: "fetch", result: "ok"))
+                try expect(good.failures.isEmpty && ((try? String(contentsOf: good.url, encoding: .utf8)) ?? "").contains("action=fetch"), "a good write lands")
             }),
             ("Drafts: FR and EN carry the CASL footer and pass the gate; unsubscribe reply is recorded and persisted", {
                 let prospect = LeadKit.readyClinic()
@@ -646,9 +799,30 @@ struct SearchFixture {
         inner.respond("https://www.clinique-exemple.test/a-propos", body: "<p>Nous joindre</p><address>\(LeadKit.clinicAddress)</address><a href=\"mailto:info@clinique-exemple.test\">info</a>")
     }
 
-    func run() async -> ProspectSearchRun.Report {
+    func run(segment: String = "clinic", rbq: RBQIndex? = nil, rbqFailure: String? = nil) async -> ProspectSearchRun.Report {
         let guarded = GuardedLeadTransport(config: config, inner: inner, audit: audit, clock: clock)
-        let search = ProspectSearchRun(config: config, transport: guarded, audit: audit, clock: clock, suppression: SuppressionList(), runID: "test-run")
-        return await search.run(.init(segmentID: "clinic", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5))
+        var search = ProspectSearchRun(config: config, transport: guarded, audit: audit, clock: clock, suppression: SuppressionList(), runID: "test-run")
+        search.rbq = rbq
+        search.rbqFailure = rbqFailure
+        return await search.run(.init(segmentID: segment, latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5))
+    }
+
+    static let builderName = "Constructions Fictives Nord"
+
+    /// The same synthetic site listed as a general contractor (craft=builder): its name and pages say nothing about plumbing,
+    /// so only the RBQ lookup can hold it.
+    static func builder(config: ICPConfig) -> SearchFixture {
+        let fixture = SearchFixture(config: config)
+        fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """
+        {"elements":[{"type":"node","id":2001,"lat":45.5,"lon":-73.6,"tags":{"name":"\(builderName)","craft":"builder","website":"https://www.clinique-exemple.test","addr:city":"Montréal"}}]}
+        """, headers: ["content-type": "application/json"])
+        return fixture
+    }
+
+    /// An overpass answer listing one business whose website is `website` (for the SSRF checks).
+    func listWebsite(_ website: String) {
+        inner.respond("https://overpass.private.coffee/api/interpreter", body: """
+        {"elements":[{"type":"node","id":3001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Sud","healthcare":"clinic","website":"\(website)","addr:city":"Montréal"}}]}
+        """, headers: ["content-type": "application/json"])
     }
 }

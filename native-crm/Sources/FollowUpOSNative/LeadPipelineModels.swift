@@ -157,6 +157,9 @@ struct ProspectRecord: Codable, Equatable, Identifiable, Sendable {
     var osmTags: [String] = []
     /// RBQ licence categories (open data). Used only for the conflict hold, never for contact data.
     var rbqCategories: [String] = []
+    /// Outcome of the RBQ licence lookup for segments the conflict hold needs it for: "matched", "no-match",
+    /// "unavailable" (no RBQ file) or "error:<code>" (file present but unreadable). Anything but "matched" holds the prospect.
+    var rbqCheck: String?
     var linkedinNote: String?
     var openTenderURL: String?
     /// Set when any field came from an open-data file, e.g. `RBQ / Données Québec, CC BY 4.0`. Shown wherever the record is shown.

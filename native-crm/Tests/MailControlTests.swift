@@ -103,7 +103,12 @@ enum MailControlTests {
                 try expect(text.contains("Hello there") && text.contains("Line two"), "visible text lost: \(text)")
                 try expect(!text.contains("tracker.example.test") && !text.contains("pixel.example.test"), "a URL survived into the rendered text")
                 let source = try String(contentsOf: MailControlTests.sourceURL("MailActionViews.swift"), encoding: .utf8)
-                try expect(!source.contains("DocumentType.html") && !source.contains("NSAttributedString(data:"), "MailActionViews.swift still imports HTML through NSAttributedString")
+                let wide = HTMLImportScan.scanSources(MailControlTests.sourceURL(""))
+                try expect(wide.files > 0 && wide.findings.isEmpty, "HTML imported outside MailBodyText (\(wide.files) files scanned): \(wide.findings)")
+                for planted in ["let s = NSAttributedString(html: data, documentAttributes: nil)", "web.loadHTMLString(body, baseURL: nil)",
+                                "options: [.documentType: NSAttributedString.DocumentType.html]", "try NSAttributedString(data: d, options: o, documentAttributes: nil)"] {
+                    try expect(!HTMLImportScan.findings(in: planted).isEmpty, "the scan misses: \(planted)")
+                }
                 try expect(source.contains("MailBodyText.plain(fromSanitizedHTML:"), "MailHTMLView does not render through MailBodyText")
             }),
             ("Mail platforms: disabled reason is identical in catalog, UI model and gate", {

@@ -32,6 +32,8 @@ struct ProspectSearchRun: Sendable {
     let clock: any LeadClock
     let suppression: SuppressionList
     var rbq: RBQIndex?
+    /// Set when the cached RBQ file exists but could not be read (e.g. refused:open-data-schema).
+    var rbqFailure: String?
     var watchItems: [WatchItem] = []
     var runID = UUID().uuidString.lowercased()
 
