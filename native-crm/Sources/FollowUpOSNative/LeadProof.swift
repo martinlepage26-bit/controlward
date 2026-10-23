@@ -11,7 +11,7 @@ enum LeadProofVerifier {
     }
 
     static func verify(storeCountAtLaunch: Int, auditLines: [String], prospects: [ProspectRecord], drafts: [OutreachDraft],
-                       config: ICPConfig) -> [Check] {
+                       config: ICPConfig, listingDomains: Set<String> = []) -> [Check] {
         let lines = auditLines.compactMap(CWAuditLine.parse).filter { $0["surface"] == "leads" }
         var checks: [Check] = []
 

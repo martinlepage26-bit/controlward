@@ -631,7 +631,6 @@ enum LeadPipelineTests {
                     return record
                 }
                 let cases: [(record: ProspectRecord, held: Bool, why: String)] = [
-                    (firm("Services Fictifs Lima", tags: ["craft=plumber"], town: "Chicoutimi"), true, "map-data plumber in Chicoutimi"),
                     (firm("Plomberie Fictive Mike", tags: ["craft=builder"], town: "Montréal"), false, "keyword firm in Montréal"),
                     (firm("Plomberie Fictive November", tags: ["craft=builder"], town: nil), true, "keyword firm with no town"),
                     (firm("Plomberie Fictive Oscar", tags: ["craft=builder"], town: "  "), true, "keyword firm with a blank town"),
@@ -651,6 +650,99 @@ enum LeadPipelineTests {
                 ]), source: source)
                 let run = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(licences))
                 try expect(run.prospects.first?.town == "Montréal", "map town kept: \(String(describing: run.prospects.first?.town))")
+            }),
+            ("Chicoutimi map-data plumber held (Water 10:04): a craft=plumber listing in Chicoutimi is held for conflict review", {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Services Fictifs Lima"
+                record.osmTags = ["craft=plumber"]
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                record.town = "Chicoutimi"
+                let status = LeadDefinition.evaluate(record, config: config, now: now).status
+                try expect(status == .conflictReview, "map-data plumber in Chicoutimi: expected held, got \(status)")
+                try expect(LeadDefinition.conflictArea(for: record, config: config) != nil, "outreach check: map-data plumber in Chicoutimi")
+            }),
+            ("Live proof cause 2 (Water 10:13, unmatched=5): a prospect fetched at a millisecond time still matches its fetch and score lines after prospects.json is saved and read back", {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-ms-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: root) }
+                let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
+                let fixture = SearchFixture(config: config)
+                fixture.clock.advance(0.891)
+                let audit = env.audit
+                _ = env.recordLaunch(audit: audit, now: fixture.clock.now)
+                let reports = await env.searchAndIngest([.init(segmentID: "clinic", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
+                                                        inner: fixture.inner, audit: audit, clock: fixture.clock)
+                let live = try unwrap(reports.first?.prospects.first?.fetchedAt, "fetch time in the run")
+                let inputs = env.proofInputs()
+                let stored = try unwrap(inputs.prospects.first?.fetchedAt, "fetch time read back")
+                try expect(CWAuditLine.timestamp(stored) == CWAuditLine.timestamp(live),
+                           "prospects.json keeps the fetch time: run \(CWAuditLine.timestamp(live)), read back \(CWAuditLine.timestamp(stored))")
+                let checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, auditLines: inputs.lines, prospects: inputs.prospects, drafts: inputs.drafts, config: config)
+                let two = try unwrap(checks.first { $0.number == 2 }, "check 2")
+                try expect(two.passed, "check 2 after save and read back: \(two.detail)")
+            }),
+            ("Live proof cause 1 (Water 10:13, 0 contacts): the crawl follows the home page's own links to its team and contact pages when the guessed paths are missing", {
+                let fixture = SearchFixture(config: config)
+                let site = "https://www.clinique-exemple.test"
+                fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1><p>Prendre rendez-vous en ligne</p>"
+                                      + "<a href=\"/pourquoi-nous/our-team\">Our team</a> <a href=\"/en/contact-us\">Contact us</a> <a href=\"/blogue/article-1\">Blogue</a>")
+                fixture.inner.respond("\(site)/equipe", status: 404, body: "")
+                fixture.inner.respond("\(site)/a-propos", status: 404, body: "")
+                fixture.inner.respond("\(site)/pourquoi-nous/our-team", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")
+                fixture.inner.respond("\(site)/en/contact-us", body: "<p>Nous joindre</p><address>\(LeadKit.clinicAddress)</address><a href=\"mailto:info@clinique-exemple.test\">info</a>")
+                let report = await fixture.run()
+                let pages = fixture.inner.urls.filter { $0.hasPrefix(site) && !$0.hasSuffix("/robots.txt") }
+                try expect(pages.contains("\(site)/pourquoi-nous/our-team") && pages.contains("\(site)/en/contact-us"), "linked team and contact pages fetched: \(pages)")
+                try expect(pages.count <= config.etiquette.maxPagesPerSite, "page budget kept: \(pages.count) > \(config.etiquette.maxPagesPerSite)")
+                try expect(!pages.contains("\(site)/blogue/article-1"), "unrelated link not fetched")
+                let record = try unwrap(report.prospects.first, "prospect")
+                try expect(record.contact?.name == "Alex Fictif" && record.route?.kind == .email, "contact \(String(describing: record.contact?.name)) route \(String(describing: record.route?.kind)) reasons \(record.reasons)")
+                try expect(record.status == .ready && report.drafts.count == 1, "ready and drafted: \(record.status) \(record.reasons) drafts=\(report.drafts.count)")
+            }),
+            ("Check 5 (Earth 10:10): a host a listing names as its own site counts as allowed; an unrelated host still fails", {
+                func line(_ host: String) -> String {
+                    CWAuditLine(ts: now, surface: "leads", action: "fetch", register: CWAuditLine.register(for: URL(string: "https://\(host)/")),
+                                target: host, source: "own-site", result: "redirect:301").text
+                }
+                let listing = "www.listing-fictif.test"
+                let pass = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: [line(listing)], prospects: [], drafts: [], config: config,
+                                                    listingDomains: ["listing-fictif.test"])
+                let five = try unwrap(pass.first { $0.number == 5 }, "check 5")
+                try expect(five.passed, "own-site host of a listing must pass: \(five.detail)")
+                let fail = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: [line("www.autre-fictif.test")], prospects: [], drafts: [], config: config,
+                                                    listingDomains: ["listing-fictif.test"])
+                let other = try unwrap(fail.first { $0.number == 5 }, "check 5")
+                try expect(!other.passed && other.detail.contains("www.autre-fictif.test"), "unrelated host must fail: \(other.detail)")
+            }),
+            ("Photon fallback (Water 10:09 a): the Photon request carries only the category tag and coordinates, no names or free text", {
+                let fixture = SearchFixture.photonOnly(config: config)
+                _ = await fixture.run()
+                let photon = fixture.inner.requests.filter { $0.url?.host == "photon.komoot.io" }
+                try expect(!photon.isEmpty, "Photon was asked")
+                let selectors = try unwrap(config.segments.first { $0.id == "clinic" }, "clinic").osmSelectors
+                for request in photon {
+                    let url = try unwrap(request.url, "url")
+                    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                    let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
+                    try expect(Set(items.map(\.name)) == ["q", "osm_tag", "lat", "lon", "limit"] && items.count == 5, "query names: \(items.map(\.name))")
+                    let tag = query["osm_tag"] ?? ""
+                    try expect(selectors.contains(tag.replacingOccurrences(of: ":", with: "=")), "osm_tag is a segment category tag: \(tag)")
+                    try expect(query["q"] == tag.split(separator: ":").last.map { $0.replacingOccurrences(of: "_", with: " ") }, "q is the category value only: \(query["q"] ?? "")")
+                    try expect(query["lat"] == "45.50000" && query["lon"] == "-73.60000" && Int(query["limit"] ?? "") != nil, "coordinates and limit: \(query)")
+                    try expect((request.httpMethod ?? "GET") == "GET" && (request.httpBody ?? Data()).isEmpty, "no body")
+                    for word in ["Fictif", "Exemple", "Imaginaire", "clinique-exemple", "Montr"] { try expect(!url.absoluteString.contains(word), "no name or free text: \(word)") }
+                }
+            }),
+            ("Photon fallback (Water 10:09 a): when Overpass fails, the run log names Photon as the server that answered", {
+                let fixture = SearchFixture.photonOnly(config: config)
+                let report = await fixture.run()
+                try expect(report.prospects.count == 1, "Photon listing became a prospect: \(report.prospects.count)")
+                let lines = fixture.audit.lines
+                let search = lines.filter { $0.action == "search" && $0.source == "controlward" && $0.result == "ok" }
+                try expect(!search.isEmpty && search.allSatisfy { URL(string: $0.register)?.host == "photon.komoot.io" }, "search line names Photon: \(search.map(\.register))")
+                try expect(lines.contains { $0.action == "discovery-attempt" && $0.target == "photon.komoot.io" && $0.result == "ok" }, "Photon attempt ok")
+                try expect(lines.contains { $0.action == "discovery-attempt" && $0.target == "overpass-api.de" && $0.result.hasPrefix("error:") }, "Overpass failure logged first")
             }),
             ("Planted-red tally (Water/Earth): one planted red that slips prints 'expected 56 failures, got 55: MISMATCH' and fails the run", {
                 var cases = try LeadPipelinePlantedReds.makeCases()
@@ -1192,6 +1284,17 @@ struct SearchFixture {
             fixture.inner.respond("\(site)/equipe", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")
             fixture.inner.respond("\(site)/a-propos", body: "<p>Nous joindre</p><address>\(1240 + index), rue Imaginaire, Montréal (Québec) H0H 0H0</address><a href=\"mailto:info@\(firm.host.replacingOccurrences(of: "www.", with: ""))\">info</a>")
         }
+        return fixture
+    }
+
+    /// Both Overpass servers answer 502; Photon answers the clinic tag with the synthetic clinic (Water 10:09 a).
+    static func photonOnly(config: ICPConfig) -> SearchFixture {
+        let fixture = SearchFixture(config: config)
+        fixture.inner.respond("https://overpass.private.coffee/api/interpreter", status: 502, body: "")
+        fixture.inner.respond("https://overpass-api.de/api/interpreter", status: 502, body: "")
+        let url = LeadDiscovery.photonURL(key: "healthcare", value: "clinic", latitude: 45.5, longitude: -73.6, limit: 5)!.absoluteString
+        fixture.inner.respond(url, body: #"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[-73.6,45.5]},"properties":{"osm_type":"N","osm_id":1001,"osm_key":"healthcare","osm_value":"clinic","name":"Clinique Exemple Nord","city":"Montréal","extra":{"website":"https://www.clinique-exemple.test"}}}]}"#,
+                              headers: ["content-type": "application/json"])
         return fixture
     }
 
