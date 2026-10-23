@@ -153,6 +153,18 @@ struct ICPConfig: Codable, Equatable, Sendable {
 
     /// S3-R9: the configured segments must equal the confirmed list, each with the same priority.
     func validate(against confirmed: ICPConfirmed) -> LeadPipelineRefusal? {
+        let ids = segments.map(\.id)
+        if Set(ids).count != ids.count { return LeadPipelineRefusal(code: "refused:icp-config", detail: "duplicate segment") }
+        let missing = confirmed.segments.filter { !ids.contains($0) }
+        if !missing.isEmpty { return LeadPipelineRefusal(code: "refused:icp-config", detail: "segment dropped: \(missing.joined(separator: ","))") }
+        let extra = ids.filter { !confirmed.segments.contains($0) }
+        if !extra.isEmpty { return LeadPipelineRefusal(code: "refused:icp-config", detail: "segment not confirmed: \(extra.joined(separator: ","))") }
+        if confirmed.equalPriority, Set(segments.map(\.priority)).count > 1 {
+            return LeadPipelineRefusal(code: "refused:icp-config", detail: "unequal segment priority")
+        }
+        for segment in segments where triggerRules[segment.triggerRule] == nil {
+            return LeadPipelineRefusal(code: "refused:icp-config", detail: "unknown trigger rule for \(segment.id)")
+        }
         return nil
     }
 
@@ -201,7 +213,8 @@ struct ICPConfirmed: Codable, Equatable, Sendable {
 /// Finds a hard-coded segment list in Swift source (S3-R9). Two or more segment ids as string literals in one file is a hit.
 enum ICPSourceScanner {
     static func hardCodedSegments(in source: String, segmentIDs: [String]) -> [String] {
-        return []
+        let hits = segmentIDs.filter { source.contains("\"\($0)\"") }
+        return hits.count >= 2 ? hits : []
     }
 }
 

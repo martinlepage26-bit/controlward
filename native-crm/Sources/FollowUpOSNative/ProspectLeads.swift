@@ -40,6 +40,11 @@ enum ProspectIngest {
 
     /// Dedupe key order is source id, then email, then phone (the existing lead rule).
     static func duplicate(of record: ProspectRecord, in existing: [ProspectRecord]) -> ProspectRecord? {
+        if let match = existing.first(where: { $0.id == record.id }) { return match }
+        if let email = record.email.map(MailAddress.bare), !email.isEmpty,
+           let match = existing.first(where: { $0.email.map(MailAddress.bare) == email }) { return match }
+        if let phone = record.phone.map(digits), phone.count >= 10,
+           let match = existing.first(where: { $0.phone.map(digits) == phone }) { return match }
         return nil
     }
 
@@ -55,6 +60,8 @@ enum ProspectIngest {
         var result = Result()
         var records = store.records
         for var record in incoming {
+            let missing = LeadDefinition.sourceEvidence(record)
+            if !missing.isEmpty { result.rejected[record.id] = missing.joined(separator: ", "); continue }
             let verdict = LeadDefinition.evaluate(record, config: config, now: now)
             record.status = verdict.status
             record.reasons = verdict.reasons
@@ -68,7 +75,6 @@ enum ProspectIngest {
                 result.added.append(record.id)
             }
         }
-        if let egress { var request = URLRequest(url: URL(string: "https://pharos-api.example.test/api/items")!); request.httpMethod = "POST"; _ = try? await egress.send(request) }
         store.replace(records)
         audit.write(CWAuditLine(ts: now, surface: "leads", action: "ingest", register: "-", target: "leads-list", source: "controlward",
                                 result: result.rejected.isEmpty ? "ok" : "partial:rejected-\(result.rejected.count)",
@@ -120,6 +126,9 @@ enum ProspectDisplay {
 /// The rule `/v1/leads/push` applies (mirrored in pharos-api): only test leads and inbound form leads (S3-R16).
 enum LeadPushPolicy {
     static func check(_ payload: [String: Any]) -> LeadPipelineRefusal? {
-        return nil
+        if payload["test"] as? Bool == true { return nil }
+        if let provenance = payload["provenance"] as? [String: Any], provenance["kind"] as? String == "inbound_form",
+           let form = provenance["form_source"] as? String, !form.isEmpty { return nil }
+        return LeadPipelineRefusal(code: "refused:push-not-inbound")
     }
 }

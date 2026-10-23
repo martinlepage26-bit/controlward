@@ -151,15 +151,87 @@ final class GuardedLeadTransport: @unchecked Sendable {
     // MARK: - Admission
 
     func admit(_ url: URL, host: String, purpose: FetchPurpose, method: String, body: Data?) throws {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || (scheme == "http" && purpose != .gmail) else {
+            throw LeadPipelineRefusal(code: "refused:scheme")
+        }
+        if config.isNeverFetch(host: host) { throw LeadPipelineRefusal(code: "refused:crawl-linkedin", detail: config.etiquette.linkedinNote) }
+        if let denied = config.deniedHost(host) { throw LeadPipelineRefusal(code: "refused:denied-host", detail: denied.reason) }
+        if lock.withLock({ challenged.contains(host) }) { throw LeadPipelineRefusal(code: "refused:bot-challenge", detail: "earlier challenge on \(host)") }
+        if let disabled = config.disabledSource(forHost: host), !disabled.enabled {
+            throw LeadPipelineRefusal(code: "refused:source-disabled:\(disabled.id)", detail: disabled.reason)
+        }
+        let allowed: Bool
+        switch purpose {
+        case .discovery: allowed = config.allowlist.discoveryHosts.contains(host)
+        case .watch: allowed = config.allowlist.watchHosts.contains(host)
+        case .gmail: allowed = config.allowlist.gmailHosts.contains(host)
+        case .ownSite(let domain):
+            let listed = config.allowlist.discoveryHosts + config.allowlist.watchHosts + config.allowlist.gmailHosts
+            allowed = !domain.isEmpty && HostMatch.belongs(host, to: domain) && !listed.contains(host) && config.openDataSource(forHost: host) == nil
+        case .openData(let id):
+            guard let source = config.allowlist.openDataSources.first(where: { $0.id == id }), source.enabled, source.host == host else {
+                throw LeadPipelineRefusal(code: "refused:open-data-source")
+            }
+            if url.query != nil || url.fragment != nil || source.deniedPathPrefixes.contains(where: { url.path.hasPrefix($0) })
+                || !source.downloadUrls.contains(url.absoluteString) || method != "GET" {
+                throw LeadPipelineRefusal(code: "refused:open-data-path", detail: "only the fixed download URLs")
+            }
+            allowed = true
+        }
+        guard allowed else { throw LeadPipelineRefusal(code: "refused:loi25-host", detail: host) }
+        if purpose == .discovery { try scanDiscoveryPayload(url: url, body: body) }
     }
 
     /// Discovery hosts get category tags and coordinates only: no site content, names, emails, phones or postal codes.
     func scanDiscoveryPayload(url: URL, body: Data?) throws {
+        let payload = ((url.query ?? "") + " " + (body.flatMap { String(data: $0, encoding: .utf8) } ?? ""))
+        let decoded = (payload.removingPercentEncoding ?? payload).replacingOccurrences(of: "+", with: " ").lowercased()
+        let patterns = [
+            "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}",
+            "\\b[abceghjklmnprstvxy][0-9][abceghjk-nprstv-z][ -]?[0-9][abceghjk-nprstv-z][0-9]\\b",
+            "\\(?\\b[0-9]{3}\\)?[ .-][0-9]{3}[ .-][0-9]{4}\\b"
+        ]
+        if patterns.contains(where: { decoded.range(of: $0, options: .regularExpression) != nil }) {
+            throw LeadPipelineRefusal(code: "refused:loi25-payload", detail: "contact data in a discovery request")
+        }
+        let leaked = lock.withLock { sensitive.first { decoded.contains($0) } }
+        if leaked != nil { throw LeadPipelineRefusal(code: "refused:loi25-payload", detail: "fetched-site content in a discovery request") }
     }
 
     // MARK: - robots.txt and pacing
 
     private func checkRobots(_ url: URL, host: String) async throws {
+        var rules = lock.withLock { robots[host] }
+        if rules == nil {
+            var components = URLComponents()
+            components.scheme = url.scheme
+            components.host = url.host
+            components.port = url.port
+            components.path = "/robots.txt"
+            var parsed = RobotsRules(groups: [])
+            if let robotsURL = components.url {
+                await pace(host: host, purpose: .ownSite(domain: host))
+                var request = URLRequest(url: robotsURL)
+                request.setValue(config.etiquette.userAgent, forHTTPHeaderField: "User-Agent")
+                request.timeoutInterval = 15
+                if let response = try? await inner.send(request) {
+                    lock.withLock { lastRequest[host] = clock.now }
+                    if Self.isBotChallenge(response) {
+                        lock.withLock { _ = challenged.insert(host) }
+                        log(robotsURL, method: "GET", purpose: .ownSite(domain: host), result: "refused:bot-challenge")
+                        throw LeadPipelineRefusal(code: "refused:bot-challenge", detail: host)
+                    }
+                    log(robotsURL, method: "GET", purpose: .ownSite(domain: host), result: (200..<300).contains(response.status) ? "ok" : "error:\(response.status)")
+                    if (200..<300).contains(response.status) { parsed = RobotsRules.parse(String(decoding: response.body, as: UTF8.self)) }
+                    // A 401 or 403 on robots.txt means the site does not want crawlers: treat everything as disallowed.
+                    if response.status == 401 || response.status == 403 { parsed = RobotsRules(groups: [.init(agents: ["*"], rules: [(false, "/")], crawlDelay: nil)]) }
+                }
+            }
+            rules = parsed
+            lock.withLock { robots[host] = parsed }
+        }
+        let path = url.path.isEmpty ? "/" : url.path + (url.query.map { "?\($0)" } ?? "")
+        if rules?.allows(path: path, agent: "ControlWard") == false { throw LeadPipelineRefusal(code: "refused:robots", detail: url.path) }
     }
 
     private func pace(host: String, purpose: FetchPurpose) async {

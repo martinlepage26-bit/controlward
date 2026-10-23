@@ -139,25 +139,57 @@ enum OutreachDraftBuilder {
 /// Checks a draft before it is saved (S3-R6, S3-R10, S3-R14, S3-R17c, S3-R8).
 enum OutreachDraftGate {
     static func check(_ draft: OutreachDraft, prospect: ProspectRecord, config: ICPConfig, suppression: SuppressionList, now: Date) -> LeadPipelineRefusal? {
+        if let refusal = fromAlias(draft.from, config: config) { return refusal }
+        if let refusal = holds(prospect, config: config) { return refusal }
+        let verdict = LeadDefinition.evaluate(prospect, config: config, now: now)
+        if verdict.status != .ready { return LeadPipelineRefusal(code: "refused:lead-def", detail: verdict.reasons.joined(separator: "; ")) }
+        if let refusal = AddressProvenance.check(prospect) { return refusal }
+        if let refusal = antiSpam(draft, config: config, suppression: suppression) { return refusal }
+        if !AddressProvenance.consentFromOwnDomain(prospect) { return LeadPipelineRefusal(code: "refused:anti-spam:consent", detail: "consent not from own domain") }
+        if let refusal = content(draft, config: config) { return refusal }
         return nil
     }
 
     static func fromAlias(_ from: String, config: ICPConfig) -> LeadPipelineRefusal? {
+        if MailAddress.bare(from) != MailAddress.bare(config.sender.from) { return LeadPipelineRefusal(code: "refused:from-not-alias") }
         return nil
     }
 
     /// Conflict-area trades and organisations with an open tender are never drafted.
     static func holds(_ prospect: ProspectRecord, config: ICPConfig) -> LeadPipelineRefusal? {
+        if prospect.status == .conflictReview || LeadDefinition.conflictArea(for: prospect, config: config) != nil {
+            return LeadPipelineRefusal(code: "refused:hold:conflict-review")
+        }
+        if prospect.openTenderURL != nil { return LeadPipelineRefusal(code: "refused:hold:open-tender") }
         return nil
     }
 
     /// CASL: identification, mailing address, a working unsubscribe, a consent basis, and no suppressed address.
     static func antiSpam(_ draft: OutreachDraft, config: ICPConfig, suppression: SuppressionList) -> LeadPipelineRefusal? {
+        let sender = config.sender
+        if suppression.contains(draft.to) { return LeadPipelineRefusal(code: "refused:anti-spam:unsubscribed") }
+        if !draft.body.contains(sender.organization) || !draft.body.contains(sender.name) {
+            return LeadPipelineRefusal(code: "refused:anti-spam:identification")
+        }
+        if !draft.body.contains(sender.mailingAddress) { return LeadPipelineRefusal(code: "refused:anti-spam:address") }
+        let mailto = "mailto:\(sender.unsubscribeMailto)"
+        if !draft.body.contains(mailto) || draft.listUnsubscribe?.contains(mailto) != true {
+            return LeadPipelineRefusal(code: "refused:anti-spam:unsubscribe")
+        }
+        if draft.consent == nil { return LeadPipelineRefusal(code: "refused:anti-spam:consent") }
         return nil
     }
 
     /// `draft_forbidden` rules from config, checked on subject and body.
     static func content(_ draft: OutreachDraft, config: ICPConfig) -> LeadPipelineRefusal? {
+        let text = draft.subject + "\n" + draft.body
+        for rule in config.draftForbidden {
+            for pattern in rule.patterns {
+                if text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
+                    return LeadPipelineRefusal(code: "refused:draft-content:\(rule.rule)")
+                }
+            }
+        }
         return nil
     }
 }
@@ -173,6 +205,13 @@ struct OutreachApproval: Codable, Equatable, Sendable {
 /// Checks a send before any request (S3-R6, S3-R7, S3-R8, S3-R11).
 enum OutreachSendGate {
     static func check(_ draft: OutreachDraft, approval: OutreachApproval?, config: ICPConfig, suppression: SuppressionList) -> LeadPipelineRefusal? {
+        if let refusal = OutreachDraftGate.fromAlias(draft.from, config: config) { return refusal }
+        guard let approval, approval.approver == "martin", !approval.approvalID.isEmpty, approval.messageID == draft.messageID else {
+            return LeadPipelineRefusal(code: "refused:no-approval", detail: "each message needs its own go-ahead")
+        }
+        if !config.loi25Gate.open, !config.isMartinAddress(draft.to) { return LeadPipelineRefusal(code: "refused:loi25-gate") }
+        if let refusal = OutreachDraftGate.antiSpam(draft, config: config, suppression: suppression) { return refusal }
+        if let refusal = OutreachDraftGate.content(draft, config: config) { return refusal }
         return nil
     }
 }
