@@ -20,6 +20,24 @@ struct LeadDiscovery: Sendable {
     static let photon = URL(string: "https://photon.komoot.io/api/")!
 
     let transport: GuardedLeadTransport
+    /// Jitter source in [0, 1] for the retry backoff; tests pass a fixed value.
+    var jitter: @Sendable () -> Double = { Double.random(in: 0...1) }
+
+    /// One Overpass query area.
+    struct Tile: Equatable, Sendable {
+        var latitude: Double
+        var longitude: Double
+        var radiusMeters: Int
+    }
+
+    static func tiles(latitude: Double, longitude: Double, radiusMeters: Int, tileRadiusMeters: Int) -> [Tile] {
+        [Tile(latitude: latitude, longitude: longitude, radiusMeters: radiusMeters)]
+    }
+
+    static func backoffSeconds(retry: Int, policy: ICPConfig.DiscoveryRetry, jitter: Double, serverWait: Double?) -> Double {
+        let backoff = min(policy.baseDelaySeconds * pow(2, Double(retry - 1)), policy.maxDelaySeconds)
+        return min(max(backoff, serverWait ?? 0), policy.maxDelaySeconds)
+    }
 
     func search(selectors: [String], latitude: Double, longitude: Double, radiusMeters: Int, limit: Int) async -> [LeadCandidate] {
         var out: [LeadCandidate] = []
@@ -42,7 +60,8 @@ struct LeadDiscovery: Sendable {
         !text.isEmpty && text.count <= 40 && text.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "_:-".contains($0)) }
     }
 
-    static func overpassQuery(key: String, value: String, latitude: Double, longitude: Double, radius: Int, limit: Int) -> String {
+    static func overpassQuery(key: String, value: String, latitude: Double, longitude: Double, radius: Int, limit: Int,
+                              timeoutSeconds: Int = ICPConfig.DiscoveryQuery.standard.overpassQueryTimeoutSeconds) -> String {
         let r = min(max(radius, 100), 50_000)
         return "[out:json][timeout:20];nwr[\"\(key)\"=\"\(value)\"][\"name\"](around:\(r),\(String(format: "%.5f", latitude)),\(String(format: "%.5f", longitude)));out center tags \(min(max(limit, 1), 200));"
     }
@@ -70,7 +89,7 @@ struct LeadDiscovery: Sendable {
         var failures = 0
         var serverWait: Double?
         for server in Self.overpassServers {
-            for _ in 0..<max(policy.attemptsPerHost, 1) {
+            for _ in 0..<max(policy.retriesPerHost, 1) {
                 if failures > 0 {
                     let backoff = min(policy.baseDelaySeconds * pow(2, Double(failures - 1)), policy.maxDelaySeconds)
                     await transport.backoff(seconds: min(max(backoff, serverWait ?? 0), policy.maxDelaySeconds))

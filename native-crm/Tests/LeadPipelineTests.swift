@@ -61,30 +61,30 @@ enum LeadPipelineTests {
                 inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
                 let clock = FakeLeadClock()
                 let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
-                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
                 try expect(found.count == 1, "found \(found.count)")
                 try expect(inner.requests.compactMap { $0.url?.host } == ["overpass.private.coffee"], "hosts \(inner.urls)")
                 let agent = inner.requests.first?.value(forHTTPHeaderField: "User-Agent") ?? ""
                 try expect(agent.hasPrefix("ControlWard/") && agent.contains("contact "), "identifying UA, got \(agent)")
                 try expect(clock.sleeps.isEmpty, "no backoff on success: \(clock.sleeps)")
             }),
-            ("Discovery: a private.coffee timeout retries with backoff, then falls back to overpass-api.de with tags and coordinates only", {
+            ("Discovery: a private.coffee timeout is retried twice with backoff, then overpass-api.de answers with tags and coordinates only", {
                 try expect(config.allowlist.discoveryHosts.contains("overpass-api.de"), "overpass-api.de allowlisted")
                 let inner = FakeLeadTransport()
                 inner.fail(LeadDiscovery.overpass.absoluteString, URLError(.timedOut))
                 inner.respond("https://overpass-api.de/api/interpreter", body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
                 let clock = FakeLeadClock()
                 let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
-                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                let found = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
                 try expect(found.count == 1, "found \(found.count)")
-                try expect(inner.requests.compactMap { $0.url?.host } == ["overpass.private.coffee", "overpass.private.coffee", "overpass-api.de"], "hosts \(inner.urls)")
-                try expect(clock.sleeps == [5, 10], "exponential backoff 5 s then 10 s, got \(clock.sleeps)")
+                try expect(inner.requests.compactMap { $0.url?.host } == ["overpass.private.coffee", "overpass.private.coffee", "overpass.private.coffee", "overpass-api.de"], "hosts \(inner.urls)")
+                try expect(clock.sleeps == [5, 10], "exponential backoff 5 s then 10 s on private.coffee, none before the first overpass-api.de try: \(clock.sleeps)")
                 try expect(inner.requests.allSatisfy { ($0.value(forHTTPHeaderField: "User-Agent") ?? "").hasPrefix("ControlWard/") }, "UA on every Overpass request (overpass-api.de answers 406 without one)")
                 let bodies = inner.requests.compactMap { $0.httpBody.map { String(decoding: $0, as: UTF8.self) } }
-                let query = LeadDiscovery.overpassQuery(key: "healthcare", value: "clinic", latitude: 45.5, longitude: -73.6, radius: 3000, limit: 5)
-                try expect(bodies.count == 3 && Set(bodies).count == 1, "same payload to both servers")
-                try expect(bodies[2].removingPercentEncoding == "data=" + query, "payload is the tag query only: \(bodies[2])")
-                try expect(!bodies[2].contains("%40") && !bodies[2].contains("@") && !bodies[2].lowercased().contains("clinique"), "no contact data")
+                let query = LeadDiscovery.overpassQuery(key: "healthcare", value: "clinic", latitude: 45.5, longitude: -73.6, radius: 1000, limit: 5)
+                try expect(bodies.count == 4 && Set(bodies).count == 1, "same payload to both servers")
+                try expect(bodies[3].removingPercentEncoding == "data=" + query, "payload is the tag query only: \(bodies[3])")
+                try expect(!bodies[3].contains("%40") && !bodies[3].contains("@") && !bodies[3].lowercased().contains("clinique"), "no contact data")
                 try expect(!inner.urls.contains { $0.contains("photon") }, "Photon not needed")
             }),
             ("Discovery: 429 honours Retry-After and 5xx backs off before the retry", {
@@ -93,7 +93,7 @@ enum LeadPipelineTests {
                 inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
                 let clock = FakeLeadClock()
                 let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: clock)
-                let found = await LeadDiscovery(transport: guarded).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                let found = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
                 try expect(found.count == 1 && inner.requests.count == 2, "retried once: \(inner.urls)")
                 try expect(clock.sleeps == [30], "Retry-After 30 s honoured, got \(clock.sleeps)")
                 let inner5 = FakeLeadTransport()
@@ -101,9 +101,93 @@ enum LeadPipelineTests {
                 inner5.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
                 let clock5 = FakeLeadClock()
                 let guarded5 = GuardedLeadTransport(config: config, inner: inner5, audit: MemoryAuditSink(), clock: clock5)
-                let found5 = await LeadDiscovery(transport: guarded5).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)
+                let found5 = await LeadDiscovery(transport: guarded5, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
                 try expect(found5.count == 1 && inner5.requests.compactMap { $0.url?.host } == ["overpass.private.coffee", "overpass.private.coffee"], "504 retried on the same server: \(inner5.urls)")
                 try expect(clock5.sleeps.first == 5 && clock5.sleeps.reduce(0, +) >= 10, "5 s backoff, then the 10 s per-host fair-use spacing: \(clock5.sleeps)")
+            }),
+            ("Discovery timeout (Water 7:49): the client waits the query's own [timeout:N] plus 10 s, both from one config value", {
+                let shape = config.etiquette.discoveryQuery ?? .standard
+                try expect(config.etiquette.discoveryQuery != nil, "icp.json carries discovery_query")
+                try expect(shape.clientTimeoutMarginSeconds == 10, "margin is 10 s, got \(shape.clientTimeoutMarginSeconds)")
+                let inner = FakeLeadTransport()
+                inner.respond(LeadDiscovery.overpass.absoluteString, body: LeadKit.overpassOneClinic, headers: ["content-type": "application/json"])
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                _ = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
+                let posts = inner.requests.filter { $0.httpMethod == "POST" }
+                try expect(!posts.isEmpty, "an Overpass query was sent")
+                for request in posts {
+                    let body = (request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? "").removingPercentEncoding ?? ""
+                    guard let open = body.range(of: "[timeout:"), let close = body[open.upperBound...].firstIndex(of: "]"),
+                          let limit = Int(body[open.upperBound..<close]) else { throw PortableCheckFailure(description: "no [timeout:N] in \(body)") }
+                    try expect(limit == shape.overpassQueryTimeoutSeconds, "query limit \(limit) comes from config (\(shape.overpassQueryTimeoutSeconds))")
+                    try expect(request.timeoutInterval == Double(limit + 10), "client timeout \(request.timeoutInterval) s must be the query's [timeout:\(limit)] + 10 s")
+                    try expect(request.timeoutInterval > Double(limit), "client gives up after the server's own limit, not at the same moment")
+                }
+            }),
+            ("Discovery retries (Water 7:49): each Overpass host is retried at most 2 times with bounded, jittered, increasing backoff; every attempt audited", {
+                let policy = config.etiquette.discoveryRetry ?? .standard
+                try expect(policy.retriesPerHost == 2 && policy.jitterFraction > 0 && policy.jitterFraction <= 0.5, "config: 2 retries per host with jitter, got \(policy)")
+                let inner = FakeLeadTransport()
+                for server in LeadDiscovery.overpassServers { inner.fail(server.absoluteString, URLError(.timedOut)) }
+                let clock = FakeLeadClock()
+                let audit = MemoryAuditSink()
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: audit, clock: clock)
+                _ = await LeadDiscovery(transport: guarded, jitter: { 0.5 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
+                let hosts = inner.requests.compactMap { $0.url?.host }
+                try expect(hosts.filter { $0 == "overpass.private.coffee" }.count == 3 && hosts.filter { $0 == "overpass-api.de" }.count == 3,
+                           "1 try + 2 retries per host, then give up: \(hosts)")
+                try expect(Array(hosts.prefix(6)) == ["overpass.private.coffee", "overpass.private.coffee", "overpass.private.coffee", "overpass-api.de", "overpass-api.de", "overpass-api.de"], "order \(hosts)")
+                try expect(hosts.dropFirst(6).allSatisfy { $0 == "photon.komoot.io" }, "after both hosts give up, only Photon: \(hosts)")
+                let first = 5 * (1 + policy.jitterFraction * 0.5), second = 10 * (1 + policy.jitterFraction * 0.5)
+                try expect(clock.sleeps == [first, second, first, second], "per-host backoff \(first) s then \(second) s, got \(clock.sleeps)")
+                let fetches = audit.lines.filter { $0.action == "fetch" && ($0.target == "overpass.private.coffee" || $0.target == "overpass-api.de") }
+                try expect(fetches.count == 6 && fetches.allSatisfy { $0.result == "error:network" }, "each attempt audited as a fetch: \(fetches.map(\.text))")
+                let attempts = audit.lines.filter { $0.action == "discovery-attempt" }
+                try expect(attempts.map(\.receipt) == ["attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3", "attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3"],
+                           "each attempt audited with its number: \(attempts.map(\.text))")
+                try expect(attempts.allSatisfy { $0.result == "retryable" }, "attempt results: \(attempts.map(\.result))")
+                for retry in 1...12 {
+                    let high = LeadDiscovery.backoffSeconds(retry: retry, policy: policy, jitter: 1, serverWait: nil)
+                    let low = LeadDiscovery.backoffSeconds(retry: retry, policy: policy, jitter: 0, serverWait: nil)
+                    try expect(low <= high && high <= policy.maxDelaySeconds, "retry \(retry): \(low)...\(high) bounded by \(policy.maxDelaySeconds)")
+                    if retry > 1 { try expect(low >= LeadDiscovery.backoffSeconds(retry: retry - 1, policy: policy, jitter: 0, serverWait: nil), "backoff never shrinks") }
+                }
+            }),
+            ("Discovery tiles (Water 7:49): a 3 km search is split into 1 km cells from config that cover the same circle; hits outside it are dropped", {
+                let shape = config.etiquette.discoveryQuery ?? .standard
+                try expect(shape.tileRadiusMeters > 0 && shape.tileRadiusMeters < 3000, "tile radius from config: \(shape.tileRadiusMeters)")
+                let lat = 45.5017, lon = -73.5673
+                let tiles = LeadDiscovery.tiles(latitude: lat, longitude: lon, radiusMeters: 3000, tileRadiusMeters: shape.tileRadiusMeters)
+                func meters(_ aLat: Double, _ aLon: Double, _ bLat: Double, _ bLon: Double) -> Double {
+                    let r = 6_371_000.0, dLat = (bLat - aLat) * .pi / 180, dLon = (bLon - aLon) * .pi / 180
+                    let h = sin(dLat / 2) * sin(dLat / 2) + cos(aLat * .pi / 180) * cos(bLat * .pi / 180) * sin(dLon / 2) * sin(dLon / 2)
+                    return 2 * r * asin(min(1, sqrt(h)))
+                }
+                try expect(tiles.count > 1, "3 km is split, got \(tiles.count) tile(s)")
+                try expect(tiles.allSatisfy { $0.radiusMeters <= shape.tileRadiusMeters }, "every query covers at most \(shape.tileRadiusMeters) m")
+                try expect(meters(lat, lon, tiles[0].latitude, tiles[0].longitude) < 1, "centre cell first")
+                try expect(tiles.allSatisfy { meters(lat, lon, $0.latitude, $0.longitude) <= 3000 + Double($0.radiusMeters) }, "no cell entirely outside the circle")
+                var uncovered = 0
+                for dy in stride(from: -3000.0, through: 3000, by: 100) {
+                    for dx in stride(from: -3000.0, through: 3000, by: 100) where dx * dx + dy * dy <= 3000 * 3000 {
+                        let pLat = lat + dy / 111_320, pLon = lon + dx / (111_320 * cos(lat * .pi / 180))
+                        if !tiles.contains(where: { meters(pLat, pLon, $0.latitude, $0.longitude) <= Double($0.radiusMeters) + 1 }) { uncovered += 1 }
+                    }
+                }
+                try expect(uncovered == 0, "\(uncovered) sample points of the 3 km circle are in no cell")
+                try expect(LeadDiscovery.tiles(latitude: lat, longitude: lon, radiusMeters: 800, tileRadiusMeters: 1000) == [LeadDiscovery.Tile(latitude: lat, longitude: lon, radiusMeters: 800)],
+                           "a circle no larger than a cell is one query")
+                let near = #"{"type":"node","id":3001,"lat":45.5017,"lon":-73.5673,"tags":{"name":"Clinique Centre Test","healthcare":"clinic","website":"https://www.centre.test"}}"#
+                let far = #"{"type":"node","id":3002,"lat":45.5467,"lon":-73.5673,"tags":{"name":"Clinique Loin Test","healthcare":"clinic","website":"https://www.loin.test"}}"#
+                let inner = FakeLeadTransport()
+                inner.respond(LeadDiscovery.overpass.absoluteString, body: #"{"elements":["# + near + "," + far + "]}", headers: ["content-type": "application/json"])
+                let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock())
+                let found = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: lat, longitude: lon, radiusMeters: 3000, limit: 5)
+                try expect(found.map(\.osmID) == ["osm:node/3001"], "only the hit inside 3 km is kept: \(found.map(\.osmID))")
+                let posts = inner.requests.filter { $0.httpMethod == "POST" }
+                try expect(posts.count == tiles.count, "one Overpass query per cell until the limit: \(posts.count) for \(tiles.count) cells")
+                let bodies = posts.compactMap { $0.httpBody.map { String(decoding: $0, as: UTF8.self).removingPercentEncoding ?? "" } }
+                try expect(bodies.allSatisfy { $0.contains("around:\(shape.tileRadiusMeters),") }, "each query asks for a \(shape.tileRadiusMeters) m cell")
             }),
             ("ICP source scan: no hard-coded segment list in Sources", {
                 let files = (try FileManager.default.contentsOfDirectory(at: LeadKit.sourcesDirectory, includingPropertiesForKeys: nil))

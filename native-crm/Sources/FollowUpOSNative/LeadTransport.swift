@@ -133,7 +133,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
     static let maxRedirects = 3
 
     func fetch(_ url: URL, purpose: FetchPurpose, method: String = "GET", body: Data? = nil,
-               headers: [String: String] = [:], maxBytes: Int? = nil) async throws -> LeadHTTPResponse {
+               headers: [String: String] = [:], maxBytes: Int? = nil, timeout: Double? = nil) async throws -> LeadHTTPResponse {
         var current = url
         var hops = 0
         while true {

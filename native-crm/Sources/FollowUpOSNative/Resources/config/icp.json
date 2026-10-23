@@ -624,9 +624,15 @@
     "linkedin_note": "confirm profile first",
     "bot_challenge": "A Cloudflare or other bot challenge page is a hard fail for that source: no retry, no bypass.",
     "discovery_retry": {
-      "attempts_per_host": 2,
+      "retries_per_host": 2,
       "base_delay_seconds": 5,
-      "max_delay_seconds": 60
+      "max_delay_seconds": 60,
+      "jitter_fraction": 0.25
+    },
+    "discovery_query": {
+      "overpass_query_timeout_seconds": 20,
+      "client_timeout_margin_seconds": 10,
+      "tile_radius_meters": 1000
     }
   },
   "watch_feeds": [
