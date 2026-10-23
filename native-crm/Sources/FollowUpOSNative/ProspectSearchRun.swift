@@ -173,6 +173,7 @@ struct ProspectSearchRun: Sendable {
         record.fetcher = "controlward:\(runID)"
         record.businessDomain = domain
         record.osmTags = candidate.tags
+        record.town = candidate.city
         record.snapshots = pages.map { SiteSnapshot(url: $0.url, fetchedAt: $0.fetchedAt, text: $0.text, links: $0.links) }
         if let page = pages.first(where: { $0.address != nil }) {
             record.address = page.address

@@ -93,20 +93,25 @@ enum LeadDefinition {
         return config.conflictAreas.first { ($0.rbqRequiredSegments ?? []).contains(segment) }
     }
 
-    /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area are held for Martin. RBQ licences hold on
+    /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area (icp.json `municipalities`) are held
+    /// for Martin. RBQ licences hold on
     /// exact sub-category codes from config (one JSON record per licence), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
         let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
+        // Water 9:02 AM ET: map tags, keywords and licence codes all hold only inside the area's municipalities, or when the
+        // firm's town can't be read (fail closed). Outside the area none of them holds.
+        let town = firmTown(prospect)
         return config.conflictAreas.first { area in
-            area.osmSelectors.contains { prospect.osmTags.contains($0) }
+            guard rbqAreaMatch(town, area: area) != .outside else { return false }
+            return area.osmSelectors.contains { prospect.osmTags.contains($0) }
                 || area.keywords.contains { haystack.contains($0.lowercased()) }
-                || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: prospect.rbqMunicipality).isEmpty
+                || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: town).isEmpty
         }
     }
 
     /// The firm's town for the conflict area: the licence's Municipalité, else the map listing's town; nil when neither reads.
     static func firmTown(_ prospect: ProspectRecord) -> String? {
-        prospect.rbqMunicipality
+        [prospect.rbqMunicipality, prospect.town].compactMap { $0 }.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     /// Where a licence sits relative to the area's `municipalities`.

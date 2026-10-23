@@ -353,7 +353,7 @@
   "conflict_areas": [
     {
       "id": "sos-plomberie-excavation-lavoie",
-      "description": "all plumbing, excavation and related trades in Québec",
+      "description": "plumbing, excavation and related trades in the city of Saguenay (its boroughs and merged former towns)",
       "action": "conflict_review",
       "osm_selectors": [
         "craft=plumber",
@@ -379,7 +379,16 @@
       "region": "QC",
       "municipalities": [
         "Saguenay",
-        "Jonquière"
+        "Jonquière",
+        "Chicoutimi",
+        "Chicoutimi-Nord",
+        "La Baie",
+        "Laterrière",
+        "Shipshaw",
+        "Lac-Kénogami",
+        "Canton-Tremblay",
+        "Arvida",
+        "Kénogami"
       ],
       "rbq_subcategory_codes": [
         "15.5",

@@ -573,7 +573,7 @@ enum LeadPipelineTests {
                                "unreadable index holds all: \(out.prospects.map(\.status))")
                 }
             }),
-            ("RBQ area rule (Martin 8:39, Water 8:41): the code hold applies only in Saguenay or Jonquière (whole, normalised Municipalité), or with no location; never a substring", {
+            ("RBQ area rule (Martin 8:39, Water 8:41, list widened 9:02): the code hold applies only in the Saguenay area (whole, normalised Municipalité), or with no location; never a substring", {
                 let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let bundle = RBQFixture.annexeIIIBundle.map { (nil as String?, $0) }
@@ -609,7 +609,8 @@ enum LeadPipelineTests {
                 try expect(LeadDefinition.rbqAreaMatch("Petit-Saguenay", area: area) == .outside && LeadDefinition.rbqAreaMatch(nil, area: area) == .unknown
                            && LeadDefinition.rbqAreaMatch("  ", area: area) == .unknown && LeadDefinition.rbqAreaMatch("jonquière", area: area) == .inside("Jonquière"),
                            "area match classes")
-                try expect(area.municipalities == ["Saguenay", "Jonquière"], "conflict area is Martin's two values: \(String(describing: area.municipalities))")
+                // The full list (Water 9:02 replaces the two values of 8:41) is asserted in the "Conflict area (Water 9:02)" test.
+                try expect(area.municipalities?.prefix(2) == ["Saguenay", "Jonquière"], "conflict area starts with Martin's two values: \(String(describing: area.municipalities))")
                 // Fail closed is unchanged: no index holds every construction firm.
                 let out = try await EarthRBQ.appRun(contents: nil)
                 try expect(out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty, "no index still holds all: \(out.prospects.map(\.status))")

@@ -199,9 +199,7 @@ struct LeadDiscovery: Sendable {
     func overpass(key: String, value: String, tile: Tile, limit: Int, shape: ICPConfig.DiscoveryQuery) async -> OverpassOutcome {
         let query = Self.overpassQuery(key: key, value: value, latitude: tile.latitude, longitude: tile.longitude, radius: tile.radiusMeters,
                                        limit: limit, timeoutSeconds: shape.overpassQueryTimeoutSeconds)
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        let body = Data("data=\(query.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")".utf8)
+        let body = Self.formBody(query)
         let policy = transport.config.etiquette.discoveryRetry ?? .standard
         let attemptsPerHost = 1 + max(policy.retriesPerHost, 0)
         var last = "error:no-answer"
@@ -223,6 +221,13 @@ struct LeadDiscovery: Sendable {
             }
         }
         return .exhausted(last)
+    }
+
+    /// The form body Overpass expects: `data=<percent-encoded query>`.
+    static func formBody(_ query: String) -> Data {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return Data("data=\(query.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")".utf8)
     }
 
     func attempt(_ server: URL, body: Data, via: String, timeout: Double, meter: LeadWaitMeter? = nil) async -> (OverpassAttempt, String) {
@@ -345,10 +350,25 @@ enum OverpassProbe {
 
     /// One small query, one attempt per server (no retries), servers in config order, stopping at the first that answers.
     static func probe(_ discovery: LeadDiscovery, latitude: Double = 45.5017, longitude: Double = -73.5673) async -> [HostResult] {
-        []
+        let shape = discovery.transport.config.etiquette.discoveryQuery ?? .standard
+        let query = LeadDiscovery.overpassQuery(key: "healthcare", value: "clinic", latitude: latitude, longitude: longitude, radius: 1000,
+                                                limit: 1, timeoutSeconds: shape.overpassQueryTimeoutSeconds)
+        let body = LeadDiscovery.formBody(query)
+        var results: [HostResult] = []
+        for server in LeadDiscovery.overpassServers {
+            let meter = LeadWaitMeter()
+            let (_, audited) = await discovery.attempt(server, body: body, via: "probe", timeout: shape.clientTimeoutSeconds, meter: meter)
+            discovery.transport.auditDiscoveryAttempt(server, attempt: 1, of: 1, result: audited, waitMilliseconds: meter.milliseconds)
+            results.append(HostResult(server: server, result: audited, waitMilliseconds: meter.milliseconds))
+            if audited == "ok" { break }
+        }
+        return results
     }
 
-    static func liveRunMayStart(_ results: [HostResult]) -> Bool { false }
+    static func liveRunMayStart(_ results: [HostResult]) -> Bool { results.contains { $0.result == "ok" } }
 
-    static func mayProbe(lastProbe: Date?, now: Date) -> Bool { true }
+    static func mayProbe(lastProbe: Date?, now: Date) -> Bool {
+        guard let lastProbe else { return true }
+        return now.timeIntervalSince(lastProbe) >= minimumIntervalSeconds
+    }
 }

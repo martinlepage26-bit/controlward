@@ -43,6 +43,28 @@ let environment: LeadPipelineEnvironment
 do { environment = try LeadPipelineEnvironment.load(configDirectory: configDirectory, root: root) } catch { fail("refused to start: \(error)") }
 print("Leads folder: \(root.path)")
 
+// --probe-overpass: one small query per Overpass server (config order, one attempt each, stop at the first answer), at most
+// once every 5 minutes per folder (Water 9:02 AM ET). Exit 0 when either server answered, 3 when neither did, 4 when too soon.
+// Use its own folder, not the proof's: it writes its audit lines and the time of the last probe there.
+if CommandLine.arguments.contains("--probe-overpass") {
+    let stamp = root.appendingPathComponent("overpass-probe-last")
+    let last = (try? String(contentsOf: stamp, encoding: .utf8)).flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        .map { Date(timeIntervalSince1970: $0) }
+    let now = Date()
+    guard OverpassProbe.mayProbe(lastProbe: last, now: now) else {
+        print("TOO-SOON: last probe \(Int(now.timeIntervalSince(last ?? now))) s ago; at most one every \(Int(OverpassProbe.minimumIntervalSeconds)) s")
+        exit(4)
+    }
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try? String(now.timeIntervalSince1970).write(to: stamp, atomically: true, encoding: .utf8)
+    let (_, guarded) = environment.makeRun(audit: environment.audit)
+    let results = await OverpassProbe.probe(LeadDiscovery(transport: guarded))
+    for result in results { print("probe \(result.server.host ?? "-") result=\(result.result) wait=\(result.waitMilliseconds.map { "\($0)ms" } ?? "-")") }
+    let go = OverpassProbe.liveRunMayStart(results)
+    print(go ? "EITHER-ANSWERED" : "NO-ANSWER")
+    exit(go ? 0 : 3)
+}
+
 if verifyOnly == nil {
     if !ProspectLeadsStore(fileURL: environment.storeURL).records.isEmpty || FileManager.default.fileExists(atPath: environment.auditURL.path) {
         fail("the leads folder is not empty; the proof needs an empty store at launch (use a new --root)")

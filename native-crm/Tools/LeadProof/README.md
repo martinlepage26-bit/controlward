@@ -14,6 +14,8 @@ local draft. It never sends. Leads stay in ControlWard's own Leads list and are 
     bin/prove-lead-pipeline --segment clinic --limit 5
     bin/prove-lead-pipeline --lat 46.8139 --lon -71.2080 --radius 5000
     bin/prove-lead-pipeline --rbq-refresh           # also fetch the RBQ JSON (fixed link only, at most daily)
+    bin/prove-lead-pipeline --probe-overpass --root <probe folder>   # one small query per Overpass server, at most every 5 min;
+                                                                     # exit 0 when either answers (then run the proof)
 
 The command builds the same sources the app uses, creates a new empty leads folder under the temp directory,
 writes a `launch` audit line with the store count (0), runs the search, ingests into the Leads store, saves drafts to
@@ -67,10 +69,11 @@ another segment, area or a higher `--limit`.
 - RBQ open data (Source: RBQ / Données Québec, CC BY 4.0): only the two fixed download links in icp.json, used for
   discovery and for the conflict hold by licence category. Courriel, phone, Mandataire, address and NEQ are never stored.
   The field names are taken from the published field sheet; confirm them against the first real download.
-  The licence-code hold (15.5; 2.5 under the bundle/1.x rule) applies only where the licence's Municipalité is exactly one
-  of the conflict area's `municipalities` (Saguenay, Jonquière; trimmed, case- and accent-insensitive, never a substring, so
-  Petit-Saguenay is outside), or where no location is readable (held). `bin/prove-rbq-hold` prints the held total split by
-  municipality, no-location and code.
+  The conflict hold (map tags such as `craft=plumber`, name keywords such as "plomberie", and the licence codes 15.5 and
+  2.5 under the bundle/1.x rule) applies only where the firm's town is exactly one of the conflict area's `municipalities`
+  (the city of Saguenay, its boroughs and merged former towns; trimmed, case- and accent-insensitive, never a substring, so
+  Petit-Saguenay is outside), or where no town is readable (held). The town is the licence's Municipalité, else the map
+  listing's `addr:city`. `bin/prove-rbq-hold` prints the held total split by municipality, no-location and code.
 - Refused: LinkedIn, REQ, pes.rbq.gouv.qc.ca, connexence, the psychologues directory, algolia, OMVQ, and the held
   professional-order sites (CMQ, ODQ, OPQ, OPPQ, optométristes, chiropraticiens).
 
