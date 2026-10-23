@@ -45,6 +45,8 @@ enum ProspectIngest {
            let match = existing.first(where: { $0.email.map(MailAddress.bare) == email }) { return match }
         if let phone = record.phone.map(digits), phone.count >= 10,
            let match = existing.first(where: { $0.phone.map(digits) == phone }) { return match }
+        if let domain = ProspectIdentity.normalizedDomain(record.businessDomain),
+           let match = existing.first(where: { ProspectIdentity.normalizedDomain($0.businessDomain) == domain }) { return match }
         return nil
     }
 

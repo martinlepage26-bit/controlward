@@ -152,6 +152,21 @@ enum OutreachDraftGate {
     /// The draft may quote only `observed_facts` / `supporting_evidence` that check out against the stored snapshots,
     /// and only when the assessment does not need manual review. Every URL and quote above the footer must be one of those.
     static func citations(_ draft: OutreachDraft, prospect: ProspectRecord) -> LeadPipelineRefusal? {
+        guard let research = prospect.research, !research.assessment.requiresManualReview,
+              ProspectResearcher.citation(for: prospect) != nil else {
+            return LeadPipelineRefusal(code: "refused:research:manual-review", detail: "no evidence-backed opportunity")
+        }
+        let citable = ProspectResearcher.citable(prospect)
+        let urls = Set(citable.map(\.url))
+        let excerpts = Set(citable.map(\.excerpt))
+        let message = draft.body.components(separatedBy: "\n--\n").first ?? draft.body
+        for url in SiteExtractor.matches(message, "https?://[^\\s)»”\"]+") where !urls.contains(url) {
+            return LeadPipelineRefusal(code: "refused:research:unsupported-claim", detail: url)
+        }
+        for quote in SiteExtractor.matches(message, "«[^»]*»|“[^”]*”") {
+            let inner = quote.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
+            if !excerpts.contains(inner) { return LeadPipelineRefusal(code: "refused:research:unsupported-claim", detail: inner) }
+        }
         return nil
     }
 

@@ -17,6 +17,7 @@ struct ProspectLeadsView: View {
     @State private var drafts: [OutreachDraft] = []
     @State private var summary: String?
     @State private var launchCount: Int?
+    @State private var funnel: LeadFunnel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -34,6 +35,10 @@ struct ProspectLeadsView: View {
                 controls(environment)
                 if let summary { Text(summary).font(.caption).foregroundStyle(.secondary) }
                 if let launchCount { Text("Leads store at launch: \(launchCount)").font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                if let funnel {
+                    Text(funnel.stages.map { "\($0.label): \($0.value)" }.joined(separator: "  →  "))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
                 list(environment)
                 Text("Audit log: \(environment.auditURL.path)").font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
             } else {
@@ -121,6 +126,7 @@ struct ProspectLeadsView: View {
         let inputs = environment.proofInputs()
         records = inputs.prospects
         drafts = inputs.drafts
+        funnel = environment.funnel()
     }
 
     private func search(_ environment: LeadPipelineEnvironment) async {

@@ -83,6 +83,8 @@ let checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, au
 print("")
 print("Earth's live-proof bar (audit: \(environment.auditURL.path))")
 for check in checks { print("  [\(check.passed ? "PASS" : "FAIL")] \(check.number). \(check.name): \(check.detail)") }
+print("")
+print("Funnel: " + environment.funnel().stages.map { "\($0.label) \($0.value)" }.joined(separator: " -> "))
 for record in ProspectIngest.listed(inputs.prospects) + ProspectIngest.heldForMartin(inputs.prospects) {
     print("")
     ProspectDisplay.lines(for: record, config: environment.config).forEach { print("  " + $0) }

@@ -68,12 +68,73 @@ enum ProspectResearcher {
 
     static func research(name: String, pages: [SiteExtractor.Page], segment: ICPConfig.Segment, triggers: [ProspectTrigger],
                          config: ICPConfig) -> ProspectResearch {
-        return ProspectResearch(observedFacts: ObservedFacts(companyName: name), assessment: ResearchAssessment())
+        var facts = ObservedFacts(companyName: name)
+        if let hit = firstLine(in: pages, where: { $0.lowercased().contains(name.lowercased()) }) {
+            facts.evidence["company_name"] = [hit]
+        }
+        for keyword in segment.keywords {
+            if let hit = firstLine(in: pages, where: { $0.lowercased().contains(keyword.lowercased()) }) {
+                facts.serviceCategories.append(keyword)
+                facts.evidence["service_categories", default: []].append(hit)
+            }
+        }
+        for page in pages {
+            for line in lines(page.text) {
+                guard let area = capture(line, areaPattern) else { continue }
+                let cleaned = area.trimmingCharacters(in: CharacterSet(charactersIn: " .;:"))
+                guard !cleaned.isEmpty, !facts.serviceAreas.contains(cleaned) else { continue }
+                facts.serviceAreas.append(cleaned)
+                facts.evidence["service_areas", default: []].append(FactEvidence(url: page.url, excerpt: clip(line)))
+            }
+        }
+        for (code, words) in [("fr", frenchWords), ("en", englishWords)] {
+            if let hit = firstLine(in: pages, where: { languageScore($0, words) >= 2 }) {
+                facts.languagesSeen.append(code)
+                facts.evidence["languages_seen", default: []].append(hit)
+            }
+        }
+        if let page = pages.first(where: { page in
+            let path = (URL(string: page.url)?.path ?? "").lowercased()
+            return contactPathWords.contains { path.contains($0) } && !page.text.isEmpty
+        }), let first = lines(page.text).first {
+            facts.contactPageURL = page.url
+            facts.evidence["contact_page_url"] = [FactEvidence(url: page.url, excerpt: clip(first))]
+        }
+        for page in pages {
+            guard facts.bookingURL == nil else { break }
+            if let link = page.links.first(where: { link in bookingWords.contains { link.lowercased().contains($0) } && !link.lowercased().hasPrefix("mailto:") }) {
+                facts.bookingURL = link
+                let line = lines(page.text).first { line in bookingWords.contains { line.lowercased().contains($0) } }
+                facts.evidence["booking_url"] = [FactEvidence(url: page.url, excerpt: line.map(clip) ?? link)]
+            }
+        }
+
+        var assessment = ResearchAssessment()
+        for trigger in triggers {
+            guard let page = pages.first(where: { $0.url == trigger.url }) else { continue }
+            let phrases = config.triggerSignals[trigger.kind] ?? []
+            if let line = lines(page.text).first(where: { line in phrases.contains { line.lowercased().contains($0.lowercased()) } }) {
+                assessment.supportingEvidence.append(FactEvidence(url: page.url, excerpt: clip(line)))
+            }
+        }
+        if let first = triggers.first, !assessment.supportingEvidence.isEmpty {
+            assessment.potentialOffer = "\(segment.label): AI-use guardrails review (signal: \(first.kind))"
+        }
+        if facts.evidence["company_name"] == nil { assessment.unknowns.append("company name not seen on the site") }
+        if facts.serviceCategories.isEmpty { assessment.unknowns.append("service categories") }
+        if facts.serviceAreas.isEmpty { assessment.unknowns.append("service areas") }
+        if facts.languagesSeen.isEmpty { assessment.unknowns.append("site language") }
+        if facts.contactPageURL == nil { assessment.unknowns.append("contact page") }
+        if facts.bookingURL == nil { assessment.unknowns.append("booking URL") }
+        if assessment.potentialOffer == nil { assessment.unknowns.append("no on-site signal for an offer") }
+        assessment.requiresManualReview = assessment.potentialOffer == nil || assessment.supportingEvidence.isEmpty
+        return ProspectResearch(observedFacts: facts, assessment: assessment)
     }
 
     /// True when the evidence page is one of the stored snapshots and the excerpt is verbatim in it (text or links).
     static func isEvidenced(_ evidence: FactEvidence, in snapshots: [SiteSnapshot]) -> Bool {
-        return true
+        guard !evidence.excerpt.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        return snapshots.contains { $0.url == evidence.url && ($0.text.contains(evidence.excerpt) || ($0.links ?? []).contains(evidence.excerpt)) }
     }
 
     /// Everything a draft is allowed to quote: evidenced observed facts and evidenced supporting evidence.
@@ -123,7 +184,11 @@ enum ProspectResearcher {
 /// Place id + normalized domain dedupe, and the closed-business filter.
 enum ProspectIdentity {
     static func normalizedDomain(_ domain: String?) -> String? {
-        return domain
+        guard var host = domain?.trimmingCharacters(in: .whitespaces).lowercased(), !host.isEmpty else { return nil }
+        if let parsed = URL(string: host.contains("://") ? host : "https://\(host)")?.host?.lowercased() { host = parsed }
+        while host.hasSuffix(".") { host.removeLast() }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return HostMatch.registrable(host)
     }
 
     /// OSM lifecycle prefixes and tags that mean the place no longer operates.
@@ -133,11 +198,14 @@ enum ProspectIdentity {
     static let closedSitePattern = "(?i)\\b(d[ée]finitivement ferm[ée]e?s?|ferm[ée]e?s? d[ée]finitivement|fermeture d[ée]finitive|permanently closed|closed permanently|nous avons ferm[ée] nos portes|we have closed our doors)\\b"
 
     static func isClosed(tags: [String: String], name: String) -> Bool {
-        return false
+        if tags.keys.contains(where: { key in closedTagPrefixes.contains { key.hasPrefix($0) } }) { return true }
+        if tags.contains(where: { closedTags.contains("\($0.key)=\($0.value.lowercased())") }) { return true }
+        if let end = tags["end_date"], !end.isEmpty { return true }
+        return name.range(of: closedNamePattern, options: .regularExpression) != nil
     }
 
     static func siteSaysClosed(_ pages: [SiteExtractor.Page]) -> Bool {
-        false
+        pages.contains { $0.text.range(of: closedSitePattern, options: .regularExpression) != nil }
     }
 }
 
@@ -154,16 +222,24 @@ struct LeadFunnel: Codable, Equatable, Sendable {
 
     /// A named person from the own site (LEAD_DEF) and a route from the own site.
     static func hasAppropriateContact(_ record: ProspectRecord, config: ICPConfig, now: Date) -> Bool {
-        return record.route != nil
+        guard record.route?.source == .ownSite else { return false }
+        return !LeadDefinition.evaluate(record, config: config, now: now).reasons.contains("no named person")
     }
 
     static func isEvidenceBacked(_ record: ProspectRecord) -> Bool {
-        return record.trigger != nil
+        guard let research = record.research, !research.assessment.requiresManualReview, research.assessment.potentialOffer != nil else { return false }
+        return !research.assessment.supportingEvidence.isEmpty
+            && research.assessment.supportingEvidence.allSatisfy { ProspectResearcher.isEvidenced($0, in: record.snapshots) }
     }
 
     static func compute(places: [DiscoveredPlace], records: [ProspectRecord], config: ICPConfig, now: Date) -> LeadFunnel {
         var funnel = LeadFunnel()
-        funnel.discovered = places.count + records.count; funnel.withUsableWebsite = records.count; funnel.appropriateContact = records.count; funnel.evidenceBackedOpportunity = records.count
+        let open = places.filter { !$0.closed }
+        funnel.discovered = open.count
+        funnel.withUsableWebsite = open.filter(\.usableWebsite).count
+        let live = records.filter { $0.status != .drop && !$0.isTest }
+        funnel.appropriateContact = live.filter { hasAppropriateContact($0, config: config, now: now) }.count
+        funnel.evidenceBackedOpportunity = live.filter { hasAppropriateContact($0, config: config, now: now) && isEvidenceBacked($0) }.count
         return funnel
     }
 }
@@ -181,6 +257,13 @@ struct DiscoveredPlace: Codable, Equatable, Sendable {
     static func merge(_ incoming: [DiscoveredPlace], into existing: [DiscoveredPlace]) -> [DiscoveredPlace] {
         var out = existing
         for place in incoming {
+            let domain = ProspectIdentity.normalizedDomain(place.domain)
+            if let index = out.firstIndex(where: { $0.placeID == place.placeID || (domain != nil && ProspectIdentity.normalizedDomain($0.domain) == domain) }) {
+                out[index].usableWebsite = out[index].usableWebsite || place.usableWebsite
+                out[index].closed = out[index].closed || place.closed
+                if out[index].domain == nil { out[index].domain = domain }
+                continue
+            }
             out.append(DiscoveredPlace(placeID: place.placeID, domain: ProspectIdentity.normalizedDomain(place.domain), usableWebsite: place.usableWebsite, closed: place.closed))
         }
         return out

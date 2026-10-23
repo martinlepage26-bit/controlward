@@ -50,3 +50,14 @@ another segment, area or a higher `--limit`.
   The field names are taken from the published field sheet; confirm them against the first real download.
 - Refused: LinkedIn, REQ, pes.rbq.gouv.qc.ca, connexence, the psychologues directory, algolia, OMVQ, and the held
   professional-order sites (CMQ, ODQ, OPQ, OPPQ, optométristes, chiropraticiens).
+
+## Research objects and the funnel
+
+Each prospect stores its own-site research as two objects:
+
+- `observed_facts`: company name, service categories, service areas, languages seen (`fr`/`en`), contact page URL, booking URL (or `null`), and an `evidence` map of `{url, excerpt}` per fact.
+- `assessment`: potential offer, `supporting_evidence` (`{url, excerpt}`), unknowns, `requires_manual_review`.
+
+A draft quotes only an excerpt that is verbatim in a stored snapshot. Any other quote or URL above the footer is refused (`refused:research:unsupported-claim`), and a prospect that needs manual review gets no draft (`refused:research:manual-review`).
+
+Discovery dedupes by place id and normalized domain and drops closed places (OSM lifecycle tags such as `disused:*` / `was:*`, `opening_hours=closed`, `end_date`, a "(fermé)" name, or an own-site closure notice). The Overview and the Leads sheet show the funnel from local files only: businesses discovered → with a usable website → appropriate contact found → evidence-backed opportunity. Everything runs on the Mac; no hosted APIs or data providers.
