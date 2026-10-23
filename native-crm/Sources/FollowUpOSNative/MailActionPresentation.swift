@@ -103,7 +103,6 @@ enum MailPlatformConsistency {
 /// Nothing here can load a URL: links keep their visible text only and images are dropped.
 enum MailBodyText {
     static func plain(fromSanitizedHTML html: String) -> String {
-        if true { return html }  // RED STUB: no plain-text conversion yet
         var text = html
         let breaks = ["<br>", "<br/>", "<br />", "</p>", "</div>", "</li>", "</tr>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>", "</blockquote>", "</pre>", "</table>"]
         for tag in breaks { text = text.replacingOccurrences(of: tag, with: "\n" + tag, options: .caseInsensitive) }

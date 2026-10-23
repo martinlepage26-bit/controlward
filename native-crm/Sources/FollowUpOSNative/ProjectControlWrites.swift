@@ -62,7 +62,6 @@ enum ProjectCaptureRules {
 
     /// Returns the refusal code for a capture, or nil when it may be sent.
     static func refusal(snapshot: ProjectModuleSnapshot, item: ProjectCapture, expectedRegister: String?) -> String? {
-        if true { return nil }  // RED STUB: no prechecks yet
         guard snapshot.connected else { return "refused:register-disconnected" }
         if let expectedRegister, expectedRegister != snapshot.register { return "refused:register-changed" }
         guard supportedSources.contains(item.source) else { return "refused:unsupported-source" }

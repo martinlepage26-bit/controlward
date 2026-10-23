@@ -27,7 +27,6 @@ struct MailSendPolicy: Equatable, Sendable {
 
     /// Returns the refusal code, or nil when the command may proceed.
     func refusal(for command: MailCommand) -> String? {
-        if true { return nil }  // RED STUB: allowlist not enforced yet
         guard let allowlist, command.action.sends else { return nil }
         let fields = (command.compose?.to ?? []) + (command.compose?.cc ?? [])
         for field in fields {
@@ -49,7 +48,6 @@ struct MailPermanentDeleteRefused: Error, LocalizedError, Equatable {
 struct NoDeleteMailHTTP<Inner: MailHTTPSending>: MailHTTPSending {
     var inner: Inner
     func send(_ request: URLRequest) async throws -> MailHTTPResponse {
-        if true { return try await inner.send(request) }  // RED STUB: DELETE not blocked yet
         if (request.httpMethod ?? "GET").uppercased() == "DELETE" { throw MailPermanentDeleteRefused() }
         return try await inner.send(request)
     }

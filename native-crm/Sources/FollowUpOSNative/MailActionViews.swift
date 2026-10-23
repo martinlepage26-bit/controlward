@@ -21,10 +21,11 @@ enum LiveMailSession {
                 let engine = MailIntakeEngine(config: try intake.config(), tokens: intake.tokens, transport: intake.transport)
                 let token = try await engine.accessToken(for: owner)
                 let transport = intake.transport
-                let http = ClosureMailHTTP { request in
+                // Every mailbox request goes through NoDeleteMailHTTP: a DELETE never reaches the network.
+                let http = NoDeleteMailHTTP(inner: ClosureMailHTTP { request in
                     let response = try await transport.send(request)
                     return MailHTTPResponse(status: response.status, body: response.body)
-                }
+                })
                 let scopes = await GmailMailboxClient(token: token, from: owner, http: http).grantedScopes()
                 return GmailMailboxConnector(providerID: provider, accountID: owner, scopes: scopes, token: token, from: owner, http: http)
             } catch {
@@ -43,36 +44,45 @@ final class MailActionModel: ObservableObject {
     @Published var loading = false
     private var connector: (any MailboxConnecting)?
 
-    func load(message: MailMetadata, intake: MailIntakeController) async {
+    /// Test mode (S1-R2): set CONTROLWARD_MAIL_TEST_ALLOWLIST to the allowlisted addresses before a live check.
+    private let policy = MailSendPolicy.fromEnvironment()
+
+    func load(message: MailMetadata, intake: MailIntakeController, store: AppStore) async {
         loading = true
         status = nil
         body = nil
         let connector = await LiveMailSession.connector(for: message, intake: intake)
         self.connector = connector
         support = connector.supports()
-        do {
-            body = try await connector.fetchBody(sourceID: message.sourceID)
-        } catch {
-            status = error.localizedDescription
-        }
+        let sink = MemoryAuditSink()
+        let read = await MailActionRunner(connector: connector, sink: sink, policy: policy).read(sourceID: message.sourceID)
+        body = read.body
+        if let failure = read.failure { status = failure }
+        store.recordAudit(sink.lines)
         loading = false
     }
 
-    /// Runs a command the user already confirmed when the action requires it.
-    /// Returns an error string and leaves the mailbox unchanged when the connector refuses.
+    /// Runs a command the user already confirmed when the action requires it. Writes one CW-AUDIT line.
+    /// Returns an error string and leaves the mailbox unchanged when the policy, gate or connector refuses.
     func perform(_ command: MailCommand, store: AppStore, localID: UUID) async -> String? {
         guard let connector else { return "No mailbox connector is available for this message." }
-        do {
-            _ = try await connector.perform(command)
-            support = connector.supports()
-            let outcome = MailActionOutcomes.afterRemoteSuccess(command.action) { try store.forgetMailMetadata(id: localID) }
-            status = outcome.status
-            return outcome.failure
-        } catch {
-            let message = error.localizedDescription
-            status = message
-            return message
+        let sink = MemoryAuditSink()
+        let runner = MailActionRunner(connector: connector, sink: sink, policy: policy)
+        let result: MailRunResult
+        switch await runner.performRemote(command) {
+        case .finished(let refused):
+            result = refused
+        case .accepted(let receipt):
+            var localError: Error?
+            if command.action == .trash {
+                do { try store.forgetMailMetadata(id: localID) } catch { localError = error }
+            }
+            result = runner.finish(command, receipt: receipt, localError: localError)
         }
+        store.recordAudit(sink.lines)
+        support = connector.supports()
+        status = result.status
+        return result.failure
     }
 }
 
@@ -89,16 +99,17 @@ struct MailActionBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(support) { item in
-                    Button(item.action.title) { run(item.action) }
+                // Help, caption and gate share one reason string (MailActionDisplay, S4-R1).
+                ForEach(MailActionDisplay.buttons(support)) { item in
+                    Button(item.title) { run(item.action) }
                         .disabled(!item.enabled)
-                        .help(item.enabled ? item.action.help : item.reason)
-                        .accessibilityHint(item.enabled ? item.action.help : item.reason)
+                        .help(item.help)
+                        .accessibilityHint(item.help)
                 }
             }
-            let disabled = support.filter { !$0.enabled && !$0.reason.isEmpty }
-            if !disabled.isEmpty {
-                Text(disabled.map { "\($0.action.title): \($0.reason)" }.joined(separator: "\n"))
+            let caption = MailActionDisplay.caption(support)
+            if !caption.isEmpty {
+                Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -224,7 +235,8 @@ struct MailHTMLView: NSViewRepresentable {
         text.isEditable = false
         text.isSelectable = true
         text.drawsBackground = false
-        text.isRichText = true
+        text.isRichText = false
+        text.isAutomaticLinkDetectionEnabled = false
         text.importsGraphics = false
         text.textContainerInset = NSSize(width: 0, height: 2)
         text.isVerticallyResizable = true
@@ -250,17 +262,12 @@ struct MailHTMLView: NSViewRepresentable {
         return CGSize(width: width, height: height)
     }
 
+    /// Plain text from the sanitized body (S1-R7). No HTML importer runs, so no URL can be resolved or fetched.
     private static func attributed(_ html: String) -> NSAttributedString {
-        let data = Data(html.utf8)
-        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-            .documentType: NSAttributedString.DocumentType.html,
-            .characterEncoding: NSNumber(value: String.Encoding.utf8.rawValue),
-            .timeout: NSNumber(value: 1),
-        ]
-        if let parsed = try? NSAttributedString(data: data, options: options, documentAttributes: nil) {
-            return parsed
-        }
-        return NSAttributedString(string: MailHTMLSanitizer.visibleText(html))
+        NSAttributedString(string: MailBodyText.plain(fromSanitizedHTML: html), attributes: [
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .foregroundColor: NSColor.labelColor,
+        ])
     }
 }
 

@@ -57,6 +57,15 @@ extension AppStore {
         }
     }
 
+    /// Writes CW-AUDIT v1 lines (mail actions, Project Control writes) into local Activity, newest first.
+    /// The lines carry ids and result codes only, never subjects, senders, bodies or tokens.
+    func recordAudit(_ lines: [CWAuditLine]) {
+        guard !lines.isEmpty else { return }
+        try? commitWorkspace { next in
+            for line in lines { next.activity.insert(ActivityEvent(kind: "cw_audit", message: line.text), at: 0) }
+        }
+    }
+
     func linkProject(recordKey: String, register: String, projectID: String, title: String) throws {
         guard allWorkspaceRecords.contains(where: { $0.id == recordKey }),
               !projectID.isEmpty, projectID.count <= 80,
