@@ -39,15 +39,23 @@ enum ProspectIngest {
     }
 
     /// Dedupe key order is source id, then email, then phone (the existing lead rule).
+    /// LIVE-R6: an email, phone or domain match only merges records of the same organisation, so two prospects on
+    /// different own domains that share a line (a switchboard, a provincial number) never merge into one id.
     static func duplicate(of record: ProspectRecord, in existing: [ProspectRecord]) -> ProspectRecord? {
         if let match = existing.first(where: { $0.id == record.id }) { return match }
+        let candidates = existing.filter { sameOwnDomain($0, record) }
         if let email = record.email.map(MailAddress.bare), !email.isEmpty,
-           let match = existing.first(where: { $0.email.map(MailAddress.bare) == email }) { return match }
+           let match = candidates.first(where: { $0.email.map(MailAddress.bare) == email }) { return match }
         if let phone = record.phone.map(digits), phone.count >= 10,
-           let match = existing.first(where: { $0.phone.map(digits) == phone }) { return match }
+           let match = candidates.first(where: { $0.phone.map(digits) == phone }) { return match }
         if let domain = ProspectIdentity.normalizedDomain(record.businessDomain),
            let match = existing.first(where: { ProspectIdentity.normalizedDomain($0.businessDomain) == domain }) { return match }
         return nil
+    }
+
+    static func sameOwnDomain(_ a: ProspectRecord, _ b: ProspectRecord) -> Bool {
+        guard let left = ProspectIdentity.normalizedDomain(a.businessDomain), let right = ProspectIdentity.normalizedDomain(b.businessDomain) else { return true }
+        return left == right
     }
 
     static func digits(_ text: String) -> String {
@@ -64,6 +72,13 @@ enum ProspectIngest {
         for var record in incoming {
             let missing = LeadDefinition.sourceEvidence(record)
             if !missing.isEmpty { result.rejected[record.id] = missing.joined(separator: ", "); continue }
+            // LIVE-R6: a record with an evidence URL off its own domain is refused outright and audited.
+            if let offending = EvidenceDomain.offDomain(record, config: config).first {
+                result.rejected[record.id] = "refused:cross-domain-evidence"
+                audit.write(CWAuditLine(ts: now, surface: "leads", action: "ingest", register: URLCanonical.register(offending), target: record.id,
+                                        source: "controlward", result: "refused:cross-domain-evidence"))
+                continue
+            }
             let verdict = LeadDefinition.evaluate(record, config: config, now: now)
             record.status = verdict.status
             record.reasons = verdict.reasons

@@ -24,7 +24,14 @@ struct ProspectSearchRun: Sendable {
         var skipped: [String: String] = [:]
         /// Every place discovery returned (place id + normalized domain only), for the Overview funnel.
         var discovered: [DiscoveredPlace] = []
+        /// LIVE-R8: the widest radius discovery used (the request's radius unless a top-up widened it).
+        var radiusUsed = 0
+        /// LIVE-R8: set when the sector still has fewer candidates than its share after every top-up.
+        var underFillReason: String?
     }
+
+    /// LIVE-R8 (Water 14:06): an under-filled sector is topped up from the same discovery sources at these radius multiples.
+    static let topUpFactors = [2, 4]
 
     let config: ICPConfig
     let transport: GuardedLeadTransport
@@ -44,9 +51,36 @@ struct ProspectSearchRun: Sendable {
                                     result: "refused:unknown-segment", receipt: runID))
             return report
         }
-        let (candidates, outcomes) = await LeadDiscovery(transport: transport).searchWithOutcomes(
+        let discovery = LeadDiscovery(transport: transport)
+        var (candidates, outcomes) = await discovery.searchWithOutcomes(
             selectors: segment.osmSelectors, latitude: request.latitude, longitude: request.longitude,
             radiusMeters: request.radiusMeters, limit: request.limit)
+        report.radiusUsed = request.radiusMeters
+        // LIVE-R8: top up an under-filled sector from the same sources (Overpass, Photon fallback) at a wider radius.
+        // Only Overpass takes a radius, so a top-up happens only while an Overpass server is answering.
+        func overpassAnswered(_ outcomes: [LeadDiscovery.SelectorOutcome]) -> Bool {
+            outcomes.contains { $0.result == "ok" && $0.provider != nil && $0.provider?.host != LeadDiscovery.photon.host }
+        }
+        var overpassUp = overpassAnswered(outcomes)
+        for factor in Self.topUpFactors where candidates.count < request.limit && overpassUp {
+            let radius = min(request.radiusMeters * factor, 50_000)
+            guard radius > report.radiusUsed else { break }
+            let (more, moreOutcomes) = await discovery.searchWithOutcomes(
+                selectors: segment.osmSelectors, latitude: request.latitude, longitude: request.longitude, radiusMeters: radius, limit: request.limit)
+            outcomes += moreOutcomes
+            overpassUp = overpassAnswered(moreOutcomes)
+            for candidate in more where candidates.count < request.limit && !candidates.contains(where: { $0.osmID == candidate.osmID }) {
+                candidates.append(candidate)
+            }
+            report.radiusUsed = radius
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search-topup", register: "-", target: segment.id, source: "controlward",
+                                    result: "ok", receipt: "\(runID)-r\(radius)-candidates-\(candidates.count)"))
+        }
+        if candidates.count < request.limit {
+            report.underFillReason = report.radiusUsed > request.radiusMeters || overpassUp
+                ? "under-filled after top-up to r=\(report.radiusUsed) m"
+                : "under-filled at r=\(report.radiusUsed) m: no Overpass server answered, so no top-up was possible"
+        }
         // One search line per selector naming the provider that actually answered (Earth 8:19); no provider means an error result.
         for outcome in outcomes {
             audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search", register: outcome.provider.map { CWAuditLine.register(for: $0) } ?? "-",
@@ -91,8 +125,15 @@ struct ProspectSearchRun: Sendable {
                 skip(candidate, "closed business (own site)")
                 continue
             }
-            place.usableWebsite = true
             var record = Self.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: runID)
+            // LIVE-R6: hard fail on any evidence URL off this candidate's own domain; the record is never scored or drafted.
+            if let offending = EvidenceDomain.offDomain(record, config: config).first {
+                audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "score", register: URLCanonical.register(offending), target: record.id,
+                                        source: "controlward", result: "refused:cross-domain-evidence", receipt: runID))
+                skip(candidate, "cross-domain evidence")
+                continue
+            }
+            place.usableWebsite = true
             if let rbqFailure {
                 record.rbqCheck = "error:\(rbqFailure)"
             } else if let source = RBQOpenData.source(config), let rbq {
@@ -105,18 +146,18 @@ struct ProspectSearchRun: Sendable {
             record.status = verdict.status
             record.reasons = verdict.reasons
             record.risk = LeadDefinition.riskLine(record)
-            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "score", register: record.sourceURL ?? "-", target: record.id,
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "score", register: URLCanonical.register(record.sourceURL), target: record.id,
                                     source: "controlward", result: "ok",
                                     receipt: "\(record.status.rawValue)@\(record.fetchedAt.map(CWAuditLine.timestamp) ?? "-")"))
             if record.status == .ready {
                 let draft = OutreachDraftBuilder.build(for: record, config: config, language: request.language, messageID: "cw-draft-\(runID)-\(report.drafts.count + 1)")
                 if let refusal = OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: clock.now) {
                     report.refusals[record.id] = refusal.code
-                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: record.sourceURL ?? "-", target: record.id,
+                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: URLCanonical.register(record.sourceURL), target: record.id,
                                             source: "controlward", result: refusal.code))
                 } else {
                     report.drafts.append(draft)
-                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: record.sourceURL ?? "-", target: record.id,
+                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: URLCanonical.register(record.sourceURL), target: record.id,
                                             source: "controlward", result: "ok", receipt: draft.messageID))
                 }
             }
@@ -143,10 +184,69 @@ struct ProspectSearchRun: Sendable {
         return components.url
     }
 
+    /// Page kinds the configured own-site paths stand for, with the French and English words a site's own links use.
+    /// Order is the crawl priority: people first (team, contact), then trigger pages, then the rest.
+    static let pageKinds: [(kind: String, words: [String])] = [
+        ("team", ["equipe", "team", "direction", "leadership", "personnel", "staff", "people"]),
+        ("contact", ["nous-joindre", "joindre", "contact"]),
+        ("news", ["salle-de-presse", "nouvelles", "newsroom", "news", "press", "medias"]),
+        ("careers", ["carrieres", "carriere", "emplois", "emploi", "careers", "career", "jobs"]),
+        ("about", ["a-propos", "apropos", "about"]),
+        ("quote", ["soumission", "quote"]),
+        ("privacy", ["politique-de-confidentialite", "confidentialite", "privacy"])
+    ]
+
+    static func pageKind(ofPath path: String) -> String? {
+        let segments = path.lowercased().folding(options: .diacriticInsensitive, locale: nil).split(separator: "/").map(String.init)
+        for (kind, words) in pageKinds where segments.contains(where: { segment in words.contains { segment.contains($0) } }) { return kind }
+        return nil
+    }
+
+    /// Live-proof cause 1 (Water 10:13): the crawl used to guess the segment's slugs in config order and stop at the page budget,
+    /// so a site whose team or contact page lives at another path (e.g. /en/contact-us, /why-us/our-team) yielded no person.
+    /// After the home page, it now takes, per page kind the segment asks for, the shortest same-site link the home page itself
+    /// shows; configured slugs fill only the kinds no link covered. The page budget is unchanged.
+    static func crawlPlan(root: URL, home: SiteExtractor.Page?, segment: ICPConfig.Segment, budget: Int) -> [URL] {
+        let wanted = segment.ownSitePaths.compactMap(pageKind(ofPath:))
+        let kinds = pageKinds.map(\.kind).filter { wanted.contains($0) }
+        let homeURL = home.flatMap { URL(string: $0.url) } ?? root
+        let host = (homeURL.host ?? root.host ?? "").lowercased()
+        var linked: [String: URL] = [:]
+        for link in home?.links ?? [] {
+            guard let url = URL(string: link, relativeTo: homeURL)?.absoluteURL, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  url.host?.lowercased() == host, url.path.count > 1, let kind = pageKind(ofPath: url.path), kinds.contains(kind) else { continue }
+            var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            parts?.query = nil
+            parts?.fragment = nil
+            guard let clean = parts?.url else { continue }
+            if let current = linked[kind], (current.path.split(separator: "/").count, current.path.count) <= (clean.path.split(separator: "/").count, clean.path.count) { continue }
+            linked[kind] = clean
+        }
+        var plan: [URL] = kinds.compactMap { linked[$0] }
+        for path in segment.ownSitePaths where path != "/" {
+            guard let url = URL(string: path, relativeTo: root)?.absoluteURL else { continue }
+            if let kind = pageKind(ofPath: path), linked[kind] != nil { continue }
+            plan.append(url)
+        }
+        var seen = Set<String>([homeURL.absoluteString, root.absoluteString])
+        plan = plan.filter { seen.insert($0.absoluteString).inserted }
+        return Array(plan.prefix(max(budget - 1, 0)))
+    }
+
     func fetchSite(_ root: URL, domain: String, segment: ICPConfig.Segment) async -> [SiteExtractor.Page] {
         var pages: [SiteExtractor.Page] = []
-        for path in segment.ownSitePaths.prefix(config.etiquette.maxPagesPerSite) {
-            guard let url = URL(string: path, relativeTo: root)?.absoluteURL else { continue }
+        let budget = config.etiquette.maxPagesPerSite
+        let first = segment.ownSitePaths.first.flatMap { URL(string: $0, relativeTo: root)?.absoluteURL } ?? root
+        var queue: [URL] = [first]
+        var planned = false
+        while !queue.isEmpty {
+            let url = queue.removeFirst()
+            defer {
+                if !planned {
+                    planned = true
+                    queue = Self.crawlPlan(root: root, home: pages.first, segment: segment, budget: budget)
+                }
+            }
             do {
                 let response = try await transport.fetch(url, purpose: .ownSite(domain: domain))
                 guard (200..<300).contains(response.status) else { continue }
@@ -157,7 +257,8 @@ struct ProspectSearchRun: Sendable {
                                             + page.text.components(separatedBy: "\n").filter { $0.count >= 12 })
                 pages.append(page)
             } catch let refusal as LeadPipelineRefusal where refusal.code == "refused:bot-challenge" {
-                break
+                planned = true
+                queue = []
             } catch {
                 continue
             }

@@ -24,6 +24,8 @@ enum LeadDefinition {
         if let reason = namedPerson(prospect, segment: segment, config: config) { reasons.append(reason) }
         reasons += recordFields(prospect)
         reasons += triggerFreshness(prospect.trigger, segment: segment, config: config, now: now)
+        // LIVE-R5 (Earth 14:05): Ready requires a recorded consent basis (S3-R6); without one the record stays Fix.
+        if prospect.consent == nil { reasons.append("no consent basis recorded") }
         if prospect.openTenderURL != nil { reasons.append("open tender") }
         return Verdict(status: reasons.isEmpty ? .ready : .fix, reasons: reasons)
     }
@@ -174,6 +176,8 @@ enum LeadDefinition {
         }
         if prospect.contact?.titleSource == .searchOnly { return "Title seen only in search: confirm on the page before writing." }
         if prospect.consent == nil { return "No consent basis recorded: no draft." }
+        // Earth 12:19: only a trigger with a fetch time is a dated trigger; without one there is nothing to write about.
+        if prospect.trigger?.url == nil || prospect.trigger?.fetchedAt == nil { return "No trigger on the own site with a fetch time: no draft." }
         return "Low: own-site evidence, dated trigger."
     }
 }
@@ -206,3 +210,32 @@ enum AddressProvenance {
         return HostMatch.belongs(host, to: domain) && prospect.snapshots.contains { $0.url == url }
     }
 }
+
+/// LIVE-R6 (Earth 14:05): every evidence URL on a record is on that record's own site domain. Hosts of the enabled
+/// open-data registries and watch feeds in the allowlist are exempt (a public registry tied to the same organisation).
+/// A violation is a hard fail: ingest and the search run refuse the record, and proof check 6 fails.
+enum EvidenceDomain {
+    static func urls(_ record: ProspectRecord) -> [String] {
+        var out = [record.sourceURL, record.addressSourceURL, record.contact?.sourceURL, record.route?.sourceURL, record.trigger?.url].compactMap { $0 }
+        out += record.snapshots.map(\.url)
+        if case .conspicuousPublication(let url)? = record.consent { out.append(url) }
+        if let research = record.research {
+            out += research.observedFacts.evidence.keys.sorted().flatMap { research.observedFacts.evidence[$0]?.map(\.url) ?? [] }
+            out += research.assessment.supportingEvidence.map(\.url)
+        }
+        return out.filter { !$0.isEmpty }
+    }
+
+    /// The off-domain evidence URLs on a record. A record without an own domain has no evidence that can be checked,
+    /// so every URL it carries counts as off-domain.
+    static func offDomain(_ record: ProspectRecord, config: ICPConfig) -> [String] {
+        let exempt = Set((config.allowlist.openDataSources.filter(\.enabled).map(\.host) + config.allowlist.watchHosts).map { $0.lowercased() })
+        return urls(record).filter { url in
+            guard let host = URL(string: url)?.host?.lowercased() else { return true }
+            if exempt.contains(host) { return false }
+            guard let domain = record.businessDomain, !domain.isEmpty else { return true }
+            return !HostMatch.belongs(host, to: domain)
+        }
+    }
+}
+

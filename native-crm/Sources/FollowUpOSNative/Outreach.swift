@@ -66,12 +66,42 @@ final class SuppressionList: @unchecked Sendable {
     }
 }
 
+/// Stored dates keep milliseconds (Water 10:13, live-proof cause 2): the CW-AUDIT log stamps fetches to the millisecond, so a
+/// second-precision prospects.json could never match its own fetch and score lines. Files written before this still read.
+enum ISODates {
+    static func formatter(fractional: Bool) -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = fractional ? [.withInternetDateTime, .withFractionalSeconds] : [.withInternetDateTime]
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }
+    static func string(_ date: Date) -> String { formatter(fractional: true).string(from: date) }
+    static func date(_ text: String) -> Date? { formatter(fractional: true).date(from: text) ?? formatter(fractional: false).date(from: text) }
+}
+
 extension JSONDecoder {
-    static var iso: JSONDecoder { let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601; return decoder }
+    static var iso: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let text = try container.decode(String.self)
+            guard let date = ISODates.date(text) else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected an ISO 8601 date, got \(text)")
+            }
+            return date
+        }
+        return decoder
+    }
 }
 extension JSONEncoder {
     static var iso: JSONEncoder {
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]; return encoder
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(ISODates.string(date))
+        }
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
     }
 }
 

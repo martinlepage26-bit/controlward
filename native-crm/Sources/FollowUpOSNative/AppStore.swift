@@ -17,6 +17,8 @@ enum WorkspaceRecoveryState: Equatable {
 final class AppStore: ObservableObject {
     @Published private(set) var workspace: PersistentWorkspace
     @Published var notice: String?
+    /// The last CSV import's result; stays until Martin closes it (CSV-5).
+    @Published var lastCSVImport: CSVImportResult?
     @Published private(set) var recoveryState: WorkspaceRecoveryState
 
     /// Connectors whose API key is in the secret store. The key itself is never held here.
@@ -34,6 +36,8 @@ final class AppStore: ObservableObject {
     /// Receives every sync log line (tests assert these carry no keys or PII).
     var syncLogSink: ((String) -> Void)?
     private var noticeTask: Task<Void, Never>?
+    /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
+    private var importedCSVFiles: [String: Date] = [:]
 
     init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport()) {
         self.storageURL = storageURL
@@ -1263,46 +1267,122 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// CSV-1..CSV-8 (Water 9:42 AM ET): every row is accounted for. Imported, skipped (no name) or flagged for review
+    /// (placeholder or role names, duplicate leads), with warnings for values left empty and the columns it ignored.
+    /// The result stays on `lastCSVImport` until Martin closes it. A failed save keeps nothing from the file.
     func importCSV(from url: URL) throws -> Int {
-        let rows = CSVParser.parse(try ImportLimits.readCappedText(url))
-        try ImportLimits.checkRows(max(rows.count - 1, 0), url.lastPathComponent)
-        // Exact header names or known alternatives only; unknown columns are ignored.
-        let fields = CSVHeaderMap.fields(for: rows.first ?? [])
-        guard fields.contains(where: { $0 != nil }) else {
-            showNotice(rows.isEmpty ? "No valid leads found in CSV." : "No recognized columns in CSV. Use headers such as name, email, phone, company, service, quote.")
+        let data = try ImportLimits.readCapped(url)
+        let fileName = url.lastPathComponent
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        if let earlier = importedCSVFiles[digest] {
+            var result = CSVImportResult(fileName: fileName, finishedAt: Date())
+            result.alreadyImportedAt = earlier
+            result.summary = "This file was already imported at \(earlier.formatted(date: .omitted, time: .shortened)). Nothing was imported and nothing was merged."
+            lastCSVImport = result
             return 0
         }
+        guard let text = ImportLimits.decodeText(data) else {
+            throw ImportLimits.error(415, "\(fileName) is not UTF-8, UTF-16, or Windows-1252 text. Save it as CSV UTF-8 and import again.")
+        }
+        let rows = CSVParser.parse(text)
+        try ImportLimits.checkRows(max(rows.count - 1, 0), fileName)
+        let headers = rows.first ?? []
+        // Exact header names or known alternatives only; unknown columns are ignored and named.
+        let fields = CSVHeaderMap.fields(for: headers)
+        var result = CSVImportResult(fileName: fileName, finishedAt: Date())
+        result.ignoredColumns = zip(headers, fields).compactMap { header, field in
+            let name = header.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return field == nil && !name.isEmpty ? name : nil
+        }
+        guard fields.contains(where: { $0 != nil }) else {
+            result.summary = rows.isEmpty ? "No valid leads found in CSV." : "No recognized columns in CSV. Use headers such as name, email, phone, company, service, quote."
+            lastCSVImport = result
+            return 0
+        }
+        func key(_ name: String, _ company: String) -> String {
+            func clean(_ text: String) -> String {
+                text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+                    .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            }
+            return clean(name) + "|" + clean(company)
+        }
+        var known = Set(workspace.leads.map { key($0.name, $0.company) })
         var imported: [Lead] = []
-
-        for row in rows.dropFirst() where !row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+        var companyColumnsUsed = Set<Int>()
+        for (offset, row) in rows.enumerated().dropFirst() where !row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            let rowNumber = offset + 1
             var lead = Lead.blank()
-            lead.name = "Unknown"
+            lead.name = ""
             var firstName = "", lastName = ""
+            var rowWarnings: [String] = []
             for (index, field) in fields.enumerated() {
                 guard let field else { continue }
                 let value = index < row.count ? row[index].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                let header = headers[index].replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
                 switch field {
                 case .name: lead.name = value
                 case .firstName: firstName = value
                 case .lastName: lastName = value
                 case .email: lead.email = value
                 case .phone: lead.phone = value
-                case .company: lead.company = value
+                case .company:
+                    if lead.company.isEmpty, !value.isEmpty { lead.company = value; companyColumnsUsed.insert(index) }
                 case .service: lead.service = value
-                case .amount: lead.quoteAmount = CSVAmount.parse(value)
+                case .amount:
+                    switch CSVValue.amount(value) {
+                    case .value(let amount): lead.quoteAmount = amount
+                    case .unreadable: rowWarnings.append("row \(rowNumber), \(header): \"\(value)\"")
+                    case .empty: break
+                    }
                 case .date:
-                    if let date = CalendarCRM.date(from: value) { lead.createdAt = date.ISO8601Format() }
+                    switch CSVValue.date(value) {
+                    case .day(let day): if let date = CalendarCRM.date(from: day) { lead.createdAt = date.ISO8601Format() }
+                    case .ambiguous: rowWarnings.append("row \(rowNumber), \(header): \"\(value)\" (ambiguous day/month, not guessed)")
+                    case .unreadable: rowWarnings.append("row \(rowNumber), \(header): \"\(value)\"")
+                    case .empty: break
+                    }
                 }
             }
-            if lead.name == "Unknown" || lead.name.isEmpty {
-                let combined = [firstName, lastName].filter { !$0.isEmpty }.joined(separator: " ")
-                if !combined.isEmpty { lead.name = combined }
+            if lead.name.isEmpty {
+                lead.name = [firstName, lastName].filter { !$0.isEmpty }.joined(separator: " ")
             }
-            if lead.name != "Unknown", !lead.name.isEmpty { imported.append(lead) }
+            guard !lead.name.isEmpty else {
+                result.skipped.append(CSVRowNote(row: rowNumber, reason: "no-name"))
+                continue
+            }
+            if let reason = CSVNameCheck.flag(lead.name) {
+                result.flagged.append(CSVRowNote(row: rowNumber, reason: reason))
+                result.rowNames[rowNumber] = lead.name
+                continue
+            }
+            guard known.insert(key(lead.name, lead.company)).inserted else {
+                result.flagged.append(CSVRowNote(row: rowNumber, reason: "duplicate-lead"))
+                result.rowNames[rowNumber] = lead.name
+                continue
+            }
+            result.warnings += rowWarnings
+            imported.append(lead)
+        }
+        result.companyColumns = companyColumnsUsed.sorted().map {
+            headers[$0].replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        let previous = workspace
         workspace.leads.insert(contentsOf: imported, at: 0)
-        persist(message: imported.isEmpty ? "No valid leads found in CSV." : "Imported \(imported.count) leads from CSV.")
+        do {
+            try persistOrThrow()
+        } catch {
+            workspace = previous
+            var failed = CSVImportResult(fileName: fileName, finishedAt: Date())
+            failed.failure = error.localizedDescription
+            failed.summary = "Import failed: the leads could not be saved (\(error.localizedDescription)). Nothing from this file was kept."
+            lastCSVImport = failed
+            return 0
+        }
+        importedCSVFiles[digest] = result.finishedAt
+        result.imported = imported.count
+        result.summary = imported.isEmpty ? "No valid leads found in CSV." : "Imported \(imported.count) lead\(imported.count == 1 ? "" : "s") from CSV."
+        lastCSVImport = result
         return imported.count
     }
 
@@ -1545,6 +1625,13 @@ final class AppStore: ObservableObject {
             showNotice("Could not save CRM data: \(error.localizedDescription)")
         }
     }
+
+    /// Martin closes the import result panel.
+    func dismissCSVImport() { lastCSVImport = nil }
+
+#if CONTEXTWARD_ACCEPTANCE
+    func showNoticeForTesting(_ message: String) { showNotice(message) }
+#endif
 
     private func showNotice(_ message: String) {
         noticeTask?.cancel()
