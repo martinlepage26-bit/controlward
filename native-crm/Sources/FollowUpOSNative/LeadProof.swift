@@ -58,6 +58,9 @@ enum LeadProofVerifier {
             let allowed = config.allowlist.discoveryHosts + config.allowlist.watchHosts + config.allowlist.gmailHosts
                 + config.allowlist.openDataSources.filter(\.enabled).map(\.host)
             if allowed.contains(host) || domains.contains(where: { HostMatch.belongs(host, to: $0) }) { return nil }
+            // Earth 10:10: the host a listing names as its own website is allowed for own-site requests, even when the
+            // listing never became a prospect (e.g. its site redirected away or could not be read). Any other host fails.
+            if line["source"] == "own-site", listingDomains.contains(where: { HostMatch.belongs(host, to: $0) }) { return nil }
             return line["result"]?.hasPrefix("refused:") == true ? nil : host
         }
         checks.append(Check(number: 5, name: "Zero send requests and no off-allowlist host",

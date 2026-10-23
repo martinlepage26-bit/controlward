@@ -103,7 +103,8 @@ if verifyOnly == nil {
 
 let inputs = environment.proofInputs()
 let checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, auditLines: inputs.lines, prospects: inputs.prospects,
-                                      drafts: inputs.drafts, config: environment.config)
+                                      drafts: inputs.drafts, config: environment.config,
+                                      listingDomains: Set(environment.discoveredPlaces().compactMap(\.domain)))
 print("")
 print("Earth's live-proof bar (audit: \(environment.auditURL.path))")
 for check in checks { print("  [\(check.passed ? "PASS" : "FAIL")] \(check.number). \(check.name): \(check.detail)") }

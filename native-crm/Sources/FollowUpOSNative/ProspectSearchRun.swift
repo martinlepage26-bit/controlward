@@ -143,10 +143,69 @@ struct ProspectSearchRun: Sendable {
         return components.url
     }
 
+    /// Page kinds the configured own-site paths stand for, with the French and English words a site's own links use.
+    /// Order is the crawl priority: people first (team, contact), then trigger pages, then the rest.
+    static let pageKinds: [(kind: String, words: [String])] = [
+        ("team", ["equipe", "team", "direction", "leadership", "personnel", "staff", "people"]),
+        ("contact", ["nous-joindre", "joindre", "contact"]),
+        ("news", ["salle-de-presse", "nouvelles", "newsroom", "news", "press", "medias"]),
+        ("careers", ["carrieres", "carriere", "emplois", "emploi", "careers", "career", "jobs"]),
+        ("about", ["a-propos", "apropos", "about"]),
+        ("quote", ["soumission", "quote"]),
+        ("privacy", ["politique-de-confidentialite", "confidentialite", "privacy"])
+    ]
+
+    static func pageKind(ofPath path: String) -> String? {
+        let segments = path.lowercased().folding(options: .diacriticInsensitive, locale: nil).split(separator: "/").map(String.init)
+        for (kind, words) in pageKinds where segments.contains(where: { segment in words.contains { segment.contains($0) } }) { return kind }
+        return nil
+    }
+
+    /// Live-proof cause 1 (Water 10:13): the crawl used to guess the segment's slugs in config order and stop at the page budget,
+    /// so a site whose team or contact page lives at another path (e.g. /en/contact-us, /why-us/our-team) yielded no person.
+    /// After the home page, it now takes, per page kind the segment asks for, the shortest same-site link the home page itself
+    /// shows; configured slugs fill only the kinds no link covered. The page budget is unchanged.
+    static func crawlPlan(root: URL, home: SiteExtractor.Page?, segment: ICPConfig.Segment, budget: Int) -> [URL] {
+        let wanted = segment.ownSitePaths.compactMap(pageKind(ofPath:))
+        let kinds = pageKinds.map(\.kind).filter { wanted.contains($0) }
+        let homeURL = home.flatMap { URL(string: $0.url) } ?? root
+        let host = (homeURL.host ?? root.host ?? "").lowercased()
+        var linked: [String: URL] = [:]
+        for link in home?.links ?? [] {
+            guard let url = URL(string: link, relativeTo: homeURL)?.absoluteURL, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  url.host?.lowercased() == host, url.path.count > 1, let kind = pageKind(ofPath: url.path), kinds.contains(kind) else { continue }
+            var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            parts?.query = nil
+            parts?.fragment = nil
+            guard let clean = parts?.url else { continue }
+            if let current = linked[kind], (current.path.split(separator: "/").count, current.path.count) <= (clean.path.split(separator: "/").count, clean.path.count) { continue }
+            linked[kind] = clean
+        }
+        var plan: [URL] = kinds.compactMap { linked[$0] }
+        for path in segment.ownSitePaths where path != "/" {
+            guard let url = URL(string: path, relativeTo: root)?.absoluteURL else { continue }
+            if let kind = pageKind(ofPath: path), linked[kind] != nil { continue }
+            plan.append(url)
+        }
+        var seen = Set<String>([homeURL.absoluteString, root.absoluteString])
+        plan = plan.filter { seen.insert($0.absoluteString).inserted }
+        return Array(plan.prefix(max(budget - 1, 0)))
+    }
+
     func fetchSite(_ root: URL, domain: String, segment: ICPConfig.Segment) async -> [SiteExtractor.Page] {
         var pages: [SiteExtractor.Page] = []
-        for path in segment.ownSitePaths.prefix(config.etiquette.maxPagesPerSite) {
-            guard let url = URL(string: path, relativeTo: root)?.absoluteURL else { continue }
+        let budget = config.etiquette.maxPagesPerSite
+        let first = segment.ownSitePaths.first.flatMap { URL(string: $0, relativeTo: root)?.absoluteURL } ?? root
+        var queue: [URL] = [first]
+        var planned = false
+        while !queue.isEmpty {
+            let url = queue.removeFirst()
+            defer {
+                if !planned {
+                    planned = true
+                    queue = Self.crawlPlan(root: root, home: pages.first, segment: segment, budget: budget)
+                }
+            }
             do {
                 let response = try await transport.fetch(url, purpose: .ownSite(domain: domain))
                 guard (200..<300).contains(response.status) else { continue }
@@ -157,7 +216,8 @@ struct ProspectSearchRun: Sendable {
                                             + page.text.components(separatedBy: "\n").filter { $0.count >= 12 })
                 pages.append(page)
             } catch let refusal as LeadPipelineRefusal where refusal.code == "refused:bot-challenge" {
-                break
+                planned = true
+                queue = []
             } catch {
                 continue
             }
