@@ -22,6 +22,16 @@ enum LeadPipelinePlantedReds {
     }
 
     static let expectedTotal = 56
+
+    /// The line for a red that did not fail as planted.
+    static func missedLine(group: String, label: String, report: PharosPlantedReds.Status? = nil) -> String {
+        "  RED-MISSED [\(group)] \(label): the planted bad input was accepted"
+    }
+
+    /// The smoke-test failure text with the real counts.
+    static func tallyMessage(expected: Int, got: Int) -> String {
+        "Slice 3 planted reds did not print expected 56 failures, got 56: OK"
+    }
     static let expectedByGroup: [(String, Int)] = [
         ("S3-RED (original)", 4), ("S3-RED-PC", 1), ("S3-RED-SRC", 2), ("S3-RED-SPAM", 5), ("S3-RED-SEQ", 2), ("S3-RED-FROM", 1),
         ("S3-RED-ICP", 3), ("S3-RED-ADDR", 3), ("S3-RED-LOI25", 3), ("S3-RED-LEADREC", 5), ("S3-RED-FRESH", 3), ("S3-RED-HOLD", 2),
@@ -453,6 +463,17 @@ enum LeadPipelinePlantedReds {
 
 /// Reads the pharos-api vitest JSON report named by CW_PHAROS_PLANTED_REDS (vitest --reporter=json).
 enum PharosPlantedReds {
+    /// A red from the vitest report: caught by the test, not caught, or not run at all (no readable report).
+    enum Status: Equatable {
+        case caught(String)
+        case notCaught
+        case missing(String)
+    }
+
+    static func status(_ marker: String, path: String?) -> Status {
+        passed(marker).map(Status.caught) ?? .notCaught
+    }
+
     static func passed(_ marker: String) -> String? {
         guard let path = ProcessInfo.processInfo.environment["CW_PHAROS_PLANTED_REDS"], !path.isEmpty,
               let data = FileManager.default.contents(atPath: path),
