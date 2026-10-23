@@ -68,3 +68,8 @@ enum LeadProofVerifier {
         return checks
     }
 }
+
+/// Water 12:19 / Earth-Air 12:21: one live sample split across the configured sectors.
+enum LeadProofSample {
+    static func split(_ total: Int, across ids: [String]) -> [(id: String, limit: Int)] { [] }
+}

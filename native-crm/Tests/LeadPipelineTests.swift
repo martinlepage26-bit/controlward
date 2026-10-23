@@ -744,6 +744,62 @@ enum LeadPipelineTests {
                 try expect(lines.contains { $0.action == "discovery-attempt" && $0.target == "photon.komoot.io" && $0.result == "ok" }, "Photon attempt ok")
                 try expect(lines.contains { $0.action == "discovery-attempt" && $0.target == "overpass-api.de" && $0.result.hasPrefix("error:") }, "Overpass failure logged first")
             }),
+            ("Risk line (Earth 12:19): a prospect with no dated trigger never shows 'dated trigger' and gets an honest risk line", {
+                let honest = "No trigger on the own site with a fetch time: no draft."
+                var none = LeadKit.readyClinic()
+                none.trigger = nil
+                try expect(!LeadDefinition.riskLine(none).contains("dated trigger") && LeadDefinition.riskLine(none) == honest, "no trigger: \(LeadDefinition.riskLine(none))")
+                var undated = LeadKit.readyClinic()
+                undated.trigger?.fetchedAt = nil
+                try expect(LeadDefinition.riskLine(undated) == honest, "trigger without fetch time: \(LeadDefinition.riskLine(undated))")
+                try expect(LeadDefinition.riskLine(LeadKit.readyClinic()) == "Low: own-site evidence, dated trigger.", "a dated trigger keeps the low line")
+            }),
+            ("Trigger phrases (Water 12:19): a synthetic clinic site is Ready when an own-site AI-governance phrase, a named person and a consent basis are present; without the phrase it stays Fix", {
+                func site(home: String) -> SearchFixture {
+                    let fixture = SearchFixture(config: config)
+                    let root = "https://www.clinique-exemple.test"
+                    fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1><p>\(home)</p>"
+                                          + "<a href=\"/notre-equipe\">Notre équipe</a> <a href=\"/nous-joindre\">Nous joindre</a>")
+                    fixture.inner.respond("\(root)/notre-equipe", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")
+                    fixture.inner.respond("\(root)/nous-joindre", body: "<p>Nous joindre</p><address>\(LeadKit.clinicAddress)</address><a href=\"mailto:info@clinique-exemple.test\">info</a>")
+                    return fixture
+                }
+                let with = site(home: "Le tri des demandes passe par une DÉCISION AUTOMATISÉE revue chaque semaine.")
+                let report = await with.run()
+                let record = try unwrap(report.prospects.first, "prospect")
+                try expect(record.contact?.name == "Alex Fictif" && record.consent != nil, "named person and consent basis: \(String(describing: record.contact?.name)) \(String(describing: record.consent))")
+                try expect(record.trigger?.kind == "ai_governance_signal" && record.trigger?.url == LeadKit.homePage && record.trigger?.fetchedAt != nil
+                           && record.trigger?.summary.contains("décision automatisée") == true, "trigger: \(String(describing: record.trigger))")
+                try expect(record.status == .ready && report.drafts.count == 1, "ready and drafted: \(record.status) \(record.reasons) drafts=\(report.drafts.count)")
+                let without = site(home: "Bienvenue à la clinique.")
+                let plain = await without.run()
+                let other = try unwrap(plain.prospects.first, "prospect without phrase")
+                try expect(other.status == .fix && other.reasons.contains("no trigger URL with fetch time") && plain.drafts.isEmpty, "no phrase stays Fix: \(other.status) \(other.reasons)")
+            }),
+            ("Trigger phrases (Water 12:19, Earth/Air 12:21): 'AI' and 'IA' match only as whole uppercase words; other phrases match whole words in any case, with or without accents", {
+                var custom = config
+                custom.triggerSignals["ai_tool_on_own_site"] = ["AI", "IA", "décision automatisée", "chatbot"]
+                let clinic = try unwrap(custom.segments.first { $0.id == "clinic" }, "clinic")
+                func hits(_ text: String) -> [String] {
+                    let page = SiteExtractor.read(html: "<p>\(text)</p>", url: URL(string: LeadKit.homePage)!, fetchedAt: now)
+                    return SiteExtractor.triggers(in: page, segment: clinic, config: custom).map(\.summary)
+                }
+                let negative = "He said we maintain records via the média portal. J'ai vu la liaison avec la pharmacie. Ai-je raison? MAINTENANT. Thaïlande."
+                try expect(hits(negative).isEmpty, "substrings and lowercase must not trigger: \(hits(negative))")
+                for (text, phrase) in [("Nous utilisons l'IA pour le tri.", "IA"), ("AI-assisted triage at the front desk.", "AI"), ("We use AI.", "AI"),
+                                       ("Decision automatisee des rendez-vous.", "décision automatisée"), ("Essayez notre CHATBOT.", "chatbot")] {
+                    let found = hits(text)
+                    try expect(found.count == 1 && found[0].contains("“\(phrase)”"), "\(text) -> \(found)")
+                }
+            }),
+            ("Live sample (Water 12:19, Earth/Air 12:21): a sample of 60 is split across all seven target sectors, banks and general AI-governance included", {
+                let ids = config.segments.map(\.id)
+                try expect(Set(ids) == ["clinic", "construction_trades", "university", "bank", "insurer", "public_body", "ai_governance_need"], "sectors: \(ids)")
+                let split = LeadProofSample.split(60, across: ids)
+                try expect(split.map(\.id) == ids && split.reduce(0) { $0 + $1.limit } == 60, "total 60 in config order: \(split)")
+                let limits = split.map(\.limit)
+                try expect((limits.min() ?? 0) >= 8 && (limits.max() ?? 0) - (limits.min() ?? 0) <= 1, "even shares: \(limits)")
+            }),
             ("Planted-red tally (Water/Earth): one planted red that slips prints 'expected 56 failures, got 55: MISMATCH' and fails the run", {
                 var cases = try LeadPipelinePlantedReds.makeCases()
                 try expect(cases.count == 56, "56 planted cases, got \(cases.count)")
