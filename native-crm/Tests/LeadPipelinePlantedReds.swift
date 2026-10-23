@@ -432,21 +432,20 @@ enum LeadPipelinePlantedReds {
             let findings = HTMLImportScan.findings(in: "let text = NSAttributedString(html: data, documentAttributes: nil)")
             return findings.isEmpty ? nil : "caught: \(findings.joined(separator: ", "))"
         }
-        // EARTH (6:59 AM ET findings on 75285c4): the index missing or unreadable, through the app path, holds every construction firm.
-        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): no cached RBQ file and a construction firm gets Ready and a draft") {
+        // EARTH (6:59 AM ET findings on 75285c4, narrowed by Water 7:18 AM ET so they don't overlap Argus reds 2 and 3):
+        // through the app path, a mixed batch of construction/trades firms is held all at once.
+        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, firms of a mixed construction batch get Ready or a draft") {
             let out = try await EarthRBQ.appRun(contents: nil)
-            return !out.prospects.isEmpty && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty
-                ? "\(out.prospects.count) held (rbq \(out.prospects.first?.rbqCheck ?? "-")), 0 drafts" : nil
+            let all = SearchFixture.constructionBatch.count
+            return out.prospects.count == all && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty
+                ? "\(all)/\(all) held in one run (rbq \(out.prospects.first?.rbqCheck ?? "-")), 0 drafts" : nil
         }
-        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated cache and a bad-header cache drop the firm or let it through") {
-            let truncated = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8))
-            let badHeader = try await EarthRBQ.appRun(contents: RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-08", name: "Plomberie Fictive Centre", town: "Montréal",
-                                                                                                    codes: [("Specialisee", "15.5")], renaming: ("Numéro de licence", "No licence"))]))
-            for out in [truncated, badHeader] {
-                guard !out.prospects.isEmpty, out.prospects.allSatisfy({ $0.status == .conflictReview }), out.drafts.isEmpty,
-                      out.audit.contains(where: { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }) else { return nil }
-            }
-            return "truncated and bad-header: held, rbq-load refused:open-data-schema"
+        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets firms of a mixed construction batch through") {
+            let out = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8))
+            let all = SearchFixture.constructionBatch.count
+            guard out.prospects.count == all, out.prospects.allSatisfy({ $0.status == .conflictReview }), out.drafts.isEmpty,
+                  out.audit.contains(where: { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }) else { return nil }
+            return "truncated: \(all)/\(all) held, 0 drafts, rbq-load refused:open-data-schema"
         }
         return cases
     }

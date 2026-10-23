@@ -431,14 +431,14 @@ enum LeadPipelineTests {
                 try expect(reports.first?.prospects.first?.status == .conflictReview && reports.first?.drafts.isEmpty == true, "held, not refused: \(reports.map(\.prospects))")
                 try expect(audit.lines.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }, "refusal audited")
             }),
-            ("RBQ fails closed in the app (Earth 6:59): a missing, truncated or bad-header cached index holds every construction/trades firm and audits why", {
+            ("RBQ fails closed in the app (Earth 6:59, Water 7:18): a missing, truncated or bad-header cached index holds every firm of a mixed construction/trades batch in one run and audits why", {
                 for (label, contents, expectedLoad) in [("missing", nil as Data?, nil as String?),
                                                         ("truncated", Data(#"{"Liste Licence":[{"Licence":{"#.utf8), "refused:open-data-schema"),
                                                         ("bad header", RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-07", name: SearchFixture.builderName, town: "Montréal",
                                                                                                              codes: [("Specialisee", "15.5")], renaming: ("Catégories et sous-catégories", "Categories"))]),
                                                          "refused:open-data-schema")] {
                     let held = try await EarthRBQ.appRun(contents: contents)
-                    try expect(!held.prospects.isEmpty && held.prospects.allSatisfy({ $0.status == .conflictReview }) && held.drafts.isEmpty,
+                    try expect(held.prospects.count == SearchFixture.constructionBatch.count && held.prospects.allSatisfy({ $0.status == .conflictReview }) && held.drafts.isEmpty,
                                "\(label): \(held.prospects.map { "\($0.status)/\($0.rbqCheck ?? "-")" }) drafts=\(held.drafts.count)")
                     if let expectedLoad {
                         try expect(held.audit.contains { $0.action == "rbq-load" && $0.result == expectedLoad }, "\(label): rbq-load audited as \(expectedLoad)")
@@ -816,6 +816,32 @@ struct SearchFixture {
         fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """
         {"elements":[{"type":"node","id":2001,"lat":45.5,"lon":-73.6,"tags":{"name":"\(builderName)","craft":"builder","website":"https://www.clinique-exemple.test","addr:city":"Montréal"}}]}
         """, headers: ["content-type": "application/json"])
+        return fixture
+    }
+
+    /// A mixed batch of construction and trades firms (builder, electrician, roofer, construction company), each with its
+    /// own synthetic site whose pages say nothing about plumbing or excavation, so only the RBQ check can hold them.
+    static let constructionBatch: [(id: Int, name: String, tag: String, host: String)] = [
+        (2101, "Constructions Fictives Nord", "\"craft\":\"builder\"", "www.constructions-fictives-nord.test"),
+        (2102, "Électricité Fictive Est", "\"craft\":\"electrician\"", "www.electricite-fictive-est.test"),
+        (2103, "Toitures Fictives Ouest", "\"craft\":\"roofer\"", "www.toitures-fictives-ouest.test"),
+        (2104, "Entreprise Fictive Bâtiment", "\"office\":\"construction_company\"", "www.entreprise-fictive-batiment.test")
+    ]
+
+    static func mixedConstructionBatch(config: ICPConfig) -> SearchFixture {
+        let fixture = SearchFixture(config: config)
+        let elements = constructionBatch.map { firm in
+            #"{"type":"node","id":\#(firm.id),"lat":45.5,"lon":-73.6,"tags":{"name":"\#(firm.name)",\#(firm.tag),"website":"https://\#(firm.host)","addr:city":"Montréal"}}"#
+        }
+        fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: #"{"elements":["# + elements.joined(separator: ",") + "]}",
+                              headers: ["content-type": "application/json"])
+        for (index, firm) in constructionBatch.enumerated() {
+            let site = "https://\(firm.host)"
+            fixture.inner.respond("\(site)/robots.txt", body: "User-agent: *\nDisallow: /admin\n", headers: ["content-type": "text/plain"])
+            fixture.inner.respond("\(site)/", body: "<h1>\(firm.name)</h1><p>Demandez une soumission en ligne</p>")
+            fixture.inner.respond("\(site)/equipe", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")
+            fixture.inner.respond("\(site)/a-propos", body: "<p>Nous joindre</p><address>\(1240 + index), rue Imaginaire, Montréal (Québec) H0H 0H0</address><a href=\"mailto:info@\(firm.host.replacingOccurrences(of: "www.", with: ""))\">info</a>")
+        }
         return fixture
     }
 
