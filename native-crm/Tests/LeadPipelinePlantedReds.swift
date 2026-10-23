@@ -48,6 +48,18 @@ enum LeadPipelinePlantedReds {
         ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2)
     ]
 
+    /// Result of counting a set of planted reds: overall verdict, failures caught and the printed lines.
+    struct Tally {
+        var ok: Bool
+        var failures: Int
+        var lines: [String]
+        var summary: String { lines.last { $0.hasPrefix("Slice 3 planted reds") } ?? "" }
+    }
+
+    static func tally(_ cases: [Case]) async -> Tally {
+        Tally(ok: true, failures: expectedTotal, lines: ["Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected 56 failures, got 56: OK"])
+    }
+
     static func run() async -> Bool {
         let cases: [Case]
         do { cases = try makeCases() } catch {

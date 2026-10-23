@@ -652,6 +652,24 @@ enum LeadPipelineTests {
                 let run = await SearchFixture.builder(config: config).run(segment: "construction_trades", rbq: RBQIndex(licences))
                 try expect(run.prospects.first?.town == "Montréal", "map town kept: \(String(describing: run.prospects.first?.town))")
             }),
+            ("Planted-red tally (Water/Earth): one planted red that slips prints 'expected 56 failures, got 55: MISMATCH' and fails the run", {
+                var cases = try LeadPipelinePlantedReds.makeCases()
+                try expect(cases.count == 56, "56 planted cases, got \(cases.count)")
+                // Make the count independent of a local vitest run: reds 9/10 stand in as caught.
+                for index in cases.indices where cases[index].label.contains("(pharos-api vitest)") {
+                    cases[index].probe = { "stub: vitest caught it" }
+                }
+                let slipIndex = try unwrap(cases.firstIndex { $0.group == "S3-RED-SPAM" }, "an S3-RED-SPAM case")
+                let slipped = cases[slipIndex].label
+                cases[slipIndex].probe = { nil }   // the bad input gets through
+                let result = await LeadPipelinePlantedReds.tally(cases)
+                try expect(result.summary == "Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected 56 failures, got 55: MISMATCH", "summary: \(result.summary)")
+                try expect(result.failures == 55 && !result.ok, "one slip must fail the run: failures=\(result.failures) ok=\(result.ok)")
+                try expect(result.lines.contains("S3-RED-SPAM: expected 5 failures, got 4: MISMATCH"), "group line names the slip")
+                try expect(result.lines.contains("  RED-MISSED [S3-RED-SPAM] \(slipped): the planted bad input was accepted"), "the slipped red is named")
+                try expect(!result.lines.contains { $0.hasPrefix("expected 56 failures, got") && $0.hasSuffix(": OK") }, "no OK line when a red slips")
+                try expect(LeadPipelinePlantedReds.tallyMessage(expected: 56, got: result.failures) == "Slice 3 planted reds: expected 56 failures, got 55: MISMATCH", "fatal text carries 55")
+            }),
             ("Planted-red tally (CI 9:45): a missing pharos-api vitest report reads NOT-RUN, never 'accepted'; the failure text carries the real counts", {
                 let missing = FileManager.default.temporaryDirectory.appendingPathComponent("cw-no-report-\(UUID().uuidString).json").path
                 for path in [nil, "", missing] as [String?] {
