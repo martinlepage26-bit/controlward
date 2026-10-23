@@ -800,6 +800,31 @@ enum LeadPipelineTests {
                 let limits = split.map(\.limit)
                 try expect((limits.min() ?? 0) >= 8 && (limits.max() ?? 0) - (limits.min() ?? 0) <= 1, "even shares: \(limits)")
             }),
+            ("LIVE-R5 (Ready needs consent): a record that passes every other rule but has no recorded consent basis is Fix, not Ready", {
+                var lead = LeadKit.readyClinic()
+                try expect(LeadDefinition.evaluate(lead, config: config, now: now).status == .ready, "fixture is Ready with consent")
+                lead.consent = nil
+                let verdict = LeadDefinition.evaluate(lead, config: config, now: now)
+                try expect(verdict.status == .fix && verdict.reasons.contains("no consent basis recorded"),
+                           "no consent basis: \(verdict.status) \(verdict.reasons)")
+            }),
+            ("LIVE-R5 (check 3): a Ready prospect whose draft was refused gives ready=1 drafted=0 and the refusing rule, never 'no Ready prospect'", {
+                var lead = LeadKit.readyClinic()
+                lead.status = .ready
+                let refused = CWAuditLine(ts: now, surface: "leads", action: "draft", register: URLCanonical.register(lead.sourceURL), target: lead.id,
+                                          source: "controlward", result: "refused:address-provenance").text
+                let checks = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: [refused], prospects: [lead], drafts: [], config: config)
+                let check3 = try unwrap(checks.first { $0.number == 3 }, "check 3")
+                try expect(!check3.passed, "check 3 fails without a draft: \(check3.detail)")
+                try expect(check3.detail.contains("ready=1") && check3.detail.contains("drafted=0")
+                           && check3.detail.contains("\(lead.id) refused:address-provenance") && !check3.detail.contains("no Ready prospect"),
+                           "check 3 names the Ready count and the refusing rule: \(check3.detail)")
+                var other = LeadKit.readyClinic(id: "cw:osm:node/1002")
+                other.status = .fix
+                let none = LeadProofVerifier.verify(storeCountAtLaunch: 0, auditLines: [], prospects: [other], drafts: [], config: config)
+                let empty = try unwrap(none.first { $0.number == 3 }, "check 3")
+                try expect(!empty.passed && empty.detail.contains("ready=0") && empty.detail.contains("drafted=0"), "zero Ready is counted: \(empty.detail)")
+            }),
             ("LIVE-R4 (trigger/fit): a synthetic clinic whose only match is a footer 'privacy' link gets no trigger and no fit line", {
                 let fixture = SearchFixture(config: config)
                 let root = "https://www.clinique-exemple.test"
