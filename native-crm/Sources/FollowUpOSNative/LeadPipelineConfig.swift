@@ -100,7 +100,7 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var uses: [String]
         var fields: [FieldLabel]
         var neverStoredFields: [String]
-        /// Every column the real file is known to have. A column outside this list stops the parse (refused:open-data-header).
+        /// Every column the real file is known to have. A key outside this list stops the parse (refused:open-data-schema).
         var knownHeaders: [String]?
         /// Keys allowed in one entry of the nested sub-category list ("Categorie", "Sous-catégories").
         var knownSubcategoryKeys: [String]?

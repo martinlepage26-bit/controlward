@@ -143,10 +143,25 @@ enum ProspectDisplay {
 
 /// The rule `/v1/leads/push` applies (mirrored in pharos-api): only test leads and inbound form leads (S3-R16).
 enum LeadPushPolicy {
+    /// Same rule as pharos-api (Argus red 11): a test lead needs a real JSON `true`, not 1 or "true"; an inbound lead
+    /// needs a form source that is not blank once trimmed.
     static func check(_ payload: [String: Any]) -> LeadPipelineRefusal? {
-        if payload["test"] as? Bool == true { return nil }
+        if isJSONTrue(payload["test"]) { return nil }
         if let provenance = payload["provenance"] as? [String: Any], provenance["kind"] as? String == "inbound_form",
-           let form = provenance["form_source"] as? String, !form.isEmpty { return nil }
+           let form = provenance["form_source"] as? String, !form.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
         return LeadPipelineRefusal(code: "refused:push-not-inbound")
+    }
+
+    /// True only for a Swift `true` or a boolean decoded from JSON. NSNumber(1) bridges to Bool in Foundation, so the
+    /// boolean class is checked (CFBoolean on macOS, __NSCFBoolean in swift-corelibs-foundation).
+    static func isJSONTrue(_ value: Any?) -> Bool {
+        guard let value else { return false }
+        if type(of: value) == Bool.self { return value as? Bool == true }
+        guard let number = value as? NSNumber else { return false }
+        #if canImport(Darwin)
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+        #else
+        return String(describing: type(of: number)) == "__NSCFBoolean" && number.boolValue
+        #endif
     }
 }

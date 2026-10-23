@@ -43,7 +43,7 @@ struct LeadPipelineEnvironment: Sendable {
     }
 
     /// The RBQ index from the local cache only. Downloading is a separate, explicit step (at most daily).
-    /// Throws when the cached file's columns are not the ones the hold relies on (refused:open-data-header).
+    /// Throws when the cached file is not the real JSON shape the hold relies on (refused:open-data-schema).
     func cachedRBQIndex() throws -> RBQIndex? {
         guard let source = RBQOpenData.source(config) else { return nil }
         let file = RBQOpenData.cacheFile(in: rbqDirectory)
@@ -66,15 +66,18 @@ struct LeadPipelineEnvironment: Sendable {
     /// Search, then pull the results into the Leads list and save the drafts locally. Nothing is sent.
     func searchAndIngest(_ requests: [ProspectSearchRun.Request], inner: any LeadTransport = URLSessionLeadTransport(),
                          audit: any CWAuditSink, clock: any LeadClock = SystemLeadClock()) async -> [ProspectSearchRun.Report] {
-        let rbq: RBQIndex?
+        var rbq: RBQIndex?
+        var rbqFailure: String?
         do { rbq = try cachedRBQIndex() } catch {
-            // A cached RBQ file we cannot read would silently switch the conflict hold off, so nothing runs.
+            // A cached RBQ file we cannot read must not switch the conflict hold off: the run goes on, and every prospect in a
+            // segment that needs the RBQ check is held for conflict review (fail closed). The refusal is audited.
             let code = (error as? LeadPipelineRefusal)?.code ?? "error:rbq-cache"
+            rbqFailure = code
             audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "rbq-load", target: RBQOpenData.sourceID, source: "rbq_open_data",
                                     result: code, receipt: "-"))
-            return []
         }
-        let (run, _) = makeRun(inner: inner, audit: audit, clock: clock, rbq: rbq)
+        var (run, _) = makeRun(inner: inner, audit: audit, clock: clock, rbq: rbq)
+        run.rbqFailure = rbqFailure
         var reports: [ProspectSearchRun.Report] = []
         let store = ProspectLeadsStore(fileURL: storeURL)
         for request in requests {

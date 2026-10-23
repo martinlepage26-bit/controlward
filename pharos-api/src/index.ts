@@ -114,6 +114,8 @@ export type InboxEvent = {
   fit_score: number | null;
   intent_score: number | null;
   composite_score: number | null;
+  /** Present (and true) only on synthetic test leads, so a client never shows one as real. Absent on real leads. */
+  test?: true;
 };
 
 function text(value: unknown, max: number): string | null {
@@ -126,8 +128,11 @@ function score(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
 }
 
-/** Builds the stored event in a fixed key order, so JSON.stringify is canonical for hashing. */
-export function minimiseLead(sourceId: string, event: unknown): InboxEvent | null {
+/**
+ * Builds the stored event in a fixed key order, so JSON.stringify is canonical for hashing. `test: true` is appended
+ * only for test leads, so a real lead's stored payload and content hash are unchanged.
+ */
+export function minimiseLead(sourceId: string, event: unknown, test = false): InboxEvent | null {
   if (!event || typeof event !== "object") return null;
   const input = event as Record<string, unknown>;
   if ((input.schema_version ?? LEAD_EVENT_SCHEMA) !== LEAD_EVENT_SCHEMA) return null;
@@ -147,6 +152,7 @@ export function minimiseLead(sourceId: string, event: unknown): InboxEvent | nul
     intent_score: score(input.intent_score),
     composite_score: score(input.composite_score),
   };
+  if (test) minimised.test = true;
   const { email, first_name, last_name } = minimised.raw_identity;
   return email || first_name || last_name ? minimised : null;
 }
@@ -193,6 +199,42 @@ export function pushAllowed(item: unknown): boolean {
     && typeof provenance.form_source === "string" && provenance.form_source.trim().length > 0;
 }
 
+type KnownLead = { hash: string; retracted: number };
+
+/** D1 allows at most 100 bound parameters per statement, so look ids up in chunks. */
+async function loadKnown(env: Env, ids: string[]): Promise<Map<string, KnownLead>> {
+  const known = new Map<string, KnownLead>();
+  for (let start = 0; start < ids.length; start += 90) {
+    const chunk = ids.slice(start, start + 90);
+    const existing = await env.DB!.prepare(`SELECT source_id, content_hash, retracted FROM lead_inbox WHERE source_id IN (${chunk.map(() => "?").join(",")})`)
+      .bind(...chunk).all<{ source_id: string; content_hash: string; retracted: number }>();
+    for (const row of existing.results ?? []) known.set(row.source_id, { hash: row.content_hash, retracted: row.retracted });
+  }
+  return known;
+}
+
+/**
+ * A retraction becomes a PII-free tombstone with a new seq, even for ids never seen or already purged,
+ * so a client that received the lead earlier still hears about it.
+ */
+function tombstones(env: Env, ids: string[], known: Map<string, KnownLead>): { statements: D1PreparedStatement[]; retracted: number } {
+  const statements: D1PreparedStatement[] = [];
+  let retracted = 0;
+  for (const sourceId of ids) {
+    if (known.get(sourceId)?.retracted === 1) continue;
+    retracted += 1;
+    statements.push(env.DB!.prepare("UPDATE lead_inbox_counter SET value = value + 1 WHERE id = 1"));
+    statements.push(env.DB!.prepare(
+      `INSERT INTO lead_inbox (source_id, content_hash, seq, payload_json, updated_at, acked_at, retracted)
+       VALUES (?, 'retracted', (SELECT value FROM lead_inbox_counter WHERE id = 1), NULL, datetime('now'), NULL, 1)
+       ON CONFLICT(source_id) DO UPDATE SET content_hash = 'retracted', seq = excluded.seq, payload_json = NULL,
+         updated_at = excluded.updated_at, acked_at = NULL, retracted = 1
+       WHERE lead_inbox.retracted = 0`
+    ).bind(sourceId));
+  }
+  return { statements, retracted };
+}
+
 async function pushLeads(request: Request, env: Env): Promise<Response> {
   if (!env.DB) return json({ error: "storage_unavailable" }, 503);
   const { body, error } = await readBody(request, MAX_PUSH_BYTES);
@@ -209,16 +251,25 @@ async function pushLeads(request: Request, env: Env): Promise<Response> {
     if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId)) return json({ error: "invalid_retract", index }, 422);
   }
 
-  // Refuse the whole packet before anything is written (S3-R16).
-  for (const [index, item] of packet.leads.entries()) {
-    if (!pushAllowed(item)) return json({ error: "refused:push-not-inbound", index }, 422);
+  // Refuse every lead in the packet before any lead is written (S3-R16). The packet's retractions are still applied:
+  // a withdrawal (deletion, consent withdrawn) must not be lost because another item was refused (Argus red 9).
+  const refusedIndex = packet.leads.findIndex((item) => !pushAllowed(item));
+  if (refusedIndex >= 0) {
+    const retractOnly = [...new Set(retract as string[])];
+    const { statements, retracted } = tombstones(env, retractOnly, await loadKnown(env, retractOnly));
+    try {
+      if (statements.length) await env.DB.batch(statements);
+    } catch {
+      return json({ error: "storage_failure" }, 503);
+    }
+    return json({ error: "refused:push-not-inbound", index: refusedIndex, retracted }, 422);
   }
 
   const incoming = new Map<string, { payload: string; hash: string }>();
   for (const [index, item] of packet.leads.entries()) {
     const sourceId = (item as { source_id?: unknown })?.source_id;
     if (typeof sourceId !== "string" || !SOURCE_ID.test(sourceId)) return json({ error: "invalid_source_id", index }, 422);
-    const event = minimiseLead(sourceId, (item as { event?: unknown }).event);
+    const event = minimiseLead(sourceId, (item as { event?: unknown }).event, (item as { test?: unknown }).test === true);
     if (!event) return json({ error: "invalid_lead_event", index }, 422);
     const payload = JSON.stringify(event);
     incoming.set(sourceId, { payload, hash: await sha256Hex(payload) });
@@ -226,15 +277,7 @@ async function pushLeads(request: Request, env: Env): Promise<Response> {
   const retractIds = [...new Set(retract as string[])].filter((id) => !incoming.has(id));
   if (incoming.size === 0 && retractIds.length === 0) return json({ accepted: 0, created: 0, updated: 0, unchanged: 0, retracted: 0 });
 
-  // D1 allows at most 100 bound parameters per statement, so look ids up in chunks.
-  const known = new Map<string, { hash: string; retracted: number }>();
-  const ids = [...incoming.keys(), ...retractIds];
-  for (let start = 0; start < ids.length; start += 90) {
-    const chunk = ids.slice(start, start + 90);
-    const existing = await env.DB.prepare(`SELECT source_id, content_hash, retracted FROM lead_inbox WHERE source_id IN (${chunk.map(() => "?").join(",")})`)
-      .bind(...chunk).all<{ source_id: string; content_hash: string; retracted: number }>();
-    for (const row of existing.results ?? []) known.set(row.source_id, { hash: row.content_hash, retracted: row.retracted });
-  }
+  const known = await loadKnown(env, [...incoming.keys(), ...retractIds]);
 
   let created = 0, updated = 0, unchanged = 0;
   const statements: D1PreparedStatement[] = [];
@@ -251,21 +294,9 @@ async function pushLeads(request: Request, env: Env): Promise<Response> {
        WHERE lead_inbox.content_hash <> excluded.content_hash`
     ).bind(sourceId, hash, payload));
   }
-  // A retraction becomes a PII-free tombstone with a new seq, even for ids never seen or already purged,
-  // so a client that received the lead earlier still hears about it.
-  let retracted = 0;
-  for (const sourceId of retractIds) {
-    if (known.get(sourceId)?.retracted === 1) continue;
-    retracted += 1;
-    statements.push(env.DB.prepare("UPDATE lead_inbox_counter SET value = value + 1 WHERE id = 1"));
-    statements.push(env.DB.prepare(
-      `INSERT INTO lead_inbox (source_id, content_hash, seq, payload_json, updated_at, acked_at, retracted)
-       VALUES (?, 'retracted', (SELECT value FROM lead_inbox_counter WHERE id = 1), NULL, datetime('now'), NULL, 1)
-       ON CONFLICT(source_id) DO UPDATE SET content_hash = 'retracted', seq = excluded.seq, payload_json = NULL,
-         updated_at = excluded.updated_at, acked_at = NULL, retracted = 1
-       WHERE lead_inbox.retracted = 0`
-    ).bind(sourceId));
-  }
+  const tomb = tombstones(env, retractIds, known);
+  statements.push(...tomb.statements);
+  const retracted = tomb.retracted;
   try {
     if (statements.length) await env.DB.batch(statements);
   } catch {

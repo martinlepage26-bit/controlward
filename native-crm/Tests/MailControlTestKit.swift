@@ -119,7 +119,7 @@ enum ProjectFixture {
 /// S1-R7 source scan: no mail HTML may be rendered or imported except through MailBodyText (plain text after the sanitizer).
 /// WKWebView itself is allowed (the Project Control bridge loads its own https page); loading an HTML string is not.
 enum HTMLImportScan {
-    static let patterns = ["DocumentType.html", "NSAttributedString(data:"]
+    static let patterns = ["DocumentType.html", "NSAttributedString(data:", "NSAttributedString(html:", "loadHTMLString"]
 
     static func findings(in source: String) -> [String] { patterns.filter { source.contains($0) } }
 

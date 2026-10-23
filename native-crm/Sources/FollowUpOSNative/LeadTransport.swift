@@ -18,10 +18,17 @@ protocol LeadTransport: Sendable {
     func send(_ request: URLRequest) async throws -> LeadHTTPResponse
 }
 
-/// Ephemeral session: no cookies and no URL cache, so fetched pages never land in a shared cache.
+/// Ephemeral session: no cookies and no URL cache, so fetched pages never land in a shared cache. Redirects are never
+/// followed here: every 30x goes back to `GuardedLeadTransport`, which re-admits and robots-checks each hop (Argus must-fix 3).
 struct URLSessionLeadTransport: LeadTransport {
-    /// Red stub: the default session follows redirects on its own.
-    static let followsRedirects = true
+    static let followsRedirects = false
+
+    private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
 
     /// One ephemeral session for the process: no cookies, no cache. Creating and dropping a session per request
     /// crashes swift-corelibs-foundation on Linux (_MultiHandle over-release) and wastes connections on macOS.
@@ -31,7 +38,7 @@ struct URLSessionLeadTransport: LeadTransport {
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.timeoutIntervalForRequest = 20
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
     }()
 
     func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
@@ -39,7 +46,7 @@ struct URLSessionLeadTransport: LeadTransport {
         let http = response as? HTTPURLResponse
         var headers: [String: String] = [:]
         for (key, value) in http?.allHeaderFields ?? [:] { headers[String(describing: key).lowercased()] = String(describing: value) }
-        return LeadHTTPResponse(status: http?.statusCode ?? 0, headers: headers, body: data)
+        return LeadHTTPResponse(status: http?.statusCode ?? 0, headers: headers, body: data, url: http?.url ?? request.url)
     }
 }
 
@@ -122,8 +129,49 @@ final class GuardedLeadTransport: @unchecked Sendable {
         }
     }
 
+    /// At most this many 30x hops are followed; each hop is admitted and robots-checked like a first request.
+    static let maxRedirects = 3
+
     func fetch(_ url: URL, purpose: FetchPurpose, method: String = "GET", body: Data? = nil,
                headers: [String: String] = [:], maxBytes: Int? = nil) async throws -> LeadHTTPResponse {
+        var current = url
+        var hops = 0
+        while true {
+            var response = try await fetchOne(current, purpose: purpose, method: method, body: body, headers: headers, maxBytes: maxBytes)
+            if (300..<400).contains(response.status), let location = response.headers["location"] {
+                let next = URL(string: location, relativeTo: current)?.absoluteURL
+                if let refusal = redirectRefusal(from: current, to: next, purpose: purpose) { log(current, method: method, purpose: purpose, result: refusal.code); throw refusal }
+                guard hops < Self.maxRedirects else {
+                    let refusal = LeadPipelineRefusal(code: "refused:redirect-limit", detail: "more than \(Self.maxRedirects) redirects")
+                    log(current, method: method, purpose: purpose, result: refusal.code)
+                    throw refusal
+                }
+                hops += 1
+                current = next!
+                continue
+            }
+            if let final = response.url, final.absoluteString != current.absoluteString,
+               let refusal = redirectRefusal(from: current, to: final, purpose: purpose) {
+                log(current, method: method, purpose: purpose, result: refusal.code)
+                throw refusal
+            }
+            response.url = response.url ?? current
+            return response
+        }
+    }
+
+    /// A hop stays on the business's own domain (own-site) or on the same host (every other purpose).
+    func redirectRefusal(from: URL, to: URL?, purpose: FetchPurpose) -> LeadPipelineRefusal? {
+        let offSite = LeadPipelineRefusal(code: "refused:redirect-off-site", detail: to?.host ?? "-")
+        guard let to, let host = to.host?.lowercased(), !host.isEmpty else { return offSite }
+        if case .ownSite(let domain) = purpose {
+            return HostMatch.belongs(host, to: domain) && Self.ownSiteHostRefusal(to) == nil ? nil : offSite
+        }
+        return host == from.host?.lowercased() ? nil : offSite
+    }
+
+    private func fetchOne(_ url: URL, purpose: FetchPurpose, method: String, body: Data?,
+                          headers: [String: String], maxBytes: Int?) async throws -> LeadHTTPResponse {
         let host = url.host?.lowercased() ?? ""
         do {
             try admit(url, host: host, purpose: purpose, method: method, body: body)
@@ -145,7 +193,8 @@ final class GuardedLeadTransport: @unchecked Sendable {
             }
             let limit = maxBytes ?? config.etiquette.maxResponseBytes
             if response.body.count > limit { throw LeadPipelineRefusal(code: "refused:response-too-large") }
-            log(url, method: method, purpose: purpose, result: (200..<300).contains(response.status) ? "ok" : "error:\(response.status)", at: receivedAt)
+            let result = (200..<300).contains(response.status) ? "ok" : (300..<400).contains(response.status) ? "redirect:\(response.status)" : "error:\(response.status)"
+            log(url, method: method, purpose: purpose, result: result, at: receivedAt)
             return response
         } catch let refusal as LeadPipelineRefusal {
             log(url, method: method, purpose: purpose, result: refusal.code)
@@ -158,13 +207,35 @@ final class GuardedLeadTransport: @unchecked Sendable {
 
     // MARK: - Admission
 
-    /// Own-site host check (SSRF). Red stub: admits everything.
-    static func ownSiteHostRefusal(_ url: URL) -> LeadPipelineRefusal? { nil }
+    /// Own-site host check (Argus must-fix 2, SSRF). A business website is a public DNS name on the default port, so this refuses
+    /// IP literals in any spelling (dotted, decimal, octal, hex, IPv6), single-label hosts, internal suffixes, user info and
+    /// non-default ports, before anything reaches the network.
+    static let internalSuffixes = ["local", "localhost", "internal", "lan", "home.arpa", "arpa", "localdomain", "intranet"]
+
+    static func ownSiteHostRefusal(_ url: URL) -> LeadPipelineRefusal? {
+        func refuse(_ why: String) -> LeadPipelineRefusal { LeadPipelineRefusal(code: "refused:own-site-host", detail: why) }
+        var host = (url.host ?? "").lowercased()
+        if host.hasPrefix("[") || host.contains(":") { return refuse("IPv6 literal") }
+        while host.hasSuffix(".") { host.removeLast() }
+        guard !host.isEmpty else { return refuse("no host") }
+        if url.user != nil || url.password != nil { return refuse("user info in the URL") }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if let port = url.port, port != (scheme == "https" ? 443 : scheme == "http" ? 80 : -1) { return refuse("non-default port \(port)") }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        if labels.contains(where: \.isEmpty) { return refuse("empty label") }
+        guard labels.count >= 2 else { return refuse("single-label host") }
+        // A real top-level domain is never numeric, so a numeric or 0x last label means an IPv4 literal in some spelling.
+        let last = labels[labels.count - 1]
+        if last.allSatisfy(\.isNumber) || last.hasPrefix("0x") { return refuse("IP literal") }
+        if internalSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return refuse("internal name") }
+        return nil
+    }
 
     func admit(_ url: URL, host: String, purpose: FetchPurpose, method: String, body: Data?) throws {
         guard let scheme = url.scheme?.lowercased(), scheme == "https" || (scheme == "http" && purpose != .gmail) else {
             throw LeadPipelineRefusal(code: "refused:scheme")
         }
+        if case .ownSite = purpose, let refusal = Self.ownSiteHostRefusal(url) { throw refusal }
         if config.isNeverFetch(host: host) { throw LeadPipelineRefusal(code: "refused:crawl-linkedin", detail: config.etiquette.linkedinNote) }
         if let denied = config.deniedHost(host) { throw LeadPipelineRefusal(code: "refused:denied-host", detail: denied.reason) }
         if lock.withLock({ challenged.contains(host) }) { throw LeadPipelineRefusal(code: "refused:bot-challenge", detail: "earlier challenge on \(host)") }
@@ -225,7 +296,11 @@ final class GuardedLeadTransport: @unchecked Sendable {
                 var request = URLRequest(url: robotsURL)
                 request.setValue(config.etiquette.userAgent, forHTTPHeaderField: "User-Agent")
                 request.timeoutInterval = 15
-                if let response = try? await inner.send(request) {
+                // RFC 9309: robots.txt that cannot be reached (5xx or no answer) means the whole site is disallowed;
+                // 401 and 403 too. A 4xx otherwise (404) means there is no robots.txt, so the site is allowed.
+                let disallowAll = RobotsRules(groups: [.init(agents: ["*"], rules: [(false, "/")], crawlDelay: nil)])
+                do {
+                    let response = try await inner.send(request)
                     lock.withLock { lastRequest[host] = clock.now }
                     if Self.isBotChallenge(response) {
                         lock.withLock { _ = challenged.insert(host) }
@@ -235,7 +310,12 @@ final class GuardedLeadTransport: @unchecked Sendable {
                     log(robotsURL, method: "GET", purpose: .ownSite(domain: host), result: (200..<300).contains(response.status) ? "ok" : "error:\(response.status)")
                     if (200..<300).contains(response.status) { parsed = RobotsRules.parse(String(decoding: response.body, as: UTF8.self)) }
                     // A 401 or 403 on robots.txt means the site does not want crawlers: treat everything as disallowed.
-                    if response.status == 401 || response.status == 403 { parsed = RobotsRules(groups: [.init(agents: ["*"], rules: [(false, "/")], crawlDelay: nil)]) }
+                    if response.status == 401 || response.status == 403 || response.status >= 500 { parsed = disallowAll }
+                } catch let refusal as LeadPipelineRefusal {
+                    throw refusal
+                } catch {
+                    log(robotsURL, method: "GET", purpose: .ownSite(domain: host), result: "error:network")
+                    parsed = disallowAll
                 }
             }
             rules = parsed

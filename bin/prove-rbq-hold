@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Proves the RBQ conflict hold on a real file, on the Mac, without printing any name (Water, 6:55 AM ET).
+#
+#   bin/prove-rbq-hold ~/Downloads/rbq-licences.json
+#
+# Compiles the same pipeline sources the app uses (bin/portable-sources.sh) plus Tools/RBQHoldProof/main.swift, parses the
+# file with the app's parser and icp.json, and prints: licences read, licences held, and the count per held code.
+# Exit 0 when the file parses; exit 2 when it is refused (refused:open-data-schema), which in the app holds every
+# construction/trades firm. No network, no writes outside native-crm/.build.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+SOURCE_ROOT="$PROJECT_ROOT/native-crm/Sources/FollowUpOSNative"
+BUILD_ROOT="$PROJECT_ROOT/native-crm/.build/rbq-hold-proof"
+BINARY="$BUILD_ROOT/controlward-rbq-hold-proof"
+source "$SCRIPT_DIR/portable-sources.sh"
+
+if [ "$#" -lt 1 ]; then
+  echo "usage: bin/prove-rbq-hold <path to the RBQ JSON file>" >&2
+  exit 64
+fi
+
+mkdir -p "$BUILD_ROOT"
+sources=()
+for file in "${PORTABLE_SOURCES[@]}"; do sources+=("$SOURCE_ROOT/$file"); done
+swiftc -swift-version 6 -O "${sources[@]}" "$PROJECT_ROOT/native-crm/Tools/RBQHoldProof/main.swift" -o "$BINARY"
+exec "$BINARY" --config "$SOURCE_ROOT/Resources/config" "$@"

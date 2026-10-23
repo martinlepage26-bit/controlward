@@ -16,6 +16,9 @@ enum LeadDefinition {
         if let area = conflictArea(for: prospect, config: config) {
             return Verdict(status: .conflictReview, reasons: ["conflict area: \(area.id)"])
         }
+        if let area = rbqUnchecked(prospect, config: config) {
+            return Verdict(status: .conflictReview, reasons: ["conflict area: \(area.id) (RBQ check: \(prospect.rbqCheck ?? "not run"))"])
+        }
         var reasons: [String] = []
         reasons += sourceEvidence(prospect)
         if let reason = namedPerson(prospect, segment: segment, config: config) { reasons.append(reason) }
@@ -83,8 +86,15 @@ enum LeadDefinition {
         return calendar.isDate(a, inSameDayAs: b)
     }
 
+    /// Argus must-fix 1 (fail closed): a segment listed in an area's `rbq_required_segments` is held unless the RBQ lookup ran and
+    /// matched a licence. No file, an unreadable file, a parse error or no match all go to conflict review, never to Ready.
+    static func rbqUnchecked(_ prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
+        guard prospect.rbqCheck != "matched", let segment = prospect.segment else { return nil }
+        return config.conflictAreas.first { ($0.rbqRequiredSegments ?? []).contains(segment) }
+    }
+
     /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area are held for Martin. RBQ licences hold on
-    /// exact sub-category codes from config (grouped per licence by the parser), never on words.
+    /// exact sub-category codes from config (one JSON record per licence), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
         let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
         let codes = Set(prospect.rbqCategories.map(RBQOpenData.normalizeCode))

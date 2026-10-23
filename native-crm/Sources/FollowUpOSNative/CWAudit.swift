@@ -74,19 +74,27 @@ final class FileAuditSink: CWAuditSink, @unchecked Sendable {
     let url: URL
     private let lock = NSLock()
     private var failed: [String] = []
-    /// Every write that did not reach the file (red stub: always empty).
+    /// Every write that did not reach the file (Argus red 12). Each failure is also printed to stderr, never dropped.
     var failures: [String] { lock.withLock { failed } }
     init(url: URL) { self.url = url }
     func write(_ line: CWAuditLine) {
         lock.withLock {
             let data = Data((line.text + "\n").utf8)
             let manager = FileManager.default
-            try? manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if !manager.fileExists(atPath: url.path) { _ = manager.createFile(atPath: url.path, contents: nil) }
-            guard let handle = try? FileHandle(forWritingTo: url) else { return }
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
+            do {
+                try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if !manager.fileExists(atPath: url.path), !manager.createFile(atPath: url.path, contents: nil) {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                _ = try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                let failure = "audit write failed (\(url.lastPathComponent)): \(line.surface)/\(line.action) result=\(line.result): \(error.localizedDescription)"
+                failed.append(failure)
+                FileHandle.standardError.write(Data(("CW-AUDIT " + failure + "\n").utf8))
+            }
         }
     }
 }

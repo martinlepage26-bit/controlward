@@ -65,7 +65,7 @@ struct ProspectSearchRun: Sendable {
                 report.skipped[candidate.osmID] = "no own website on the listing"
                 continue
             }
-            if config.isNeverFetch(host: host) || config.deniedHost(host) != nil {
+            if config.isNeverFetch(host: host) || config.deniedHost(host) != nil || GuardedLeadTransport.ownSiteHostRefusal(siteURL) != nil {
                 report.skipped[candidate.osmID] = "website host not fetchable"
                 continue
             }
@@ -83,7 +83,13 @@ struct ProspectSearchRun: Sendable {
             }
             place.usableWebsite = true
             var record = Self.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: runID)
-            if let source = RBQOpenData.source(config), let rbq { rbq.enrich(&record, municipality: candidate.city, source: source) }
+            if let rbqFailure {
+                record.rbqCheck = "error:\(rbqFailure)"
+            } else if let source = RBQOpenData.source(config), let rbq {
+                rbq.enrich(&record, municipality: candidate.city, source: source)
+            } else {
+                record.rbqCheck = "unavailable"
+            }
             if let tender = TenderWatcher.openTender(for: record.organisation, in: watchItems, now: clock.now) { record.openTenderURL = tender.link }
             let verdict = LeadDefinition.evaluate(record, config: config, now: clock.now)
             record.status = verdict.status
@@ -116,6 +122,7 @@ struct ProspectSearchRun: Sendable {
         var components = URLComponents()
         components.scheme = url.scheme
         components.host = url.host
+        components.port = url.port
         components.path = "/"
         return components.url
     }
@@ -129,7 +136,7 @@ struct ProspectSearchRun: Sendable {
                 guard (200..<300).contains(response.status) else { continue }
                 let type = response.headers["content-type"]?.lowercased() ?? "text/html"
                 guard type.contains("html") else { continue }
-                let page = SiteExtractor.read(html: String(decoding: response.body, as: UTF8.self), url: url, fetchedAt: response.fetchedAt)
+                let page = SiteExtractor.read(html: String(decoding: response.body, as: UTF8.self), url: response.url ?? url, fetchedAt: response.fetchedAt)
                 transport.registerSensitive(page.emails + page.phones + page.people.map(\.name) + [page.address].compactMap { $0 }
                                             + page.text.components(separatedBy: "\n").filter { $0.count >= 12 })
                 pages.append(page)

@@ -9,16 +9,16 @@ struct RBQLicence: Codable, Equatable, Sendable {
     var municipality: String
     var regionCode: String
     var region: String
-    /// "Categorie" values seen on the licence's rows (Specialisee / Generale).
+    /// "Categorie" values on the licence (Specialisee / Generale).
     var licenceClasses: [String] = []
-    /// Sub-category codes of the whole licence ("15.5", "2.5", "GPC" ...), grouped across rows.
+    /// Sub-category codes of the licence ("15.5", "2.5", "GPC" ...). The JSON file has one record per licence.
     var subcategories: [String]
     /// Always `RBQ / Données Québec, CC BY 4.0`.
     var provenance: String
 }
 
 /// The RBQ active-licence file from Données Québec (CC BY 4.0). Water and Earth ruled it on (Oct 23, 6:10 AM ET):
-/// only the two fixed download URLs, a 10 s delay, at most one download a day, stream-parsed from a local cache.
+/// only the one fixed JSON download URL (Water, 6:55 AM ET: JSON only), a 10 s delay, at most one download a day, stream-parsed from a local cache.
 enum RBQOpenData {
     static let sourceID = "rbq_open_data"
 
@@ -60,23 +60,25 @@ enum RBQOpenData {
         return cacheFile(in: directory)
     }
 
-    /// Stream-parses the cached file in 1 MB chunks. The format (JSON or CSV) is read from the first byte. Rows are grouped by
-    /// "Numéro de licence" before anything is emitted, so a licence's sub-categories are complete when the hold looks at them.
-    /// A missing or unknown column throws refused:open-data-header; nothing is skipped silently.
+    /// Stream-parses the cached JSON file in 1 MB chunks, emitting one licence per record. Anything that is not the real
+    /// shape {"Liste Licence":[{"Licence":{...}}]} (a CSV, a missing, renamed or unknown key, a flat or truncated record, an
+    /// empty file) throws refused:open-data-schema. Nothing is skipped silently; the caller holds construction trades instead.
     static func parse(file: URL, source: ICPConfig.OpenDataSource, chunkSize: Int = 1 << 20, each: (RBQLicence) -> Void) throws {
         try checkFieldMap(source)
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
-        var reader = RBQReader(source: source)
-        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty { try reader.feed(chunk) }
-        try reader.finish().forEach(each)
+        var reader = try RBQReader(source: source)
+        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty { try reader.feed(chunk, each: each) }
+        try reader.finish()
     }
 
     static func parse(data: Data, source: ICPConfig.OpenDataSource) throws -> [RBQLicence] {
         try checkFieldMap(source)
-        var reader = RBQReader(source: source)
-        try reader.feed(data)
-        return try reader.finish()
+        var reader = try RBQReader(source: source)
+        var licences: [RBQLicence] = []
+        try reader.feed(data) { licences.append($0) }
+        try reader.finish()
+        return licences
     }
 
     /// The config may never map a role to a never-stored field (Courriel, phone, Mandataire ...).
@@ -87,27 +89,21 @@ enum RBQOpenData {
         }
     }
 
-    /// Roles every CSV header row must carry (one row per licence x sub-category).
-    static let csvRoles = ["licence_number", "name", "other_names", "municipality", "region_code", "region", "category", "subcategory"]
-    /// Roles every JSON licence record must carry (sub-categories nested in `subcategory_list`).
-    static let jsonRoles = ["licence_number", "name", "other_names", "municipality", "region_code", "region", "subcategory_list"]
+    static let schemaCode = "refused:open-data-schema"
+    static func schema(_ detail: String) -> LeadPipelineRefusal { LeadPipelineRefusal(code: schemaCode, detail: detail) }
 
-    static func headerRefusal(_ present: [String], roles: [String], source: ICPConfig.OpenDataSource, extraKnown: [String] = []) -> LeadPipelineRefusal? {
-        var missing: [String] = []
-        for role in roles {
-            guard let label = source.label(role) else { missing.append("<no label for \(role)>"); continue }
-            if !present.contains(label) { missing.append(label) }
-        }
-        var unknown: [String] = []
-        if let known = source.knownHeaders {
-            let allowed = Set(known + extraKnown)
-            unknown = present.filter { !allowed.contains($0) }
-        }
+    /// Roles every JSON licence record must carry (sub-categories nested in `subcategory_list`), plus the wrapper and nested keys.
+    static let jsonRoles = ["licence_number", "name", "other_names", "municipality", "region_code", "region", "subcategory_list"]
+    static let requiredLabels = jsonRoles + ["json_record", "category", "subcategory"]
+
+    static func keyRefusal(_ present: [String], source: ICPConfig.OpenDataSource) -> LeadPipelineRefusal? {
+        let missing = jsonRoles.compactMap { source.label($0) }.filter { !present.contains($0) }
+        let unknown = source.knownHeaders.map { known in present.filter { !known.contains($0) } } ?? []
         guard !missing.isEmpty || !unknown.isEmpty else { return nil }
         var parts: [String] = []
-        if !missing.isEmpty { parts.append("missing column(s): " + missing.joined(separator: ", ")) }
-        if !unknown.isEmpty { parts.append("unknown column(s): " + unknown.joined(separator: ", ")) }
-        return LeadPipelineRefusal(code: "refused:open-data-header", detail: parts.joined(separator: "; "))
+        if !missing.isEmpty { parts.append("missing key(s): " + missing.joined(separator: ", ")) }
+        if !unknown.isEmpty { parts.append("unknown key(s): " + unknown.sorted().joined(separator: ", ")) }
+        return schema(parts.joined(separator: "; "))
     }
 
     /// Sub-category codes compare trimmed and upper-cased, with a trailing ".0" dropped (RBQ's list writes "16.0", the file "16").
@@ -120,10 +116,6 @@ enum RBQOpenData {
     static func stringValue(_ raw: Any?) -> String {
         guard let raw else { return "" }
         return stringValue(raw)
-    }
-
-    static func splitList(_ text: String) -> [String] {
-        text.split(whereSeparator: { ";|\n".contains($0) }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     static func stringValue(_ raw: Any) -> String {
@@ -172,7 +164,11 @@ struct RBQIndex: Sendable {
 
     /// Adds licence categories and the attribution to a prospect. Never touches contact, route, address or person.
     func enrich(_ prospect: inout ProspectRecord, municipality: String?, source: ICPConfig.OpenDataSource) {
-        guard let licence = match(name: prospect.organisation, municipality: municipality) else { return }
+        guard let licence = match(name: prospect.organisation, municipality: municipality) else {
+            prospect.rbqCheck = "no-match"
+            return
+        }
+        prospect.rbqCheck = "matched"
         prospect.rbqCategories = licence.subcategories
         prospect.dataAttribution = source.attribution
     }
@@ -180,13 +176,16 @@ struct RBQIndex: Sendable {
 
 /// Splits a JSON document into the objects of its first array, without loading the whole file.
 struct JSONRecordSplitter {
-    private var depth = 0
     private var recordDepth: Int?
     private var inString = false
     private var escaped = false
     private var capturing = false
     private var buffer = Data()
     private var stack: [UInt8] = []
+    private var closed = false
+
+    /// True once the document's brackets balance and no record or string is left open.
+    var isComplete: Bool { closed && stack.isEmpty && !capturing && !inString }
 
     mutating func feed(_ chunk: Data, emit: (Data) -> Void) {
         for byte in chunk {
@@ -208,6 +207,7 @@ struct JSONRecordSplitter {
                 stack.append(byte)
             case 0x5D, 0x7D: // ] }
                 if !stack.isEmpty { stack.removeLast() }
+                if stack.isEmpty { closed = true }
                 if capturing, byte == 0x7D, let recordDepth, stack.count == recordDepth {
                     capturing = false
                     emit(buffer)
@@ -219,149 +219,71 @@ struct JSONRecordSplitter {
     }
 }
 
-/// Collects rows into one licence per "Numéro de licence", keeping first-seen order.
-struct RBQGrouper {
-    private var order: [String] = []
-    private var byNumber: [String: RBQLicence] = [:]
-    var count: Int { order.count }
-
-    mutating func add(number: String, name: String, otherNames: [String], municipality: String, regionCode: String, region: String,
-                      classes: [String], codes: [String], provenance: String) {
-        guard var licence = byNumber[number] else {
-            order.append(number)
-            byNumber[number] = RBQLicence(licenceNumber: number, name: name, otherNames: Self.unique(otherNames), municipality: municipality,
-                                          regionCode: regionCode, region: region, licenceClasses: Self.unique(classes),
-                                          subcategories: Self.unique(codes), provenance: provenance)
-            return
-        }
-        if licence.name.isEmpty { licence.name = name }
-        if licence.municipality.isEmpty { licence.municipality = municipality }
-        if licence.regionCode.isEmpty { licence.regionCode = regionCode }
-        if licence.region.isEmpty { licence.region = region }
-        licence.otherNames = Self.unique(licence.otherNames + otherNames)
-        licence.licenceClasses = Self.unique(licence.licenceClasses + classes)
-        licence.subcategories = Self.unique(licence.subcategories + codes)
-        byNumber[number] = licence
-    }
-
-    func licences() -> [RBQLicence] { order.compactMap { byNumber[$0] } }
-
-    private static func unique(_ values: [String]) -> [String] {
-        var seen = Set<String>()
-        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
-    }
-}
-
-/// Reads the RBQ file in either real shape and feeds the grouper. Fails loudly on a header it does not recognise.
+/// Reads the RBQ JSON file, one licence per record. Throws refused:open-data-schema on anything else.
 struct RBQReader {
-    private enum Format { case undecided, json, csv }
     let source: ICPConfig.OpenDataSource
-    private var format = Format.undecided
-    private var lead = Data()
+    private let wrapper: String, listLabel: String, categoryLabel: String, codeLabel: String
+    private let nestedKeys: Set<String>
+    private var started = false
     private var json = JSONRecordSplitter()
-    private var csv = CSVRowSplitter()
-    private var columns: [String: Int]?
-    private var headerWidth = 0
-    private var rows = 0
+    private var records = 0
     private var error: LeadPipelineRefusal?
-    private var grouper = RBQGrouper()
 
-    init(source: ICPConfig.OpenDataSource) { self.source = source }
-
-    mutating func feed(_ chunk: Data) throws {
-        if let error { throw error }
-        if format == .undecided {
-            lead.append(chunk)
-            guard let first = lead.first(where: { !Self.skippable($0) }) else { return }
-            format = (first == 0x7B || first == 0x5B) ? .json : .csv
-            let pending = lead
-            lead = Data()
-            try consume(pending)
-        } else {
-            try consume(chunk)
-        }
+    init(source: ICPConfig.OpenDataSource) throws {
+        self.source = source
+        let missing = RBQOpenData.requiredLabels.filter { source.label($0) == nil }
+        guard missing.isEmpty else { throw RBQOpenData.schema("no label for: " + missing.joined(separator: ", ")) }
+        wrapper = source.label("json_record")!
+        listLabel = source.label("subcategory_list")!
+        categoryLabel = source.label("category")!
+        codeLabel = source.label("subcategory")!
+        nestedKeys = Set(source.knownSubcategoryKeys ?? [categoryLabel, codeLabel])
     }
 
-    mutating func finish() throws -> [RBQLicence] {
+    mutating func feed(_ chunk: Data, each: (RBQLicence) -> Void) throws {
         if let error { throw error }
-        if format == .csv {
-            var tail: [[String]] = []
-            csv.finish { tail.append($0) }
-            for row in tail { try csvRow(row) }
+        var bytes = chunk[...]
+        if !started {
+            guard let first = bytes.firstIndex(where: { !Self.skippable($0) }) else { return }
+            guard bytes[first] == 0x7B || bytes[first] == 0x5B else { throw fail(RBQOpenData.schema("not a JSON file (a CSV or other format)")) }
+            started = true
+            bytes = bytes[first...]
         }
-        guard grouper.count > 0 else {
-            throw LeadPipelineRefusal(code: "refused:open-data-header", detail: format == .undecided ? "empty file" : "no licence records found")
-        }
-        return grouper.licences()
+        var objects: [Data] = []
+        json.feed(Data(bytes)) { objects.append($0) }
+        for object in objects { each(try licence(object)) }
+    }
+
+    mutating func finish() throws {
+        if let error { throw error }
+        guard started else { throw fail(RBQOpenData.schema("empty file")) }
+        guard json.isComplete else { throw fail(RBQOpenData.schema("truncated file after \(records) record(s)")) }
+        guard records > 0 else { throw fail(RBQOpenData.schema("no licence records found")) }
     }
 
     private static func skippable(_ byte: UInt8) -> Bool { byte == 0xEF || byte == 0xBB || byte == 0xBF || byte == 0x20 || byte == 0x0A || byte == 0x0D || byte == 0x09 }
 
-    private mutating func consume(_ chunk: Data) throws {
-        switch format {
-        case .json:
-            var records: [Data] = []
-            json.feed(chunk) { records.append($0) }
-            for record in records { try jsonRecord(record) }
-        case .csv:
-            var batch: [[String]] = []
-            csv.feed(chunk) { batch.append($0) }
-            for row in batch { try csvRow(row) }
-        case .undecided: break
-        }
-    }
-
     private mutating func fail(_ refusal: LeadPipelineRefusal) -> LeadPipelineRefusal { error = refusal; return refusal }
 
-    private mutating func csvRow(_ row: [String]) throws {
-        if row.count == 1 && row[0].isEmpty { return }
-        guard let columns else {
-            if let refusal = RBQOpenData.headerRefusal(row, roles: RBQOpenData.csvRoles, source: source) { throw fail(refusal) }
-            var map: [String: Int] = [:]
-            for (index, label) in row.enumerated() where map[label] == nil { map[label] = index }
-            self.columns = map
-            headerWidth = row.count
-            return
-        }
-        rows += 1
-        guard row.count == headerWidth else {
-            throw fail(LeadPipelineRefusal(code: "refused:open-data-row", detail: "row \(rows) has \(row.count) columns, header has \(headerWidth)"))
-        }
-        func value(_ role: String) -> String {
-            guard let label = source.label(role), let index = columns[label] else { return "" }
-            return row[index].trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        try add(number: value("licence_number"), name: value("name"), otherNames: RBQOpenData.splitList(value("other_names")),
-                municipality: value("municipality"), regionCode: value("region_code"), region: value("region"),
-                classes: [value("category")], codes: [value("subcategory")])
-    }
-
-    private mutating func jsonRecord(_ object: Data) throws {
-        rows += 1
+    private mutating func licence(_ object: Data) throws -> RBQLicence {
+        records += 1
         guard let outer = (try? JSONSerialization.jsonObject(with: object)) as? [String: Any] else {
-            throw fail(LeadPipelineRefusal(code: "refused:open-data-header", detail: "record \(rows) is not a JSON object"))
+            throw fail(RBQOpenData.schema("record \(records) is not a JSON object"))
         }
-        let wrapper = source.label("json_record")
-        guard let record = wrapper.map({ outer[$0] as? [String: Any] }) ?? outer else {
-            throw fail(LeadPipelineRefusal(code: "refused:open-data-header",
-                                           detail: "record \(rows) is not {\"\(wrapper ?? "")\":{...}}; keys: \(outer.keys.sorted().joined(separator: ", "))"))
+        guard outer.count == 1, let record = outer[wrapper] as? [String: Any] else {
+            throw fail(RBQOpenData.schema("record \(records) is not {\"\(wrapper)\":{...}}; keys: \(outer.keys.sorted().joined(separator: ", "))"))
         }
-        if let refusal = RBQOpenData.headerRefusal(Array(record.keys), roles: RBQOpenData.jsonRoles, source: source) { throw fail(refusal) }
+        if let refusal = RBQOpenData.keyRefusal(Array(record.keys), source: source) { throw fail(refusal) }
         func value(_ role: String) -> String { source.label(role).map { RBQOpenData.stringValue(record[$0]) } ?? "" }
         var classes: [String] = [], codes: [String] = []
-        let categoryLabel = source.label("category") ?? "", codeLabel = source.label("subcategory") ?? ""
-        if let listLabel = source.label("subcategory_list"), let raw = record[listLabel], !(raw is NSNull) {
-            guard let items = raw as? [Any] else {
-                throw fail(LeadPipelineRefusal(code: "refused:open-data-header", detail: "'\(listLabel)' is not a list in record \(rows)"))
-            }
+        if let raw = record[listLabel], !(raw is NSNull) {
+            guard let items = raw as? [Any] else { throw fail(RBQOpenData.schema("'\(listLabel)' is not a list in record \(records)")) }
             for item in items {
-                guard let entry = item as? [String: Any] else {
-                    throw fail(LeadPipelineRefusal(code: "refused:open-data-header", detail: "'\(listLabel)' entry is not an object in record \(rows)"))
-                }
-                let unknown = entry.keys.filter { $0 != categoryLabel && $0 != codeLabel }
+                guard let entry = item as? [String: Any] else { throw fail(RBQOpenData.schema("'\(listLabel)' entry is not an object in record \(records)")) }
+                let unknown = entry.keys.filter { !nestedKeys.contains($0) }
                 guard entry[codeLabel] != nil, unknown.isEmpty else {
-                    let detail = entry[codeLabel] == nil ? "missing column(s): \(codeLabel)" : "unknown column(s): \(unknown.sorted().joined(separator: ", "))"
-                    throw fail(LeadPipelineRefusal(code: "refused:open-data-header", detail: "\(detail) in '\(listLabel)', record \(rows)"))
+                    let detail = entry[codeLabel] == nil ? "missing key(s): \(codeLabel)" : "unknown key(s): \(unknown.sorted().joined(separator: ", "))"
+                    throw fail(RBQOpenData.schema("\(detail) in '\(listLabel)', record \(records)"))
                 }
                 classes.append(RBQOpenData.stringValue(entry[categoryLabel]))
                 codes.append(RBQOpenData.stringValue(entry[codeLabel]))
@@ -371,70 +293,17 @@ struct RBQReader {
         if let label = source.label("other_names"), let list = record[label] as? [Any] {
             otherNames = list.map { RBQOpenData.stringValue($0) }
         } else {
-            otherNames = RBQOpenData.splitList(value("other_names"))
+            otherNames = value("other_names").split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
         }
-        try add(number: value("licence_number"), name: value("name"), otherNames: otherNames, municipality: value("municipality"),
-                regionCode: value("region_code"), region: value("region"), classes: classes, codes: codes)
+        let number = value("licence_number")
+        guard !number.isEmpty else { throw fail(RBQOpenData.schema("record \(records) has no licence number")) }
+        return RBQLicence(licenceNumber: number, name: value("name"), otherNames: Self.unique(otherNames), municipality: value("municipality"),
+                          regionCode: value("region_code"), region: value("region"), licenceClasses: Self.unique(classes),
+                          subcategories: Self.unique(codes), provenance: source.label)
     }
 
-    private mutating func add(number: String, name: String, otherNames: [String], municipality: String, regionCode: String, region: String,
-                              classes: [String], codes: [String]) throws {
-        guard !number.isEmpty else {
-            throw fail(LeadPipelineRefusal(code: "refused:open-data-row", detail: "row \(rows) has no licence number"))
-        }
-        grouper.add(number: number, name: name, otherNames: otherNames, municipality: municipality, regionCode: regionCode, region: region,
-                    classes: classes, codes: codes, provenance: source.label)
-    }
-}
-
-/// Splits RFC 4180 CSV (quoted fields, doubled quotes, commas and newlines inside quotes, CRLF or LF) into rows, streaming.
-struct CSVRowSplitter {
-    private var field = Data()
-    private var row: [String] = []
-    private var inQuotes = false
-    private var quotePending = false
-    private var firstRow = true
-
-    mutating func feed(_ chunk: Data, emit: ([String]) -> Void) {
-        for byte in chunk {
-            if inQuotes {
-                if quotePending {
-                    quotePending = false
-                    if byte == 0x22 { field.append(0x22); continue }
-                    inQuotes = false
-                } else if byte == 0x22 {
-                    quotePending = true
-                    continue
-                } else {
-                    field.append(byte)
-                    continue
-                }
-            }
-            switch byte {
-            case 0x22 where field.isEmpty: inQuotes = true
-            case 0x2C: endField()
-            case 0x0A: endField(); emitRow(emit)
-            case 0x0D: break
-            default: field.append(byte)
-            }
-        }
-    }
-
-    mutating func finish(emit: ([String]) -> Void) {
-        if quotePending { quotePending = false; inQuotes = false }
-        if !field.isEmpty || !row.isEmpty { endField(); emitRow(emit) }
-    }
-
-    private mutating func endField() {
-        var text = String(decoding: field, as: UTF8.self)
-        if firstRow && row.isEmpty && text.hasPrefix("\u{FEFF}") { text.removeFirst() }
-        row.append(text)
-        field = Data()
-    }
-
-    private mutating func emitRow(_ emit: ([String]) -> Void) {
-        emit(row)
-        row = []
-        firstRow = false
+    private static func unique(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 }

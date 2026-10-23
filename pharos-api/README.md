@@ -14,10 +14,12 @@ Cloudflare Worker edge contract for the native Contextward workspace.
   consent withdrawn, disqualified) into PII-free tombstones.
   **Push provenance (S3-R16):** each lead item must be either `test: true` (synthetic)
   or an inbound form lead, `provenance: {kind: "inbound_form", form_source: "<form>"}`.
-  Anything else, including search or crawl provenance and unmarked leads, refuses the
-  whole packet with 422 `{error: "refused:push-not-inbound", index}` and writes
-  nothing. Prospect search runs inside ControlWard itself. The flags are checked,
-  never stored. A retract-only packet is still accepted.
+  Anything else, including search or crawl provenance and unmarked leads, refuses
+  every lead in the packet with 422 `{error: "refused:push-not-inbound", index, retracted}`
+  and stores no lead; the packet's `retract` list is still applied, so a withdrawal is
+  never lost. Prospect search runs inside ControlWard itself. Provenance is checked,
+  never stored. A test lead is stored and served with `test: true` in its event; a real
+  lead's event has no `test` key. A retract-only packet is still accepted.
 - `GET /v1/leads?since=<cursor>&limit=<n>` (Contextward key only): unacked leads
   after the cursor, `contextward.lead-inbox.v1`, with `epoch`, `cursor` and
   `has_more`. Tombstones arrive as `{source_id, seq, retracted: true}`. A new
