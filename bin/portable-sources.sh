@@ -1,0 +1,34 @@
+# Sourced by bin/test-portable. Every file listed here must compile without SwiftUI or AppKit.
+PORTABLE_SOURCES=(
+  Mailbox.swift
+  MailActionOutcome.swift
+  CWAudit.swift
+  LeadPipelineConfig.swift
+  LeadPipelineModels.swift
+  LeadDefinition.swift
+  Outreach.swift
+  LeadTransport.swift
+  RBQOpenData.swift
+  SiteExtractor.swift
+  LeadDiscovery.swift
+  TenderWatcher.swift
+  ProspectLeads.swift
+  ProspectSearchRun.swift
+  LeadProof.swift
+  LeadPipelineEnvironment.swift
+  ProspectResearch.swift
+  MailActionRunner.swift
+  MailActionPresentation.swift
+  ProjectControlWrites.swift
+)
+PORTABLE_TESTS=(
+  PortableCheck.swift
+  MailActionOutcomeTests.swift
+  LeadPipelineTestKit.swift
+  LeadPipelineTests.swift
+  LeadPipelinePlantedReds.swift
+  MailControlTestKit.swift
+  MailControlTests.swift
+  ProjectControlTests.swift
+  MailControlPlantedReds.swift
+)

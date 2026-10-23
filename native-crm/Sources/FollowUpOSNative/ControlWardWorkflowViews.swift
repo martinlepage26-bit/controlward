@@ -49,7 +49,17 @@ struct RecordProjectSheet: View {
                             } catch { self.error = error.localizedDescription }
                         }
                     }
-                    Button("Unlink") { perform { try store.unlinkProject(link.id) } }
+                    Button("Unlink") {
+                        perform {
+                            let sink = MemoryAuditSink()
+                            var failure: Error?
+                            ProjectControlWriter(bridge: projectBridge, sink: sink).link("unlink", recordKey: record.id, register: link.register, projectID: link.projectID) {
+                                do { try store.unlinkProject(link.id) } catch { failure = error; throw error }
+                            }
+                            store.recordAudit(sink.lines)
+                            if let failure { throw failure }
+                        }
+                    }
                 }.padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             }
             HStack {
@@ -69,7 +79,13 @@ struct RecordProjectSheet: View {
                 Button("Save link") {
                     perform {
                         guard let project = snapshot.projects.first(where: { $0.id == selected }) else { return }
-                        try store.linkProject(recordKey: record.id, register: snapshot.register, projectID: project.id, title: project.title)
+                        let sink = MemoryAuditSink()
+                        var failure: Error?
+                        ProjectControlWriter(bridge: projectBridge, sink: sink).link("link", recordKey: record.id, register: snapshot.register, projectID: project.id) {
+                            do { try store.linkProject(recordKey: record.id, register: snapshot.register, projectID: project.id, title: project.title) } catch { failure = error; throw error }
+                        }
+                        store.recordAudit(sink.lines)
+                        if let failure { throw failure }
                     }
                 }.disabled(selected.isEmpty)
             } else { Text("Connect your register in Projects before choosing a project.").font(.callout).foregroundStyle(.secondary) }
@@ -88,6 +104,7 @@ struct RecordProjectSheet: View {
         }
         .sheet(isPresented: $capture) { CaptureReviewSheet(recordKey: record.id, initial: capturePayload) }
     }
+    private var projectBridge: ClosureProjectBridge { ProjectControlBridges.live(modules.controller(for: .projects)) }
     private var capturePayload: ProjectCapture {
         if record.kind == "mail", let mail = store.mail.first(where: { $0.id == record.recordID }) { return mail.capture }
         if record.kind == "signals", let signal = store.signals.first(where: { $0.id == record.recordID }) {
@@ -163,15 +180,18 @@ struct CaptureReviewSheet: View {
         busy = true; result = nil
         Task {
             defer { busy = false }
-            do {
-                var payload = item; payload.metadata = item.metadata.filter { enabled.contains($0.key) }
-                let receipt = try await modules.controller(for: .projects).capture(payload, expectedRegister: destination)
-                sent = true
-                do {
-                    try store.recordCapture(recordKey: recordKey, register: receipt.register, itemID: receipt.id)
-                    result = receipt.duplicate ? "Already captured. The existing inbox item was retained." : "Captured. Open Projects to assign and review the item."
-                } catch { result = "The register confirmed the capture, but its local receipt could not be saved. The original source identity prevents duplicate delivery." }
-            } catch { result = error.localizedDescription }
+            var payload = item; payload.metadata = item.metadata.filter { enabled.contains($0.key) }
+            // Prechecks (register, source, loopback) run before any POST; one CW-AUDIT line per capture (S2-R1, S2-R2).
+            let sink = MemoryAuditSink()
+            let writer = ProjectControlWriter(bridge: ProjectControlBridges.live(modules.controller(for: .projects)), sink: sink)
+            let store = self.store
+            let key = recordKey
+            let outcome = await writer.capture(recordKey: key, item: payload, expectedRegister: destination) { receipt in
+                try store.recordCapture(recordKey: key, register: receipt.register, itemID: receipt.id)
+            }
+            store.recordAudit(sink.lines)
+            sent = outcome.receipt != nil
+            result = outcome.status
         }
     }
 }
@@ -267,7 +287,7 @@ private struct MailReviewDetail: View {
                 if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
         }.onAppear { contactID = mail.contactID; companyID = mail.companyID; reviewed = mail.reviewed }
-            .task(id: mail.id) { await actions.load(message: mail, intake: intake) }
+            .task(id: mail.id) { await actions.load(message: mail, intake: intake, store: store) }
             .sheet(isPresented: $showCapture) { CaptureReviewSheet(recordKey: "mail:\(mail.id.uuidString.lowercased())", initial: mail.capture) }
             .sheet(item: $compose) { request in
                 MailComposeSheet(action: request.action, initial: request.draft, onCancel: { compose = nil }, onSave: { draft in
@@ -332,9 +352,18 @@ private struct MailReviewDetail: View {
         }
     }
 
-    private func run(_ action: MailboxAction, draft: MailCompose?) async -> String? {
-        let resolution = MailActionResolver.resolve(action: action, sourceID: mail.sourceID, compose: draft, decision: .confirm)
-        guard case .ready(let command) = resolution else { return nil }
+    /// Only the dialog's confirm button reaches here for Send and Trash; Cancel, Escape and Return
+    /// (Cancel is the default) never call run (MailDialogDecisions, S1-R4).
+    private func run(_ action: MailboxAction, draft: MailCompose?, input: MailDialogInput = .confirmButton) async -> String? {
+        let command: MailCommand?
+        if action.requiresConfirmation {
+            command = MailDialogDecisions.command(input, in: action == .trash ? .trash : .send, action: action, sourceID: mail.sourceID, compose: draft)
+        } else if case .ready(let ready) = MailActionResolver.resolve(action: action, sourceID: mail.sourceID, compose: draft, decision: .confirm) {
+            command = ready
+        } else {
+            command = nil
+        }
+        guard let command else { return nil }
         return await actions.perform(command, store: store, localID: mail.id)
     }
 }
@@ -377,5 +406,15 @@ struct WorkspaceRecoveryControls: View {
             preview = "Backup from \(backup.createdAt): \(backup.workspace.contacts.count) contacts, \(backup.workspace.tasks.count) tasks, \(backup.workspace.controlWard.mail.count) messages."
             pending = data; confirm = true
         } catch { message = error.localizedDescription }
+    }
+}
+
+/// Wraps the WebKit Project Control controller as the portable capture bridge.
+enum ProjectControlBridges {
+    @MainActor
+    static func live(_ controller: WorkspaceWebController) -> ClosureProjectBridge {
+        ClosureProjectBridge(
+            snapshot: { refresh in try await controller.projectSnapshot(refresh: refresh) },
+            send: { item, expected in try await controller.capture(item, expectedRegister: expected) })
     }
 }

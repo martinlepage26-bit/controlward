@@ -14,7 +14,8 @@ let package = Package(
             path: "Sources/FollowUpOSNative",
             // ControlWardLogo loads controlward-mark.png. The SVG is source art and is not bundled.
             exclude: ["Resources/controlward-mark.svg"],
-            resources: [.process("Resources/controlward-mark.png"), .copy("Resources/ProjectControl")]
+            // Resources/config holds icp.json and icp.confirmed.json for the lead pipeline (Slice 3).
+            resources: [.process("Resources/controlward-mark.png"), .copy("Resources/ProjectControl"), .copy("Resources/config")]
         ),
     ]
 )

@@ -78,7 +78,7 @@ enum MailIntakeTests {
         func start() -> Bool {
             guard started else { return false }
             let handler = completion
-            nonisolated(unsafe) let results = results
+            let results = results
             DispatchQueue.global().async {
                 for r in results {
                     if !Thread.isMainThread { BackgroundFiringSession.firedOffMain += 1 }

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# One-command live proof of the Slice 3 lead pipeline (Earth's bar). Runs on the Mac; also builds on Linux.
+#
+#   bin/prove-lead-pipeline                      # all segments around Montréal, 3 sites each, fresh temp folder
+#   bin/prove-lead-pipeline --segment clinic --limit 5
+#   bin/prove-lead-pipeline --rbq-refresh        # also downloads the RBQ JSON once (fixed link, at most daily)
+#   bin/prove-lead-pipeline --verify-app "$HOME/Library/Containers/com.pharos.contextward/Data/Library/Application Support/ControlWard/leads"
+#
+# The proof compiles the same pipeline sources the app uses (bin/portable-sources.sh) plus Tools/LeadProof/main.swift.
+# It writes only to its own leads folder, never to the app's workspace, and it sends nothing.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+SOURCE_ROOT="$PROJECT_ROOT/native-crm/Sources/FollowUpOSNative"
+BUILD_ROOT="$PROJECT_ROOT/native-crm/.build/lead-proof"
+BINARY="$BUILD_ROOT/controlward-lead-proof"
+source "$SCRIPT_DIR/portable-sources.sh"
+
+mkdir -p "$BUILD_ROOT"
+sources=()
+for file in "${PORTABLE_SOURCES[@]}"; do sources+=("$SOURCE_ROOT/$file"); done
+swiftc -swift-version 6 -O "${sources[@]}" "$PROJECT_ROOT/native-crm/Tools/LeadProof/main.swift" -o "$BINARY"
+
+LOG_DIR="$PROJECT_ROOT/native-crm/.build/lead-proof/logs"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/proof-$(date +%Y%m%d-%H%M%S).log"
+set +e
+"$BINARY" --config "$SOURCE_ROOT/Resources/config" "$@" 2>&1 | tee "$LOG"
+status=${PIPESTATUS[0]}
+set -e
+echo "Log: $LOG"
+exit "$status"

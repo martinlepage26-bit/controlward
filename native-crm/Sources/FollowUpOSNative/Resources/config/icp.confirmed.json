@@ -1,0 +1,7 @@
+{
+  "schema": "controlward.icp.confirmed.v1",
+  "note": "The segment list Martin confirmed in D1 (Oct 23, 2026). icp.json is validated against it: a dropped segment or an unequal priority stops the search. Changing the ICP means changing both files, never Swift code.",
+  "confirmed_at": "2026-10-23",
+  "segments": ["university", "bank", "insurer", "public_body", "clinic", "construction_trades", "ai_governance_need"],
+  "equal_priority": true
+}

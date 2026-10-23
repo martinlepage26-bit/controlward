@@ -181,6 +181,7 @@ struct OverviewView: View {
                     kpi("checkmark.square", "Due this week", s.dueThisWeek, color: CWPalette.blue, dot: CWPalette.bronze)
                     kpi("waveform.path.ecg", "Follow-ups", s.followUps, color: CWPalette.red, dot: s.followUpsOverdue > 0 ? CWPalette.red : CWPalette.gray)
                 }
+                LeadFunnelStrip()
                 RatioRow(leading: OverviewSnapshot.middleRowSplit, spacing: 14) {
                     nextActions(s).frame(minHeight: 120, alignment: .top)
                     pipelineOverview(s).frame(minHeight: 120, alignment: .top)
@@ -403,6 +404,38 @@ struct Avatar: View {
     var body: some View {
         Text(OverviewSnapshot.initials(name)).font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
             .frame(width: 30, height: 30).background(color, in: Circle())
+    }
+}
+
+/// Prospecting funnel read from the local Leads folder: stages, not raw row counts. Nothing leaves the Mac.
+struct LeadFunnelStrip: View {
+    @State private var funnel: LeadFunnel?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 18)).foregroundStyle(CWPalette.goldIcon)
+            Text("PROSPECTING").font(.system(size: 9, weight: .medium)).tracking(0.4).foregroundStyle(CWPalette.gray)
+            if let funnel {
+                ForEach(Array(funnel.stages.enumerated()), id: \.offset) { index, stage in
+                    if index > 0 { Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(CWPalette.gray) }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(stage.value)").font(.system(size: 18, weight: .semibold)).monospacedDigit().foregroundStyle(CWPalette.ink)
+                        Text(stage.label).font(.system(size: 9.5)).foregroundStyle(CWPalette.gray).lineLimit(1)
+                    }
+                }
+            } else {
+                Text("No local lead search yet.").font(.system(size: 10.5)).foregroundStyle(CWPalette.gray)
+            }
+            Spacer(minLength: 0)
+        }
+        .cwCard(12)
+        .task { load() }
+    }
+
+    private func load() {
+        guard let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle),
+              let environment = try? LeadPipelineEnvironment.load(configDirectory: directory) else { return }
+        funnel = environment.funnel()
     }
 }
 

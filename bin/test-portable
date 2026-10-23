@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Builds and runs the platform-neutral ControlWard tests (no SwiftUI, no AppKit).
+# Runs on macOS and on Linux with a Swift 6 toolchain. GitHub Actions is not used.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
+TEST_ROOT="${PROJECT_ROOT}/native-crm/Tests"
+BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/portable-tests"
+mkdir -p "${BUILD_ROOT}"
+
+source "${SCRIPT_DIR}/portable-sources.sh"
+
+swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
+  "${PORTABLE_SOURCES[@]/#/${SOURCE_ROOT}/}" \
+  "${PORTABLE_TESTS[@]/#/${TEST_ROOT}/}" \
+  "${TEST_ROOT}/PortableMain.swift" \
+  -o "${BUILD_ROOT}/PortableTests"
+
+source "${SCRIPT_DIR}/pharos-planted-reds.sh"
+
+"${BUILD_ROOT}/PortableTests" "$@"
