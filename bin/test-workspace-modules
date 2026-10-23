@@ -18,6 +18,8 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/GTMEvents.swift" \
   "${SOURCE_ROOT}/WorkspaceModulePolicy.swift" \
   "${SOURCE_ROOT}/ControlWardModels.swift" \
+  "${SOURCE_ROOT}/CWAudit.swift" \
+  "${SOURCE_ROOT}/ProjectControlWrites.swift" \
   "${SOURCE_ROOT}/ControlWardStore.swift" \
   "${SOURCE_ROOT}/MailIntake.swift" \
   "${SOURCE_ROOT}/WorkspaceWebController.swift" \
