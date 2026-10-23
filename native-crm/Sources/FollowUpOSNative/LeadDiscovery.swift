@@ -12,6 +12,8 @@ struct LeadCandidate: Equatable, Sendable {
     var discoveredVia: String
     /// OSM lifecycle tags or the name say the place no longer operates. Closed places are dropped by the run.
     var closed = false
+    /// The discovery endpoint that returned this place (an Overpass server or Photon), for the audit.
+    var provider: URL?
 }
 
 /// Overpass first (overpass.private.coffee, then overpass-api.de), then Photon (photon.komoot.io), per segment selector from icp.json.
@@ -34,6 +36,20 @@ struct LeadDiscovery: Sendable {
     /// Photon (unchanged, whole circle) when Overpass found nothing for that selector. Once both Overpass hosts have used up
     /// their retries in this search, the remaining cells and selectors go straight to Photon instead of retrying again.
     func search(selectors: [String], latitude: Double, longitude: Double, radiusMeters: Int, limit: Int) async -> [LeadCandidate] {
+        await searchWithOutcomes(selectors: selectors, latitude: latitude, longitude: longitude, radiusMeters: radiusMeters, limit: limit).candidates
+    }
+
+    /// Which provider actually answered for one selector (Earth 8:19): the Overpass server or Photon with result ok, or no
+    /// provider and the last real error.
+    struct SelectorOutcome: Equatable, Sendable {
+        var selector: String
+        var provider: URL?
+        var result: String
+    }
+
+    func searchWithOutcomes(selectors: [String], latitude: Double, longitude: Double, radiusMeters: Int,
+                            limit: Int) async -> (candidates: [LeadCandidate], outcomes: [SelectorOutcome]) {
+        var outcomes: [SelectorOutcome] = []
         let shape = transport.config.etiquette.discoveryQuery ?? .standard
         let cells = Self.tiles(latitude: latitude, longitude: longitude, radiusMeters: radiusMeters, tileRadiusMeters: shape.tileRadiusMeters)
         var out: [LeadCandidate] = []
@@ -42,32 +58,45 @@ struct LeadDiscovery: Sendable {
         for selector in selectors {
             let parts = selector.split(separator: "=", maxSplits: 1).map(String.init)
             guard parts.count == 2, Self.isTag(parts[0]), Self.isTag(parts[1]) else { continue }
-            var fromOverpass = 0
+            var overpassHits = 0
+            var answeredBy: URL?
+            var lastResult = overpassExhausted ? "error:overpass-exhausted" : "error:no-answer"
             if !overpassExhausted {
                 cellLoop: for cell in cells {
                     switch await overpass(key: parts[0], value: parts[1], tile: cell, limit: limit, shape: shape) {
-                    case .answered(let found):
-                        for candidate in found where Self.isInside(candidate, latitude: latitude, longitude: longitude, radiusMeters: radiusMeters)
-                            && seen.insert(candidate.osmID).inserted {
-                            out.append(candidate)
-                            fromOverpass += 1
-                        }
+                    case .answered(let found, let server):
+                        answeredBy = answeredBy ?? server
+                        let inside = found.filter { Self.isInside($0, latitude: latitude, longitude: longitude, radiusMeters: radiusMeters) }
+                        overpassHits += inside.count
+                        for candidate in inside where seen.insert(candidate.osmID).inserted { out.append(candidate) }
                         if out.count >= limit { break cellLoop }
-                    case .exhausted:
+                    case .exhausted(let last):
                         overpassExhausted = true
+                        lastResult = last
                         break cellLoop
-                    case .stopped:
+                    case .stopped(let last):
+                        lastResult = last
                         break cellLoop
                     }
                 }
             }
-            if fromOverpass == 0 {
-                let found = (try? await photon(key: parts[0], value: parts[1], latitude: latitude, longitude: longitude, limit: limit)) ?? []
+            // Photon only when Overpass returned nothing inside the circle for this selector (as before tiling).
+            if overpassHits == 0 {
+                let (found, photonResult) = await photonAudited(key: parts[0], value: parts[1], latitude: latitude, longitude: longitude, limit: limit)
                 for candidate in found where seen.insert(candidate.osmID).inserted { out.append(candidate) }
+                if photonResult == "ok" {
+                    outcomes.append(SelectorOutcome(selector: selector, provider: Self.photon, result: "ok"))
+                } else if let answeredBy {
+                    outcomes.append(SelectorOutcome(selector: selector, provider: answeredBy, result: "ok"))
+                } else {
+                    outcomes.append(SelectorOutcome(selector: selector, provider: nil, result: photonResult))
+                }
+            } else {
+                outcomes.append(SelectorOutcome(selector: selector, provider: answeredBy, result: answeredBy == nil ? lastResult : "ok"))
             }
             if out.count >= limit { break }
         }
-        return Array(out.prefix(limit))
+        return (Array(out.prefix(limit)), outcomes)
     }
 
     /// OSM keys and values only: letters, digits, `_`, `:` and `-`. Nothing else can reach a discovery host.
@@ -143,22 +172,18 @@ struct LeadDiscovery: Sendable {
         /// A refusal (allowlist, payload, bot challenge) or another 4xx: stop asking Overpass.
         case stop
 
-        var auditResult: String {
-            switch self {
-            case .answered: return "answered"
-            case .retryable: return "retryable"
-            case .stop: return "stop"
-            }
-        }
     }
+
+    /// The real result of one request for the audit: ok, error:<status>, error:network or the refusal code.
+    static func auditResult(status: Int) -> String { (200..<300).contains(status) ? "ok" : "error:\(status)" }
 
     /// What one cell's query produced across all servers.
     enum OverpassOutcome: Equatable, Sendable {
-        case answered([LeadCandidate])
-        /// Every server used up its retries.
-        case exhausted
-        /// A refusal or non-retryable 4xx.
-        case stopped
+        case answered([LeadCandidate], server: URL)
+        /// Every server used up its retries; the last attempt's real result.
+        case exhausted(String)
+        /// A refusal or non-retryable 4xx, with its real result.
+        case stopped(String)
     }
 
     /// Backoff before retry `retry` (1-based) on one host: base·2^(retry−1), stretched by up to `jitterFraction` (jitter in
@@ -179,45 +204,78 @@ struct LeadDiscovery: Sendable {
         let body = Data("data=\(query.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")".utf8)
         let policy = transport.config.etiquette.discoveryRetry ?? .standard
         let attemptsPerHost = 1 + max(policy.retriesPerHost, 0)
+        var last = "error:no-answer"
         for server in Self.overpassServers {
             var serverWait: Double?
             for number in 1...attemptsPerHost {
                 if number > 1 {
                     await transport.backoff(seconds: Self.backoffSeconds(retry: number - 1, policy: policy, jitter: jitter(), serverWait: serverWait))
                 }
-                let result = await attempt(server, body: body, via: "overpass \(key)=\(value)", timeout: shape.clientTimeoutSeconds)
-                transport.auditDiscoveryAttempt(server, attempt: number, of: attemptsPerHost, result: result.auditResult)
+                let meter = LeadWaitMeter()
+                let (result, audited) = await attempt(server, body: body, via: "overpass \(key)=\(value)", timeout: shape.clientTimeoutSeconds, meter: meter)
+                transport.auditDiscoveryAttempt(server, attempt: number, of: attemptsPerHost, result: audited, waitMilliseconds: meter.milliseconds)
+                last = audited
                 switch result {
-                case .answered(let found): return .answered(found)
-                case .stop: return .stopped
+                case .answered(let found): return .answered(found, server: server)
+                case .stop: return .stopped(audited)
                 case .retryable(let retryAfter): serverWait = retryAfter
                 }
             }
         }
-        return .exhausted
+        return .exhausted(last)
     }
 
-    func attempt(_ server: URL, body: Data, via: String, timeout: Double) async -> OverpassAttempt {
+    func attempt(_ server: URL, body: Data, via: String, timeout: Double, meter: LeadWaitMeter? = nil) async -> (OverpassAttempt, String) {
         do {
             let response = try await transport.fetch(server, purpose: .discovery, method: "POST", body: body,
-                                                     headers: ["Content-Type": "application/x-www-form-urlencoded"], timeout: timeout)
-            if (200..<300).contains(response.status) { return .answered(Self.parseOverpass(response.body, via: via)) }
-            if response.status == 429 || response.status >= 500 {
-                return .retryable(retryAfter: response.headers["retry-after"].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) })
+                                                     headers: ["Content-Type": "application/x-www-form-urlencoded"], timeout: timeout, meter: meter)
+            let audited = Self.auditResult(status: response.status)
+            if (200..<300).contains(response.status) {
+                let found = Self.parseOverpass(response.body, via: via).map { candidate -> LeadCandidate in
+                    var candidate = candidate
+                    candidate.provider = server
+                    return candidate
+                }
+                return (.answered(found), audited)
             }
-            return .stop
-        } catch is LeadPipelineRefusal {
-            return .stop
+            if response.status == 429 || response.status >= 500 {
+                return (.retryable(retryAfter: response.headers["retry-after"].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }), audited)
+            }
+            return (.stop, audited)
+        } catch let refusal as LeadPipelineRefusal {
+            return (.stop, refusal.code)
         } catch {
-            return .retryable(retryAfter: nil)
+            return (.retryable(retryAfter: nil), "error:network")
         }
     }
 
     func photon(key: String, value: String, latitude: Double, longitude: Double, limit: Int) async throws -> [LeadCandidate] {
-        guard let url = Self.photonURL(key: key, value: value, latitude: latitude, longitude: longitude, limit: limit) else { return [] }
-        let response = try await transport.fetch(url, purpose: .discovery)
-        guard (200..<300).contains(response.status) else { return [] }
-        return Self.parsePhoton(response.body, via: "photon \(key)=\(value)")
+        await photonAudited(key: key, value: value, latitude: latitude, longitude: longitude, limit: limit).candidates
+    }
+
+    /// One Photon request (unchanged query), audited like an Overpass attempt with its real result and wait.
+    func photonAudited(key: String, value: String, latitude: Double, longitude: Double, limit: Int) async -> (candidates: [LeadCandidate], result: String) {
+        guard let url = Self.photonURL(key: key, value: value, latitude: latitude, longitude: longitude, limit: limit) else { return ([], "refused:photon-url") }
+        let meter = LeadWaitMeter()
+        var found: [LeadCandidate] = []
+        var audited: String
+        do {
+            let response = try await transport.fetch(url, purpose: .discovery, meter: meter)
+            audited = Self.auditResult(status: response.status)
+            if (200..<300).contains(response.status) {
+                found = Self.parsePhoton(response.body, via: "photon \(key)=\(value)").map { candidate -> LeadCandidate in
+                    var candidate = candidate
+                    candidate.provider = Self.photon
+                    return candidate
+                }
+            }
+        } catch let refusal as LeadPipelineRefusal {
+            audited = refusal.code
+        } catch {
+            audited = "error:network"
+        }
+        transport.auditDiscoveryAttempt(Self.photon, attempt: 1, of: 1, result: audited, waitMilliseconds: meter.milliseconds)
+        return (found, audited)
     }
 
     /// The Photon request for one selector: the tag, the circle centre and the limit, nothing else.

@@ -3,6 +3,15 @@ import Foundation
 import FoundationNetworking
 #endif
 
+/// Measures how long one request actually waited on the network (send to answer or error), on the transport clock.
+final class LeadWaitMeter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seconds: Double?
+    func record(_ value: Double) { lock.withLock { seconds = value } }
+    /// Whole milliseconds, or nil when the request never reached the network (a refusal).
+    var milliseconds: Int? { lock.withLock { seconds.map { Int(($0 * 1000).rounded()) } } }
+}
+
 struct LeadHTTPResponse: Sendable {
     var status: Int
     var headers: [String: String]
@@ -135,20 +144,23 @@ final class GuardedLeadTransport: @unchecked Sendable {
 
     /// One audit line per Overpass attempt (Water 7:49), next to the transport's own fetch line, so a retry run reads
     /// attempt-1-of-3, attempt-2-of-3, ... per host.
-    func auditDiscoveryAttempt(_ server: URL, attempt: Int, of total: Int, result: String) {
+    /// The receipt also carries the request's measured wait (`wait-<ms>ms`, Earth 8:20; 0 when it never reached the network).
+    func auditDiscoveryAttempt(_ server: URL, attempt: Int, of total: Int, result: String, waitMilliseconds: Int?) {
         audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "discovery-attempt", register: CWAuditLine.register(for: server),
-                                target: server.host?.lowercased() ?? "-", source: "discovery", result: result, receipt: "attempt-\(attempt)-of-\(total)"))
+                                target: server.host?.lowercased() ?? "-", source: "discovery", result: result,
+                                receipt: "attempt-\(attempt)-of-\(total),wait-\(waitMilliseconds ?? 0)ms"))
     }
 
     /// At most this many 30x hops are followed; each hop is admitted and robots-checked like a first request.
     static let maxRedirects = 3
 
     func fetch(_ url: URL, purpose: FetchPurpose, method: String = "GET", body: Data? = nil,
-               headers: [String: String] = [:], maxBytes: Int? = nil, timeout: Double? = nil) async throws -> LeadHTTPResponse {
+               headers: [String: String] = [:], maxBytes: Int? = nil, timeout: Double? = nil,
+               meter: LeadWaitMeter? = nil) async throws -> LeadHTTPResponse {
         var current = url
         var hops = 0
         while true {
-            var response = try await fetchOne(current, purpose: purpose, method: method, body: body, headers: headers, maxBytes: maxBytes, timeout: timeout)
+            var response = try await fetchOne(current, purpose: purpose, method: method, body: body, headers: headers, maxBytes: maxBytes, timeout: timeout, meter: meter)
             if (300..<400).contains(response.status), let location = response.headers["location"] {
                 let next = URL(string: location, relativeTo: current)?.absoluteURL
                 if let refusal = redirectRefusal(from: current, to: next, purpose: purpose) { log(current, method: method, purpose: purpose, result: refusal.code); throw refusal }
@@ -182,7 +194,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
     }
 
     private func fetchOne(_ url: URL, purpose: FetchPurpose, method: String, body: Data?,
-                          headers: [String: String], maxBytes: Int?, timeout: Double?) async throws -> LeadHTTPResponse {
+                          headers: [String: String], maxBytes: Int?, timeout: Double?, meter: LeadWaitMeter?) async throws -> LeadHTTPResponse {
         let host = url.host?.lowercased() ?? ""
         do {
             try admit(url, host: host, purpose: purpose, method: method, body: body)
@@ -195,7 +207,15 @@ final class GuardedLeadTransport: @unchecked Sendable {
             request.timeoutInterval = timeout ?? Self.defaultTimeoutSeconds
             request.setValue(config.etiquette.userAgent, forHTTPHeaderField: "User-Agent")
             for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
-            var response = try await inner.send(request)
+            let sentAt = clock.now
+            var response: LeadHTTPResponse
+            do {
+                response = try await inner.send(request)
+            } catch {
+                meter?.record(clock.now.timeIntervalSince(sentAt))
+                throw error
+            }
+            meter?.record(clock.now.timeIntervalSince(sentAt))
             let receivedAt = clock.now
             response.fetchedAt = receivedAt
             lock.withLock { lastRequest[host] = receivedAt }

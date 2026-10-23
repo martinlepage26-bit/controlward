@@ -44,12 +44,22 @@ struct ProspectSearchRun: Sendable {
                                     result: "refused:unknown-segment", receipt: runID))
             return report
         }
-        audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search", register: CWAuditLine.register(for: LeadDiscovery.overpass),
-                                target: segment.id, source: "controlward", result: "ok", receipt: runID))
-        let candidates = await LeadDiscovery(transport: transport).search(selectors: segment.osmSelectors, latitude: request.latitude,
-                                                                          longitude: request.longitude, radiusMeters: request.radiusMeters,
-                                                                          limit: request.limit)
+        let (candidates, outcomes) = await LeadDiscovery(transport: transport).searchWithOutcomes(
+            selectors: segment.osmSelectors, latitude: request.latitude, longitude: request.longitude,
+            radiusMeters: request.radiusMeters, limit: request.limit)
+        // One search line per selector naming the provider that actually answered (Earth 8:19); no provider means an error result.
+        for outcome in outcomes {
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search", register: outcome.provider.map { CWAuditLine.register(for: $0) } ?? "-",
+                                    target: segment.id, source: "controlward", result: outcome.result, receipt: runID))
+        }
         report.candidates = candidates.count
+        // Every skipped candidate is audited with its provider, map id and reason (Earth 8:19).
+        func skip(_ candidate: LeadCandidate, _ reason: String) {
+            report.skipped[candidate.osmID] = reason
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "skip", register: candidate.provider.map { CWAuditLine.register(for: $0) } ?? "-",
+                                    target: candidate.osmID, source: candidate.provider?.host?.lowercased() ?? "-",
+                                    result: "skipped:" + Self.reasonCode(reason), receipt: runID))
+        }
         var seenDomains = Set<String>()
         for candidate in candidates {
             let website = candidate.website.flatMap(Self.siteURL)
@@ -58,27 +68,27 @@ struct ProspectSearchRun: Sendable {
             var place = DiscoveredPlace(placeID: candidate.osmID, domain: normalized, usableWebsite: false, closed: candidate.closed)
             defer { report.discovered = DiscoveredPlace.merge([place], into: report.discovered) }
             if candidate.closed {
-                report.skipped[candidate.osmID] = "closed business"
+                skip(candidate, "closed business")
                 continue
             }
             guard let siteURL = website, let host else {
-                report.skipped[candidate.osmID] = "no own website on the listing"
+                skip(candidate, "no own website on the listing")
                 continue
             }
             if config.isNeverFetch(host: host) || config.deniedHost(host) != nil || GuardedLeadTransport.ownSiteHostRefusal(siteURL) != nil {
-                report.skipped[candidate.osmID] = "website host not fetchable"
+                skip(candidate, "website host not fetchable")
                 continue
             }
             if let normalized, !seenDomains.insert(normalized).inserted {
-                report.skipped[candidate.osmID] = "duplicate domain"
+                skip(candidate, "duplicate domain")
                 continue
             }
             let domain = HostMatch.registrable(host)
             let pages = await fetchSite(siteURL, domain: domain, segment: segment)
-            guard !pages.isEmpty else { report.skipped[candidate.osmID] = "own site not readable"; continue }
+            guard !pages.isEmpty else { skip(candidate, "own site not readable"); continue }
             if ProspectIdentity.siteSaysClosed(pages) {
                 place.closed = true
-                report.skipped[candidate.osmID] = "closed business (own site)"
+                skip(candidate, "closed business (own site)")
                 continue
             }
             place.usableWebsite = true
@@ -116,7 +126,10 @@ struct ProspectSearchRun: Sendable {
     }
 
     /// A skip reason as an audit result code: lowercase words joined by `-`.
-    static func reasonCode(_ reason: String) -> String { reason }
+    static func reasonCode(_ reason: String) -> String {
+        let words = reason.lowercased().split { !($0.isLetter || $0.isNumber) }
+        return words.isEmpty ? "unspecified" : words.joined(separator: "-")
+    }
 
     static func siteURL(_ website: String) -> URL? {
         let trimmed = website.trimmingCharacters(in: .whitespaces)

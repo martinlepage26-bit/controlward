@@ -143,7 +143,7 @@ enum LeadPipelineTests {
                 try expect(clock.sleeps == [first, second, first, second], "per-host backoff \(first) s then \(second) s, got \(clock.sleeps)")
                 let fetches = audit.lines.filter { $0.action == "fetch" && ($0.target == "overpass.private.coffee" || $0.target == "overpass-api.de") }
                 try expect(fetches.count == 6 && fetches.allSatisfy { $0.result == "error:network" }, "each attempt audited as a fetch: \(fetches.map(\.text))")
-                let attempts = audit.lines.filter { $0.action == "discovery-attempt" }
+                let attempts = audit.lines.filter { $0.action == "discovery-attempt" && $0.target != "photon.komoot.io" }
                 try expect(attempts.map { $0.receipt.components(separatedBy: ",").first ?? "" } == ["attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3", "attempt-1-of-3", "attempt-2-of-3", "attempt-3-of-3"],
                            "each attempt audited with its number: \(attempts.map(\.text))")
                 try expect(attempts.allSatisfy { $0.result == "error:network" }, "attempt results: \(attempts.map(\.result))")

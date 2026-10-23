@@ -630,7 +630,7 @@
       "jitter_fraction": 0.25
     },
     "discovery_query": {
-      "overpass_query_timeout_seconds": 20,
+      "overpass_query_timeout_seconds": 60,
       "client_timeout_margin_seconds": 10,
       "tile_radius_meters": 1000
     }

@@ -151,7 +151,7 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var tileRadiusMeters: Int
         /// The one place the client timeout is derived: the query's own limit plus the margin.
         var clientTimeoutSeconds: Double { Double(overpassQueryTimeoutSeconds + clientTimeoutMarginSeconds) }
-        static let standard = DiscoveryQuery(overpassQueryTimeoutSeconds: 20, clientTimeoutMarginSeconds: 10, tileRadiusMeters: 1000)
+        static let standard = DiscoveryQuery(overpassQueryTimeoutSeconds: 60, clientTimeoutMarginSeconds: 10, tileRadiusMeters: 1000)
     }
     struct WatchFeed: Codable, Equatable, Sendable {
         var id: String
