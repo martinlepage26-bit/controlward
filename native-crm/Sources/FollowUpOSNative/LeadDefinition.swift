@@ -24,6 +24,8 @@ enum LeadDefinition {
         if let reason = namedPerson(prospect, segment: segment, config: config) { reasons.append(reason) }
         reasons += recordFields(prospect)
         reasons += triggerFreshness(prospect.trigger, segment: segment, config: config, now: now)
+        // LIVE-R5 (Earth 14:05): Ready requires a recorded consent basis (S3-R6); without one the record stays Fix.
+        if prospect.consent == nil { reasons.append("no consent basis recorded") }
         if prospect.openTenderURL != nil { reasons.append("open tender") }
         return Verdict(status: reasons.isEmpty ? .ready : .fix, reasons: reasons)
     }

@@ -39,9 +39,18 @@ enum LeadProofVerifier {
 
         let drafted = prospects.filter { prospect in drafts.contains { $0.prospectID == prospect.id } }
         let addressFailures = drafted.filter { AddressProvenance.check($0) != nil }.map(\.id)
+        // LIVE-R5 (Earth 14:05): report the real Ready count and, for every Ready prospect without a draft, the rule that
+        // refused it (from its own draft audit line), so the check never claims there was no Ready prospect when there was.
+        let ready = prospects.filter { $0.status == .ready }
+        let refusedReady = ready.filter { prospect in !drafts.contains { $0.prospectID == prospect.id } }.map { prospect -> String in
+            let code = lines.last { $0["action"] == "draft" && $0["target"] == prospect.id && $0["result"]?.hasPrefix("refused:") == true }?["result"]
+            return "\(prospect.id) \(code ?? "no-draft-line")"
+        }
+        var detail3 = "ready=\(ready.count) drafted=\(drafted.count) failing=\(addressFailures.count)"
+        if !refusedReady.isEmpty { detail3 += " refused=[\(refusedReady.joined(separator: ", "))]" }
+        if !addressFailures.isEmpty { detail3 += " address-failing=[\(addressFailures.joined(separator: ", "))]" }
         checks.append(Check(number: 3, name: "Address appears verbatim in the own-site snapshot",
-                            passed: !drafted.isEmpty && addressFailures.isEmpty,
-                            detail: drafted.isEmpty ? "no draft to check (no Ready prospect in this run)" : "drafted=\(drafted.count) failing=\(addressFailures.count)"))
+                            passed: !drafted.isEmpty && addressFailures.isEmpty, detail: detail3))
 
         let sender = config.sender
         let badDrafts = drafts.filter { draft in
