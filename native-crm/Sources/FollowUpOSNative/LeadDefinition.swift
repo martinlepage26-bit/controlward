@@ -83,14 +83,15 @@ enum LeadDefinition {
         return calendar.isDate(a, inSameDayAs: b)
     }
 
-    /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area are held for Martin.
+    /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area are held for Martin. RBQ licences hold on
+    /// exact sub-category codes from config (grouped per licence by the parser), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
         let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
-        let licence = prospect.rbqCategories.joined(separator: " ").lowercased()
+        let codes = Set(prospect.rbqCategories.map(RBQOpenData.normalizeCode))
         return config.conflictAreas.first { area in
             area.osmSelectors.contains { prospect.osmTags.contains($0) }
                 || area.keywords.contains { haystack.contains($0.lowercased()) }
-                || (area.rbqSubcategoryCodes ?? []).contains { licence.contains($0.lowercased()) }
+                || (area.rbqSubcategoryCodes ?? []).contains { codes.contains(RBQOpenData.normalizeCode($0)) }
         }
     }
 

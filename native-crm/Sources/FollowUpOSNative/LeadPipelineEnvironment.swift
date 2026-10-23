@@ -43,12 +43,13 @@ struct LeadPipelineEnvironment: Sendable {
     }
 
     /// The RBQ index from the local cache only. Downloading is a separate, explicit step (at most daily).
-    func cachedRBQIndex() -> RBQIndex? {
+    /// Throws when the cached file's columns are not the ones the hold relies on (refused:open-data-header).
+    func cachedRBQIndex() throws -> RBQIndex? {
         guard let source = RBQOpenData.source(config) else { return nil }
         let file = RBQOpenData.cacheFile(in: rbqDirectory)
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         var index = RBQIndex()
-        try? RBQOpenData.parse(file: file, source: source) { index.add($0) }
+        try RBQOpenData.parse(file: file, source: source) { index.add($0) }
         return index
     }
 
@@ -65,7 +66,15 @@ struct LeadPipelineEnvironment: Sendable {
     /// Search, then pull the results into the Leads list and save the drafts locally. Nothing is sent.
     func searchAndIngest(_ requests: [ProspectSearchRun.Request], inner: any LeadTransport = URLSessionLeadTransport(),
                          audit: any CWAuditSink, clock: any LeadClock = SystemLeadClock()) async -> [ProspectSearchRun.Report] {
-        let (run, _) = makeRun(inner: inner, audit: audit, clock: clock, rbq: cachedRBQIndex())
+        let rbq: RBQIndex?
+        do { rbq = try cachedRBQIndex() } catch {
+            // A cached RBQ file we cannot read would silently switch the conflict hold off, so nothing runs.
+            let code = (error as? LeadPipelineRefusal)?.code ?? "error:rbq-cache"
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "rbq-load", target: RBQOpenData.sourceID, source: "rbq_open_data",
+                                    result: code, receipt: "-"))
+            return []
+        }
+        let (run, _) = makeRun(inner: inner, audit: audit, clock: clock, rbq: rbq)
         var reports: [ProspectSearchRun.Report] = []
         let store = ProspectLeadsStore(fileURL: storeURL)
         for request in requests {

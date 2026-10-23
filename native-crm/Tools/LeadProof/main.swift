@@ -56,6 +56,8 @@ if verifyOnly == nil {
         do {
             let file = try await RBQOpenData.refreshCache(config: environment.config, transport: guarded, directory: environment.rbqDirectory, now: Date())
             print("RBQ cache: \(file.path) (Source: RBQ / Données Québec, CC BY 4.0)")
+            let index = try environment.cachedRBQIndex()
+            print("RBQ licences read (grouped by licence number): \(index?.count ?? 0)")
         } catch {
             print("RBQ refresh refused or failed: \(error) (continuing without RBQ)")
         }

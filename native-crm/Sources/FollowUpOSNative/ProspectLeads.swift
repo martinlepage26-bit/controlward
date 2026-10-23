@@ -133,7 +133,7 @@ enum ProspectDisplay {
         }
         lines.append("Risk: \(record.risk ?? LeadDefinition.riskLine(record))")
         if !record.reasons.isEmpty { lines.append("Fix: \(record.reasons.joined(separator: "; "))") }
-        if !record.rbqCategories.isEmpty { lines.append("RBQ licence: \(record.rbqCategories.joined(separator: ", "))") }
+        if !record.rbqCategories.isEmpty { lines.append("RBQ licence sub-categories: \(record.rbqCategories.joined(separator: ", "))") }
         if let note = record.linkedinNote { lines.append("LinkedIn: \(note)") }
         if let source = record.sourceURL, let fetched = record.fetchedAt { lines.append("Evidence: \(source) · \(CWAuditLine.timestamp(fetched))") }
         if let attribution = attribution(for: record, config: config) { lines.append(attribution) }
