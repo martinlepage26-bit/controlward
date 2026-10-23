@@ -108,7 +108,18 @@ enum LeadDefinition {
     /// exactly what the app holds).
     static func rbqHeldCodes(_ licenceCodes: [String], area: ICPConfig.ConflictArea) -> [String] {
         let codes = Set(licenceCodes.map(RBQOpenData.normalizeCode))
-        return (area.rbqSubcategoryCodes ?? []).map(RBQOpenData.normalizeCode).filter { codes.contains($0) }
+        return (area.rbqSubcategoryCodes ?? []).map(RBQOpenData.normalizeCode).filter { code in
+            guard codes.contains(code) else { return false }
+            // Water 7:20 / 7:26 AM ET (Air's map 10c): a code with a condition does not hold a licence that carries the whole
+            // configured bundle or any code with a configured prefix. The codes and prefixes come from icp.json only.
+            for condition in area.rbqCodeConditions ?? [] where RBQOpenData.normalizeCode(condition.code) == code {
+                let bundle = condition.notHeldIfAllOf.map(RBQOpenData.normalizeCode)
+                if !bundle.isEmpty && bundle.allSatisfy(codes.contains) { return false }
+                let prefixes = condition.notHeldIfAnyCodeStartsWith.map(RBQOpenData.normalizeCode).filter { !$0.isEmpty }
+                if codes.contains(where: { held in prefixes.contains { held.hasPrefix($0) } }) { return false }
+            }
+            return true
+        }
     }
 
     /// S3-R3: the real-lead count excludes test leads and anything that fails LEAD_DEF.

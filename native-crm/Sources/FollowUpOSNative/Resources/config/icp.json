@@ -382,6 +382,14 @@
         "2.5"
       ],
       "rbq_subcategory_source": "RBQ official sub-category list (Règlement sur la qualification professionnelle des entrepreneurs et des constructeurs-propriétaires, annexes II and III): https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/ (checked 2026-10-23 06:50 EDT). 15.5 = Entrepreneur en plomberie (annexe II); 2.5 = Entrepreneur en excavation et terrassement (annexe III). Matched exactly against the 'Sous-catégories' codes nested in the licence's 'Catégories et sous-catégories' list (JSON file). Not listed, for Martin to decide: 2.4 systèmes d'assainissement autonome, 2.6 pieux et fondations spéciales, 2.7 travaux d'emplacement, 15.4 chauffage hydronique.",
+      "rbq_code_conditions": [
+        {
+          "code": "2.5",
+          "not_held_if_all_of": ["2.5", "2.7", "3.2", "4.2", "5.2", "6.2", "7", "8", "9", "11.2", "12", "13.5", "17.2"],
+          "not_held_if_any_code_starts_with": ["1."],
+          "source": "Water 7:20 and 7:26 AM ET 2026-10-23 (wind-acceptance-tests.md amendments), per Air's connector and lead map section 10c and RBQ's official sub-category list (https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/, 'Liste des sous-catégories', PDF 1592-A). 2.5 = Entrepreneur en excavation et terrassement, Annexe III. Annexe III sub-categories need no knowledge exam and come bundled, so 2.5 holds a licence only when the licence does NOT carry the whole Annexe III bundle (all 13 codes: 2.5, 2.7, 3.2, 4.2, 5.2, 6.2, 7, 8, 9, 11.2, 12, 13.5, 17.2) AND carries no general-contractor 1.x code. 15.5 (plumbing, Annexe II) has no condition and is always held. Applies province-wide."
+        }
+      ],
       "rbq_required_segments": [
         "construction_trades"
       ],
