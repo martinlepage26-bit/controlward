@@ -57,6 +57,43 @@ struct CWAuditLine: Equatable, Sendable {
     }
 }
 
+/// Check 2 (14:03): the one URL form the lead pipeline uses to match its fetch, score and draft lines. Scheme and host are
+/// lowercased, a default port (80/443) and the fragment are dropped, and one trailing slash is dropped (the root stays `/`).
+/// The path keeps its case, so `/a`, `/A`, `/a/b` and `/b` stay different. A query string is never written to the log; it is
+/// kept as a short hash (`?q=<16 hex>`), so two URLs that differ only by query never match. Canonicalising twice changes nothing.
+enum URLCanonical {
+    static func register(for url: URL?) -> String {
+        guard let url, let parts = URLComponents(url: url, resolvingAgainstBaseURL: true),
+              let scheme = parts.scheme?.lowercased(), let host = parts.host?.lowercased(), !host.isEmpty else { return "-" }
+        var port = ""
+        if let value = parts.port, !((scheme == "https" && value == 443) || (scheme == "http" && value == 80)) { port = ":\(value)" }
+        var path = parts.percentEncodedPath
+        if path.isEmpty { path = "/" }
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        var query = ""
+        if let raw = parts.percentEncodedQuery, !raw.isEmpty { query = "?q=" + (isHashedQuery(raw) ? String(raw.dropFirst(2)) : hash(raw)) }
+        return "\(scheme)://\(host)\(port)\(path)\(query)"
+    }
+
+    /// For a value read back from a log or a record. Anything that is not an absolute URL stays as it is (e.g. `-`).
+    static func register(_ value: String?) -> String {
+        guard let value, let url = URL(string: value), url.host != nil else { return value ?? "-" }
+        return register(for: url)
+    }
+
+    private static func isHashedQuery(_ raw: String) -> Bool {
+        raw.count == 18 && raw.hasPrefix("q=") && raw.dropFirst(2).allSatisfy { "0123456789abcdef".contains($0) }
+    }
+
+    /// FNV-1a 64-bit: stable across runs and platforms, Foundation-only.
+    private static func hash(_ text: String) -> String {
+        var value: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 { value = (value ^ UInt64(byte)) &* 0x100000001b3 }
+        let hex = String(value, radix: 16)
+        return String(repeating: "0", count: 16 - hex.count) + hex
+    }
+}
+
 protocol CWAuditSink: Sendable {
     func write(_ line: CWAuditLine)
 }

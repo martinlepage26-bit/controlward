@@ -105,18 +105,18 @@ struct ProspectSearchRun: Sendable {
             record.status = verdict.status
             record.reasons = verdict.reasons
             record.risk = LeadDefinition.riskLine(record)
-            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "score", register: record.sourceURL ?? "-", target: record.id,
+            audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "score", register: URLCanonical.register(record.sourceURL), target: record.id,
                                     source: "controlward", result: "ok",
                                     receipt: "\(record.status.rawValue)@\(record.fetchedAt.map(CWAuditLine.timestamp) ?? "-")"))
             if record.status == .ready {
                 let draft = OutreachDraftBuilder.build(for: record, config: config, language: request.language, messageID: "cw-draft-\(runID)-\(report.drafts.count + 1)")
                 if let refusal = OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: clock.now) {
                     report.refusals[record.id] = refusal.code
-                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: record.sourceURL ?? "-", target: record.id,
+                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: URLCanonical.register(record.sourceURL), target: record.id,
                                             source: "controlward", result: refusal.code))
                 } else {
                     report.drafts.append(draft)
-                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: record.sourceURL ?? "-", target: record.id,
+                    audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "draft", register: URLCanonical.register(record.sourceURL), target: record.id,
                                             source: "controlward", result: "ok", receipt: draft.messageID))
                 }
             }

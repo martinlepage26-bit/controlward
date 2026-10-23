@@ -24,10 +24,12 @@ enum LeadProofVerifier {
         var unmatched: [String] = []
         for prospect in prospects {
             guard let url = prospect.sourceURL, let fetched = prospect.fetchedAt else { unmatched.append(prospect.id); continue }
-            let register = CWAuditLine.register(for: URL(string: url))
+            // Check 2 (14:03): both sides go through the one canonicaliser, so a log written before it still re-verifies.
+            let register = URLCanonical.register(url)
             let ts = CWAuditLine.timestamp(fetched)
-            let fetchMatch = fetches.contains { $0["register"] == register && $0["ts"] == ts }
-            let scoreMatch = scores.contains { $0["target"] == prospect.id && $0["register"] == register && $0["receipt"]?.hasSuffix("@\(ts)") == true }
+            let fetchMatch = fetches.contains { URLCanonical.register($0["register"]) == register && $0["ts"] == ts }
+            let scoreMatch = scores.contains { $0["target"] == prospect.id && URLCanonical.register($0["register"]) == register
+                && $0["receipt"]?.hasSuffix("@\(ts)") == true }
             let ownFetcher = prospect.provenance == .controlWardSearch && prospect.fetcher.hasPrefix("controlward")
             if !(fetchMatch && scoreMatch && ownFetcher) { unmatched.append(prospect.id) }
         }

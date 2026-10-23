@@ -383,7 +383,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
         lock.withLock {
             records.append(RequestRecord(url: CWAuditLine.register(for: url), host: host, method: method, purpose: purpose.label, result: result, isSend: isSend))
         }
-        audit.write(CWAuditLine(ts: at ?? clock.now, surface: "leads", action: isSend ? "send" : "fetch", register: CWAuditLine.register(for: url),
+        audit.write(CWAuditLine(ts: at ?? clock.now, surface: "leads", action: isSend ? "send" : "fetch", register: URLCanonical.register(for: url),
                                 target: host, source: purpose.label, result: result))
     }
 }
