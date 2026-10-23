@@ -58,6 +58,9 @@ struct PipelineView: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut("n", modifiers: [.command])
                 }
+                if let result = store.lastCSVImport {
+                    CSVImportResultPanel(result: result) { store.dismissCSVImport() }
+                }
 
                 HStack(spacing: 12) {
                     MetricCard(value: "\(store.closeRate)%", label: "Close rate", symbol: "percent")
@@ -192,6 +195,34 @@ struct PipelineView: View {
 
     private func currency(_ value: Double) -> String {
         value.formatted(.currency(code: "CAD").precision(.fractionLength(0)))
+    }
+}
+
+/// CSV-5: what the last import did, row by row. Stays until Martin presses Close.
+struct CSVImportResultPanel: View {
+    let result: CSVImportResult
+    let close: () -> Void
+
+    var body: some View {
+        let lines = CSVImportPresentation.lines(result)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("CSV import", systemImage: result.failure == nil ? "tray.and.arrow.down" : "exclamationmark.triangle")
+                    .font(.headline)
+                Spacer()
+                Button("Close", action: close)
+                    .keyboardShortcut(.cancelAction)
+            }
+            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                Text(line)
+                    .font(index == 1 ? .body.weight(.semibold) : .callout)
+                    .foregroundStyle(index == 0 ? .secondary : .primary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
