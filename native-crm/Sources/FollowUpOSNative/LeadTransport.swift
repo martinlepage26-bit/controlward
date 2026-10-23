@@ -37,7 +37,8 @@ struct URLSessionLeadTransport: LeadTransport {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        configuration.timeoutIntervalForRequest = 20
+        // Only a ceiling: each request sets its own timeoutInterval (20 s by default, Overpass query limit + 10 s for discovery).
+        configuration.timeoutIntervalForRequest = 120
         return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
     }()
 
@@ -129,6 +130,16 @@ final class GuardedLeadTransport: @unchecked Sendable {
         }
     }
 
+    /// Per-request client timeout when the caller does not pass one.
+    static let defaultTimeoutSeconds: Double = 20
+
+    /// One audit line per Overpass attempt (Water 7:49), next to the transport's own fetch line, so a retry run reads
+    /// attempt-1-of-3, attempt-2-of-3, ... per host.
+    func auditDiscoveryAttempt(_ server: URL, attempt: Int, of total: Int, result: String) {
+        audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "discovery-attempt", register: CWAuditLine.register(for: server),
+                                target: server.host?.lowercased() ?? "-", source: "discovery", result: result, receipt: "attempt-\(attempt)-of-\(total)"))
+    }
+
     /// At most this many 30x hops are followed; each hop is admitted and robots-checked like a first request.
     static let maxRedirects = 3
 
@@ -137,7 +148,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
         var current = url
         var hops = 0
         while true {
-            var response = try await fetchOne(current, purpose: purpose, method: method, body: body, headers: headers, maxBytes: maxBytes)
+            var response = try await fetchOne(current, purpose: purpose, method: method, body: body, headers: headers, maxBytes: maxBytes, timeout: timeout)
             if (300..<400).contains(response.status), let location = response.headers["location"] {
                 let next = URL(string: location, relativeTo: current)?.absoluteURL
                 if let refusal = redirectRefusal(from: current, to: next, purpose: purpose) { log(current, method: method, purpose: purpose, result: refusal.code); throw refusal }
@@ -171,7 +182,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
     }
 
     private func fetchOne(_ url: URL, purpose: FetchPurpose, method: String, body: Data?,
-                          headers: [String: String], maxBytes: Int?) async throws -> LeadHTTPResponse {
+                          headers: [String: String], maxBytes: Int?, timeout: Double?) async throws -> LeadHTTPResponse {
         let host = url.host?.lowercased() ?? ""
         do {
             try admit(url, host: host, purpose: purpose, method: method, body: body)
@@ -180,7 +191,8 @@ final class GuardedLeadTransport: @unchecked Sendable {
             var request = URLRequest(url: url)
             request.httpMethod = method
             request.httpBody = body
-            request.timeoutInterval = 20
+            // Callers with a server-side limit (Overpass `[timeout:N]`) pass their own; everything else keeps 20 s.
+            request.timeoutInterval = timeout ?? Self.defaultTimeoutSeconds
             request.setValue(config.etiquette.userAgent, forHTTPHeaderField: "User-Agent")
             for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
             var response = try await inner.send(request)

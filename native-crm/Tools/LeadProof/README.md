@@ -42,10 +42,19 @@ another segment, area or a higher `--limit`.
 ## Sources
 
 - Discovery: Overpass (`overpass.private.coffee` primary, `overpass-api.de` fallback), then Photon (`photon.komoot.io`).
-  Only OSM tags and coordinates are sent, with the identifying User-Agent from icp.json. On a timeout, 429 or 5xx the
-  client backs off exponentially (5 s, 10 s, ... capped at 60 s, Retry-After honoured; `etiquette.discovery_retry`),
-  two attempts per server, then moves to the next. Photon results carry no website, so a Photon-only run finds no own
-  site to read.
+  Only OSM tags and coordinates are sent, with the identifying User-Agent from icp.json.
+  - Query areas (`etiquette.discovery_query.tile_radius_meters`, default 1000): a search circle larger than one cell is
+    split into 1 km cells on a grid spaced r·√2, so the cells cover the whole circle; one Overpass query per cell, centre
+    first, until the limit. Hits outside the requested circle are dropped, so coverage is the same circle as before.
+  - Timeout: each query carries `[timeout:N]` (`overpass_query_timeout_seconds`, default 20) and the client waits
+    N + `client_timeout_margin_seconds` (10) = 30 s. Both come from the one config block.
+  - Retries (`etiquette.discovery_retry`): on a timeout, network error, 429 or 5xx, each host gets one try plus
+    `retries_per_host` (2) retries, backoff 5 s then 10 s per host (doubling, stretched by up to `jitter_fraction` 25 %,
+    capped at 60 s, Retry-After honoured), then the next host. Every attempt writes a `discovery-attempt` audit line
+    (`attempt-k-of-3`) beside its `fetch` line. Once both hosts are used up in a segment search, its remaining cells and
+    selectors go straight to Photon.
+  Photon (unchanged) is asked only when Overpass found nothing for a selector. Photon results carry no website, so a
+  Photon-only run finds no own site to read.
 - People, titles, addresses and triggers come only from the business's own site (robots.txt honoured, 10 s per host).
   `allowed_contact_sources` for clinics and trades lists `own_site`, `registraire_des_entreprises` and
   `professional_order_directory`, but only `own_site` is enabled; the other two are disabled in config and never fetched.
