@@ -803,7 +803,7 @@ enum LeadPipelineTests {
             ("LIVE-R4 (trigger/fit): a synthetic clinic whose only match is a footer 'privacy' link gets no trigger and no fit line", {
                 let fixture = SearchFixture(config: config)
                 let root = "https://www.clinique-exemple.test"
-                fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1><p>Prendre rendez-vous en ligne.</p>"
+                fixture.inner.respond(LeadKit.homePage, body: "<h1>Clinique Exemple Nord</h1><p>Bienvenue à la clinique.</p>"
                                       + "<a href=\"/notre-equipe\">Notre équipe</a> <a href=\"/nous-joindre\">Nous joindre</a>"
                                       + "<footer><a href=\"/privacy\">Privacy</a> · <a href=\"/privacy-policy\">Privacy policy</a></footer>")
                 fixture.inner.respond("\(root)/notre-equipe", body: "<ul><li>Alex Fictif, directrice générale</li></ul>")

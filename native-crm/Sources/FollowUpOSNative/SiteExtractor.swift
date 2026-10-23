@@ -12,6 +12,8 @@ enum SiteExtractor {
         var url: String
         var fetchedAt: Date
         var text: String
+        /// LIVE-R4: the page's body text only: no nav, header or footer, and no link text. Trigger phrases are matched here.
+        var bodyText: String = ""
         var links: [String]
         var emails: [String]
         var phones: [String]
@@ -28,7 +30,7 @@ enum SiteExtractor {
         emails += matches(text, "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").map { MailAddress.bare($0) }
         var phones = links.compactMap { $0.lowercased().hasPrefix("tel:") ? String($0.dropFirst(4)).removingPercentEncoding : nil }
         phones += matches(text, "\\(?\\b[2-9][0-9]{2}\\)?[ .-][0-9]{3}[ .-][0-9]{4}\\b")
-        return Page(url: url.absoluteString, fetchedAt: fetchedAt, text: text, links: links,
+        return Page(url: url.absoluteString, fetchedAt: fetchedAt, text: text, bodyText: bodyText(html), links: links,
                     emails: unique(emails.filter { !$0.isEmpty }), phones: unique(phones),
                     address: address(in: text), people: people(in: text),
                     linkedinURLs: links.filter { URL(string: $0)?.host.map { HostMatch.belongs($0, to: "linkedin.com") } == true },
@@ -51,6 +53,16 @@ enum SiteExtractor {
             $0.replacingOccurrences(of: "[ \\t\\x{00A0}]+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
         }
         return lines.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    /// LIVE-R4: visible text without nav, header and footer blocks and without any link text. Each removed block becomes a
+    /// line break, so every body line is still a verbatim piece of the page's visible text.
+    static func bodyText(_ html: String) -> String {
+        var body = html
+        for tag in ["script", "style", "noscript", "template", "svg", "nav", "header", "footer", "a"] {
+            body = body.replacingOccurrences(of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: "<br>", options: [.regularExpression, .caseInsensitive])
+        }
+        return visibleText(body)
     }
 
     static func decodeEntities(_ text: String) -> String {
@@ -134,13 +146,13 @@ enum SiteExtractor {
                 "no unsolicited", "do not solicit", "messages non sollicités", "courriels non sollicités", "sans sollicitation"].contains { lower.contains($0) }
     }
 
-    /// Trigger signals from icp.json found in a page's own text. Job postings only count on a careers page.
+    /// Trigger signals from icp.json found in a page's own body text (LIVE-R4: never nav, header, footer or link text). Job postings only count on a careers page.
     static func triggers(in page: Page, segment: ICPConfig.Segment, config: ICPConfig) -> [ProspectTrigger] {
         let path = (URL(string: page.url)?.path ?? "").lowercased()
         var out: [ProspectTrigger] = []
         for kind in segment.triggers {
             if kind == "job_posting", !["carri", "emploi", "career", "job"].contains(where: { path.contains($0) }) { continue }
-            guard let phrase = config.triggerSignals[kind]?.first(where: { phraseMatches($0, in: page.text) }) else { continue }
+            guard let phrase = config.triggerSignals[kind]?.first(where: { phraseMatches($0, in: page.bodyText) }) else { continue }
             out.append(ProspectTrigger(kind: kind, url: page.url, fetchedAt: page.fetchedAt, origin: .pageFetch,
                                        publishedAt: kind == "job_posting" ? publishedDate(in: page.text) : nil,
                                        summary: "\(kind): “\(phrase)” on \(path.isEmpty ? "/" : path)"))

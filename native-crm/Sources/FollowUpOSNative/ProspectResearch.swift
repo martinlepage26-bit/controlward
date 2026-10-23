@@ -113,7 +113,7 @@ enum ProspectResearcher {
         for trigger in triggers {
             guard let page = pages.first(where: { $0.url == trigger.url }) else { continue }
             let phrases = config.triggerSignals[trigger.kind] ?? []
-            if let line = lines(page.text).first(where: { line in phrases.contains { SiteExtractor.phraseMatches($0, in: line) } }) {
+            if let line = lines(page.bodyText).first(where: { line in phrases.contains { SiteExtractor.phraseMatches($0, in: line) } }) {
                 assessment.supportingEvidence.append(FactEvidence(url: page.url, excerpt: clip(line)))
             }
         }
