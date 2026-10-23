@@ -14,8 +14,10 @@ beforeEach(() => {
   env = { ENVIRONMENT: "test", PHAROS_API_KEY: CONTEXTWARD_KEY, LEADGEN_PUSH_KEY: LEADGEN_KEY, DB: d1 as unknown as D1Database };
 });
 
-function lead(sourceId: string, overrides: Record<string, unknown> = {}) {
+// Every fixture lead is synthetic and marked test:true at the item level, so S3-R16 lets it through.
+function lead(sourceId: string, overrides: Record<string, unknown> = {}, item: Record<string, unknown> = { test: true }) {
   return {
+    ...item,
     source_id: sourceId,
     event: {
       schema_version: "leadgen.event.v1",
@@ -253,5 +255,61 @@ describe("retention", () => {
     d1.exec("INSERT INTO exchange_receipts (idempotency_key, receipt, payload_json, created_at) VALUES ('old', 'r1', '{}', datetime('now','-31 days')), ('new', 'r2', '{}', datetime('now'))");
     await worker.scheduled!({} as ScheduledController, env, {} as ExecutionContext);
     expect(d1.rows<{ idempotency_key: string }>("SELECT idempotency_key FROM exchange_receipts").map((r) => r.idempotency_key)).toEqual(["new"]);
+  });
+});
+
+describe("push provenance (S3-R16): only test leads and inbound form leads", () => {
+  const rows = () => d1.db.prepare("SELECT COUNT(*) AS n FROM lead_inbox").get() as { n: number };
+  const searchLead = (id: string) => lead(id, {}, { provenance: { kind: "search", fetcher: "synthetic-crawler" } });
+
+  it("refuses a search-provenance lead with 422 refused:push-not-inbound and writes nothing", async () => {
+    const response = await push([searchLead("ld_search")]);
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({ error: "refused:push-not-inbound", index: 0 });
+    expect(rows().n).toBe(0);
+  });
+
+  it("refuses an unmarked lead (no test flag, no provenance)", async () => {
+    const response = await push([lead("ld_plain", {}, {})]);
+    expect(response.status).toBe(422);
+    expect(response.body.error).toBe("refused:push-not-inbound");
+    expect(rows().n).toBe(0);
+  });
+
+  it("refuses an inbound form lead without its form source, and test flags that are not boolean true", async () => {
+    for (const item of [{ provenance: { kind: "inbound_form" } }, { provenance: { kind: "inbound_form", form_source: "  " } }, { test: "true" }, { test: 1 }]) {
+      const response = await push([lead("ld_x", {}, item)]);
+      expect(response.status).toBe(422);
+      expect(response.body.error).toBe("refused:push-not-inbound");
+    }
+    expect(rows().n).toBe(0);
+  });
+
+  it("one refused lead refuses the whole batch, so no allowed lead in it is stored", async () => {
+    const response = await push([lead("ld_ok"), searchLead("ld_search")]);
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({ error: "refused:push-not-inbound", index: 1 });
+    expect(rows().n).toBe(0);
+  });
+
+  it("accepts a test:true lead and an inbound form lead that carries its form source", async () => {
+    const form = lead("ld_form", {}, { provenance: { kind: "inbound_form", form_source: "pharos-ai.example.test/contact" } });
+    const response = await push([lead("ld_test"), form]);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ accepted: 2, created: 2 });
+    expect(rows().n).toBe(2);
+  });
+
+  it("the provenance flags are not stored or served", async () => {
+    await push([lead("ld_test")]);
+    const pulled = await pull();
+    expect(JSON.stringify(pulled.body)).not.toContain("provenance");
+    expect(pulled.body.leads[0].event).not.toHaveProperty("test");
+  });
+
+  it("a retract-only packet carries no lead and is still accepted", async () => {
+    const response = await push([], LEADGEN_KEY, ["ld_gone"]);
+    expect(response.status).toBe(200);
+    expect(response.body.retracted).toBe(1);
   });
 });
