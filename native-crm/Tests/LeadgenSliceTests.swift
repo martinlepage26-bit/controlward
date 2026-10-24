@@ -450,6 +450,50 @@ enum LeadgenSliceTests {
     }
     #endif
 
+    static func suppressionFailsClosed() async throws {
+        func refuse(path: String?) async throws {
+            if let path { setenv("LEADGEN_SUPPRESSION", path, 1) } else { unsetenv("LEADGEN_SUPPRESSION") }
+            let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1()
+            let runner = LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
+            var refused = false
+            do {
+                _ = try await runner.run(candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+            } catch { refused = true }
+            let calls = await mailbox.calls, inserts = await d1.inserts()
+            try check(refused && calls.isEmpty && inserts.isEmpty, "do-not-contact failure still drafted (\(path ?? "unset")): calls \(calls) inserts \(inserts.count)")
+        }
+        unsetenv("LEADGEN_SUPPRESSION")
+        try await refuse(path: nil)
+        try await refuse(path: "")
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-missing-\(UUID().uuidString).json").path
+        try await refuse(path: missing)
+        try await refuse(path: FileManager.default.temporaryDirectory.path)
+        let bad = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-bad-\(UUID().uuidString).json")
+        try Data("not-json".utf8).write(to: bad)
+        defer { unsetenv("LEADGEN_SUPPRESSION"); try? FileManager.default.removeItem(at: bad) }
+        try await refuse(path: bad.path)
+    }
+
+    static func suppressionMatchesNormalized() async throws {
+        func blocked(_ address: String) async throws {
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-norm-\(UUID().uuidString).json")
+            let json = "[{\"address\":\(address.debugDescription),\"at\":\"2026-01-01T00:00:00Z\",\"via\":\"list\"}]"
+            try json.write(to: file, atomically: true, encoding: .utf8)
+            setenv("LEADGEN_SUPPRESSION", file.path, 1)
+            defer { unsetenv("LEADGEN_SUPPRESSION"); try? FileManager.default.removeItem(at: file) }
+            let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1()
+            var refused = false
+            do {
+                _ = try await LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS()).run(
+                    candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+            } catch { refused = true }
+            let calls = await mailbox.calls, inserts = await d1.inserts()
+            try check(refused && calls.isEmpty && inserts.isEmpty, "\(address) still drafted: calls \(calls) inserts \(inserts.count)")
+        }
+        try await blocked(" Info@CliniqueExemple.CA ")
+        try await blocked("exemple.ca")
+    }
+
     static func run() async -> Bool {
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
         let tail = await PortableCheck.suite("Lead-gen slice 1", tailCases())
@@ -1207,6 +1251,8 @@ enum LeadgenSliceTests {
                 }
             }),
         ]
+        cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
+        cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif
