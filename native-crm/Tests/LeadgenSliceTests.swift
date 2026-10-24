@@ -764,6 +764,14 @@ enum LeadgenSliceTests {
                 try check(!basis.contains(LeadgenFixture.consent.recordedAt), "consent recordedAt stayed the config value: \(basis)")
                 try check(report.draft.consent.recordedAt == fetchedAt, "draft recordedAt \(report.draft.consent.recordedAt)")
             }),
+            ("The draft footer address is exactly 2456 rue de Rouen, Montréal QC H2K 1M2", {
+                let fit = try LeadgenFixture.fit()
+                let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
+                let pinned = "2456 rue de Rouen, Montréal QC H2K 1M2"
+                try check(draft.body.contains(pinned), "footer is not the pinned address: \(draft.body)")
+                try check(!draft.body.contains("1000 rue Exemple"), "the config address was written into the footer")
+                try check(draft.rawMIME.contains(pinned), "raw draft dropped the pinned address")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
