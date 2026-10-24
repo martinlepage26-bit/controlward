@@ -767,7 +767,12 @@ enum LeadgenDiscovery {
 
     /// Reads the directory page (robots first), picks the one clinic, then reads that clinic's own site.
     /// The consent source becomes the own-domain page the recipient address was read from.
+    /// The only directory host. Any other host, including a redirect target, is refused.
+    static let directoryHost = "dpq.quebec"
+
     static func find(directory: URL, paths: [String], consent: LeadgenConsentBasis?, fetcher: LeadgenFetching, dns: any LeadgenResolving, now: @escaping @Sendable () -> String = { ISO8601DateFormatter().string(from: Date()) }) async throws -> LeadgenDiscoveryResult {
+        let host = LeadgenSourcePolicy.normalize(directory.host ?? "")
+        guard host == directoryHost else { throw LeadgenError.hostNotAllowed(host) }
         guard let origin = origin(of: directory) else { throw LeadgenError.unsafeURL("directory has no host") }
         let directoryReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [directory.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
         var path = directory.path.isEmpty ? "/" : directory.path
@@ -845,6 +850,7 @@ struct LeadgenSliceRunner: Sendable {
         let fetched: [String]
         if let directory {
             await log.write("directory \(directory.absoluteString)")
+            await log.write("discovery source: \(directory.absoluteString)")
             let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now)
             prospect = found.prospect
             pages = found.pages

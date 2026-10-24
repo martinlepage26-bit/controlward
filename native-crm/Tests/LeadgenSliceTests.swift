@@ -176,7 +176,7 @@ enum LeadgenFooterFixture {
 
 enum LeadgenFixture {
     static let site = URL(string: "https://www.cliniqueexemple.ca/")!
-    static let directory = URL(string: "https://annuaire.example/montreal-clinics")!
+    static let directory = URL(string: "https://dpq.quebec/repertoire-des-membres")!
     static let directoryHTML = """
     <html><body><h1>Cliniques de Montréal</h1>
     <p><a href="https://maps.google.com/maps?q=clinique">carte</a></p>
@@ -202,8 +202,8 @@ enum LeadgenFixture {
             "https://www.cliniqueexemple.ca/": (200, body),
             "https://www.cliniqueexemple.ca/services": (200, "<html><body><main><p>Médecine familiale et pédiatrie.</p></main></body></html>"),
             "https://www.cliniqueexemple.ca/contact": (200, "<html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>"),
-            "https://annuaire.example/robots.txt": (200, "User-agent: *\nAllow: /\n"),
-            "https://annuaire.example/montreal-clinics": (200, directoryHTML),
+            "https://dpq.quebec/robots.txt": (200, "User-agent: *\nAllow: /\n"),
+            "https://dpq.quebec/repertoire-des-membres": (200, directoryHTML),
         ])
     }
     static func pages() -> [LeadgenPage] {
@@ -691,7 +691,7 @@ enum LeadgenSliceTests {
                 <html><body>
                 <a href="https://maps.google.com/maps?q=clinique">carte</a>
                 <a href="https://www.google.com/search?q=clinique+montreal">chercher</a>
-                <a href="https://annuaire.example/a-propos">cet annuaire</a>
+                <a href="https://dpq.quebec/a-propos">cet annuaire</a>
                 <a href="https://www.cliniqueexemple.ca/a-propos">Clinique du Parc</a>
                 <a href="https://cliniqueexemple.ca/equipe">même clinique</a>
                 </body></html>
@@ -711,11 +711,11 @@ enum LeadgenSliceTests {
                 try check(lines.contains("recipient: info@cliniqueexemple.ca"), "recipient was not read from the clinic site: \(lines)")
                 try check(lines.contains("consent source: https://www.cliniqueexemple.ca/contact"), "consent source was not the fetched page: \(lines)")
                 try check(probe.calls == 0 && calls.isEmpty && statements == 0, "dry-run discovery built live adapters")
-                try check(fetcher.requested.first == "https://annuaire.example/robots.txt", "robots was not first: \(fetcher.requested)")
+                try check(fetcher.requested.first == "https://dpq.quebec/robots.txt", "robots was not first: \(fetcher.requested)")
                 try check(!fetcher.requested.contains { $0.contains("maps.google") || $0.contains("google.com/search") }, "a blocked source was fetched: \(fetcher.requested)")
                 let expectedOrder = [
-                    "https://annuaire.example/robots.txt",
-                    "https://annuaire.example/montreal-clinics",
+                    "https://dpq.quebec/robots.txt",
+                    "https://dpq.quebec/repertoire-des-membres",
                     "https://www.cliniqueexemple.ca/robots.txt",
                     "https://www.cliniqueexemple.ca/",
                     "https://www.cliniqueexemple.ca/services",
@@ -726,7 +726,7 @@ enum LeadgenSliceTests {
             ("Discovery refuses zero clinics, two clinics, a disallowed directory, and an address that is not on the clinic domain", {
                 func discover(_ html: String, robots: String = "User-agent: *\nAllow: /\n", robotsStatus: Int = 200, contact: String = "<html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>") async throws -> LeadgenDiscoveryResult {
                     let fetcher = LeadgenFixture.fetcher()
-                    fetcher.set("https://annuaire.example/robots.txt", status: robotsStatus, body: robots)
+                    fetcher.set("https://dpq.quebec/robots.txt", status: robotsStatus, body: robots)
                     fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
                     fetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: contact)
                     let configured = LeadgenConsentBasis(basis: LeadgenFixture.consent.basis, source: "https://www.cliniqueexemple.ca/not-the-page", recordedAt: LeadgenFixture.consent.recordedAt)
@@ -741,8 +741,8 @@ enum LeadgenSliceTests {
                 try await expectError(.notExactlyOneProspect(2)) { _ = try await discover(two) }
                 let mapsOnly = "<html><body><a href=\"https://maps.google.com/maps?q=clinique\">carte</a></body></html>"
                 try await expectError(.notExactlyOneProspect(0)) { _ = try await discover(mapsOnly) }
-                try await expectError(.robotsDisallowed("/montreal-clinics")) {
-                    _ = try await discover("<html></html>", robots: "User-agent: *\nDisallow: /montreal-clinics\n")
+                try await expectError(.robotsDisallowed("/repertoire-des-membres")) {
+                    _ = try await discover("<html></html>", robots: "User-agent: *\nDisallow: /repertoire-des-membres\n")
                 }
                 try await expectError(.robotsDisallowed("/")) {
                     _ = try await discover("<html></html>", robots: "", robotsStatus: 503)
@@ -944,7 +944,7 @@ enum LeadgenSliceTests {
                 }
             }),
             ("A redirect from dpq.quebec to any other host fails closed", {
-                let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
+                let directory = URL(string: "https://dpq.quebec/repertoire-des-membres")!
                 let fetcher = LeadgenFakeFetcher(pages: [:])
                 fetcher.set("https://dpq.quebec/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
                 fetcher.set(directory.absoluteString, status: 302, headers: ["Location": "https://dentistesproprietaires.quebec/repertoire-des-membres/"], body: "")
