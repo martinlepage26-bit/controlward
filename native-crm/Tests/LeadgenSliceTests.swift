@@ -772,6 +772,11 @@ enum LeadgenSliceTests {
                 try check(!draft.body.contains("1000 rue Exemple"), "the config address was written into the footer")
                 try check(draft.rawMIME.contains(pinned), "raw draft dropped the pinned address")
             }),
+            ("The draft carries a List-Unsubscribe header", {
+                let fit = try LeadgenFixture.fit()
+                let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
+                try check(draft.rawMIME.contains("List-Unsubscribe: <mailto:ml@pharos-ai.ca?subject=unsubscribe>"), "missing List-Unsubscribe header: \(draft.rawMIME)")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
