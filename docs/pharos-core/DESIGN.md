@@ -9,7 +9,7 @@ The first PR is ONE vertical slice:
 
 > one contact record → one approval request → Martin approves or refuses → exactly one audit entry.
 
-- It sits behind a thin adapter that is OFF by default. ControlWard and Project Control behave exactly as on `main`.
+- It sits behind a thin adapter that is OFF by default. Only ControlWard gets an adapter in slice 1; Project Control comes in a later slice. ControlWard and Project Control behave exactly as on `main`.
 - Migrations only add tables, triggers and indexes: 0 drops, 0 renames, 0 column changes on existing tables.
 - No Kairos or EMERAULD file changes, no deploy, no secret rotation, no new repo.
 
@@ -48,7 +48,9 @@ The core must be callable from a Swift app and from a web page (Project Control 
 2. `service/` — a small TypeScript service (Node 22, `node:sqlite` or better-sqlite3) exposing the gate over HTTP on `127.0.0.1` only, with vitest tests. TypeScript matches `pharos-api/` and Project Control, so the CI toolchain already exists.
 3. `adapters/swift/` — a thin Swift client (`PharosCoreAdapter`) ControlWard calls; disabled by default.
 
-Why: one schema both sides share; loopback keeps data local (Loi 25) and matches the existing loopback rules in `ProjectModuleBridge`; the web page can call `http://127.0.0.1:<port>` without a cloud deploy.
+Why: loopback keeps data local (Loi 25), needs no deploy, and matches the existing loopback rules in `ProjectModuleBridge`.
+
+**Slice 1: only ControlWard plugs into the loopback service.** Project Control runs as a hosted Cloudflare Worker on D1, and a hosted HTTPS page cannot reliably call `http://127.0.0.1` on Martin's Mac (browsers block public-to-local requests). The Project Control adapter is therefore out of slice 1. How Project Control reaches the core is an open question for a later slice (Q6). Possible routes include a Worker-side core on D1 running the same SQL schema, or a sync path between the local DB and D1. This PR does not choose. The schema stays plain SQLite SQL, valid on D1, so either route stays open.
 
 Alternatives:
 - Swift package `PharosCore` in controlward: simplest for ControlWard, unusable from Project Control. Rejected.
@@ -154,6 +156,7 @@ interface PharosCoreAdapter {
 ```
 - Flag `PHAROS_CORE_ENABLED` (env) / `pharosCoreEnabled` (ControlWard UserDefaults), default false. When false the adapter is a no-op returning `{disabled:true}` and no code path in ControlWard or Project Control changes.
 - Swift: `adapters/swift/PharosCoreAdapter.swift` + `NoopPharosCoreAdapter` as the default. Slice 1 does not wire it into any existing call site.
+- Project Control: no adapter in slice 1 (see §3). Project Control is unchanged.
 
 ### 4.5 Migrations
 
@@ -196,3 +199,4 @@ Each item has a test that fails first, and the CI log names the tests with count
 - Q3. Human-presence proof for approve/refuse: macOS LocalAuthentication (Touch ID) in ControlWard is proposed. OK, or something else?
 - Q4. Default approval expiry: 24 h?
 - Q5. Consent bases: are the four values in 4.1 the ones you want under Loi 25 / CASL?
+- Q6. Later slice: how should Project Control (hosted Worker on D1) reach the core: a Worker-side core on D1 using the same schema, a sync path, or something else? Not decided here.
