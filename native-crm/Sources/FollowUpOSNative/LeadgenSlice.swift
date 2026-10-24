@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // PHAROS lead-gen slice 1 (docs/leadgen-slice/SPEC.md).
 // Portable: Foundation only, so bin/test-portable runs it on Linux as well as on the Mac.
@@ -30,6 +35,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case unsafeURL(String)
     case contactNotOnPage(String)
     case consentSourceNotFetched(String)
+    case suppressed(String)
 
     var description: String {
         switch self {
@@ -58,6 +64,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .unsafeURL(let why): "url refused: \(why)"
         case .contactNotOnPage(let email): "recipient \(email) was not found on a page fetched from the clinic's own domain"
         case .consentSourceNotFetched(let url): "consent source was not a page fetched from the clinic's own domain: \(url)"
+        case .suppressed(let why): "suppressed: \(why)"
         }
     }
 }
@@ -444,6 +451,26 @@ protocol LeadgenDraftMailbox: Sendable {
     func createDraft(account: String, rawMIME: String) async throws -> String
 }
 
+/// Do-not-contact check. An entry is an address, or a domain when it has no `@`.
+enum LeadgenSuppression {
+    static func reason(address: String, siteHost: String, list: SuppressionList) -> String? {
+        let bare = MailAddress.bare(address)
+        if !bare.isEmpty, list.contains(bare) { return "address \(bare)" }
+        let emailDomain = MailAddress.domain(bare).map(LeadgenSourcePolicy.normalize)
+        let siteDomain = LeadgenSourcePolicy.normalize(siteHost)
+        var domains: Set<String> = []
+        if let emailDomain, !emailDomain.isEmpty { domains.insert(emailDomain) }
+        if !siteDomain.isEmpty { domains.insert(siteDomain) }
+        for entry in list.all {
+            let key = MailAddress.bare(entry.address)
+            if key.contains("@") { continue }
+            let host = LeadgenSourcePolicy.normalize(key)
+            if domains.contains(host) { return "domain \(host)" }
+        }
+        return nil
+    }
+}
+
 // MARK: 6. D1: a new `leads` table (additive migration), INSERT into leads plus SELECT, nothing else
 
 enum LeadgenMigration {
@@ -716,6 +743,15 @@ struct LeadgenSliceRunner: Sendable {
     let log: LeadgenRunLog
     let now: @Sendable () -> String
     var dns: any LeadgenResolving = LeadgenSystemDNS()
+    var suppression: SuppressionList = SuppressionList()
+
+    /// `LEADGEN_SUPPRESSION` names a JSON file of do-not-contact entries. Otherwise the injected list is used.
+    func activeSuppression() -> SuppressionList {
+        guard let raw = getenv("LEADGEN_SUPPRESSION") else { return suppression }
+        let path = String(cString: raw)
+        guard !path.isEmpty else { return suppression }
+        return SuppressionList(storageURL: URL(fileURLWithPath: path))
+    }
 
     /// Live order (SPEC runbook): schema check of both DBs (stop if `leads` exists), then per DB
     /// checksum and counts before, apply 0001, INSERT one row, read back, checksum and counts after,
@@ -740,6 +776,10 @@ struct LeadgenSliceRunner: Sendable {
             pages = try await reader.read(site: prospect.site, paths: paths)
             resolvedConsent = consent
             fetched = await reader.fetchedURLs
+        }
+        if let why = LeadgenSuppression.reason(address: prospect.publicContactEmail, siteHost: prospect.site.host ?? "", list: activeSuppression()) {
+            await log.write("suppressed: \(why)")
+            throw LeadgenError.suppressed(why)
         }
         let fit = try LeadgenFitFinder.find(pages: pages, prospect: prospect)
         let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: resolvedConsent, postalAddress: postalAddress, pages: pages)
