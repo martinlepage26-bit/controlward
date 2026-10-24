@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // Lead-gen slice 1 tests (docs/leadgen-slice/SPEC.md). Fakes only: no network, no Gmail, no D1.
 
@@ -720,6 +725,31 @@ enum LeadgenSliceTests {
                 let one = try await discover("<html><body><a href=\"https://www.cliniqueexemple.ca/\">Clinique Exemple</a></body></html>")
                 try check(one.prospect.organization == "Clinique Exemple" && one.prospect.publicContactEmail == "info@cliniqueexemple.ca", "picked \(one.prospect)")
                 try check(one.consent?.source == "https://www.cliniqueexemple.ca/contact", "consent source stayed on the config value: \(one.consent?.source ?? "")")
+            }),
+            ("A suppressed address or domain means no draft and no lead rows", {
+                let blocked = [LeadgenFixture.prospect.publicContactEmail, "cliniqueexemple.ca"]
+                for entry in blocked {
+                    let file = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-sup-\(UUID().uuidString).json")
+                    let list = SuppressionList(storageURL: file)
+                    list.record(entry, at: Date(timeIntervalSince1970: 1_700_000_000), via: "do-not-contact")
+                    setenv("LEADGEN_SUPPRESSION", file.path, 1)
+                    defer {
+                        unsetenv("LEADGEN_SUPPRESSION")
+                        try? FileManager.default.removeItem(at: file)
+                    }
+                    let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
+                    var threw = false
+                    do {
+                        _ = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: mailbox, d1: d1, log: log).run(
+                            candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                    } catch {
+                        threw = true
+                    }
+                    let calls = await mailbox.calls, inserts = await d1.inserts(), lines = await log.lines
+                    try check(threw, "suppressed \(entry) still drafted")
+                    try check(calls.isEmpty && inserts.isEmpty, "suppressed \(entry) wrote a draft or a row: calls \(calls) inserts \(inserts.count)")
+                    try check(lines.contains { $0.contains("suppressed") && $0.contains(entry.lowercased()) }, "log did not name the suppression: \(lines)")
+                }
             }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
