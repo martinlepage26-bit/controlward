@@ -937,6 +937,64 @@ enum LeadgenSliceTests {
                 try check(found.consent?.source == "https://www.cliniqueexemple.ca/contact", "consent source \(found.consent?.source ?? "")")
                 try check(!fetcher.requested.contains { $0.contains("autreclinique") }, "another domain was fetched: \(fetcher.requested)")
             }),
+            ("The directory host is only dpq.quebec", {
+                let other = URL(string: "https://annuaire.example/montreal-clinics")!
+                try await expectError(.hostNotAllowed("annuaire.example")) {
+                    _ = try await LeadgenDiscovery.find(directory: other, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: LeadgenFixture.fetcher(), dns: LeadgenMappedDNS())
+                }
+            }),
+            ("A redirect from dpq.quebec to any other host fails closed", {
+                let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
+                let fetcher = LeadgenFakeFetcher(pages: [:])
+                fetcher.set("https://dpq.quebec/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+                fetcher.set(directory.absoluteString, status: 302, headers: ["Location": "https://dentistesproprietaires.quebec/repertoire-des-membres/"], body: "")
+                try await expectError(.hostNotAllowed("dentistesproprietaires.quebec")) {
+                    _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+                }
+                try check(!fetcher.requested.contains { $0.contains("dentistesproprietaires.quebec") }, "redirect target was fetched: \(fetcher.requested)")
+            }),
+            ("A rejected candidate writes no row, no suppressed row, and no UPDATE", {
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-rej-\(UUID().uuidString).json")
+                let list = SuppressionList(storageURL: file)
+                list.record(LeadgenFixture.prospect.publicContactEmail, at: Date(timeIntervalSince1970: 1_700_000_000), via: "do-not-contact")
+                setenv("LEADGEN_SUPPRESSION", file.path, 1)
+                defer { unsetenv("LEADGEN_SUPPRESSION"); try? FileManager.default.removeItem(at: file) }
+                let d1 = LeadgenFakeD1(), mailbox = LeadgenRecordingMailbox(), log = LeadgenMemoryLog()
+                do {
+                    _ = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: mailbox, d1: d1, log: log).run(
+                        candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                    throw PortableCheckFailure(description: "a rejected candidate was drafted")
+                } catch is PortableCheckFailure { throw PortableCheckFailure(description: "a rejected candidate was drafted") } catch {}
+                let inserts = await d1.inserts(), statements = await d1.statements, lines = await log.lines
+                let me = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+                let ph = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+                try check(inserts.isEmpty && me.isEmpty && ph.isEmpty, "a rejected candidate wrote a row: \(inserts) \(me) \(ph)")
+                try check(!me.contains { $0["status"] == "suppressed" } && !ph.contains { $0["status"] == "suppressed" }, "a suppressed row was stored")
+                try check(statements.allSatisfy { !$0.sql.uppercased().contains("UPDATE") }, "an UPDATE was sent: \(statements.map(\.sql))")
+                try check(lines.contains { $0.contains("suppressed") && $0.contains(LeadgenFixture.prospect.publicContactEmail.lowercased()) }, "the run log did not name the rejection: \(lines)")
+            }),
+            ("A successful run writes exactly one lead row per database", {
+                let d1 = LeadgenFakeD1()
+                let report = try await LeadgenFixture.live(d1)
+                for db in [LeadgenProjectTarget.meCom.databaseID, LeadgenProjectTarget.pharos.databaseID] {
+                    let leads = await d1.rows(db, "leads")
+                    let receipt = report.receipts.first { $0.databaseID == db }
+                    try check(leads.count == 1 && receipt?.countAfter == (receipt?.countBefore ?? -1) + 1, "\(db) count \(leads.count) receipt \(String(describing: receipt))")
+                }
+                let statements = await d1.statements
+                try check(statements.allSatisfy { !$0.sql.uppercased().contains("UPDATE") }, "success sent an UPDATE")
+            }),
+            ("The directory URL is only the discovery source; consent and evidence stay on the clinic page", {
+                let log = LeadgenMemoryLog()
+                let report = try await LeadgenFixture.runner(LeadgenRunConfig.dryRun, mailbox: LeadgenRecordingMailbox(), d1: LeadgenFakeD1(), log: log).run(
+                    candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                let lines = await log.lines
+                let directory = LeadgenFixture.directory.absoluteString
+                try check(lines.contains { $0 == "discovery source: \(directory)" }, "discovery source was not recorded: \(lines)")
+                try check(report.draft.consent.source == "https://www.cliniqueexemple.ca/contact", "consent source \(report.draft.consent.source)")
+                try check(report.fit.evidence.allSatisfy { !$0.url.contains("dpq.quebec") && !$0.url.contains("annuaire.example") }, "evidence used the directory: \(report.fit.evidence)")
+                try check(!report.draft.consent.source.contains("dpq.quebec") && !report.draft.consent.source.contains("annuaire.example"), "consent used the directory")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
