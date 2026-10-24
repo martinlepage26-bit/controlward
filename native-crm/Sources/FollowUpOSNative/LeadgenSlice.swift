@@ -27,6 +27,9 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case configMissing(String)
     case configInvalid(String)
     case credentialMissing(String)
+    case unsafeURL(String)
+    case contactNotOnPage(String)
+    case consentSourceNotFetched(String)
 
     var description: String {
         switch self {
@@ -52,6 +55,9 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .configMissing(let path): "local config missing: \(path) (copy docs/leadgen-slice/leadgen.local.example.json)"
         case .configInvalid(let why): "local config invalid: \(why)"
         case .credentialMissing(let ref): "credential not found: \(ref) (env or Keychain reference only)"
+        case .unsafeURL(let why): "url refused: \(why)"
+        case .contactNotOnPage(let email): "recipient \(email) was not found on a page fetched from the clinic's own domain"
+        case .consentSourceNotFetched(let url): "consent source was not a page fetched from the clinic's own domain: \(url)"
         }
     }
 }
@@ -156,45 +162,91 @@ struct LeadgenRobots: Sendable {
 }
 
 protocol LeadgenFetching: Sendable {
-    func get(_ url: URL) async throws -> (status: Int, body: String)
+    /// One response. Must not follow redirects: a 3xx is returned with its headers so the caller can check the next hop.
+    func get(_ url: URL) async throws -> (status: Int, headers: [String: String], body: String)
+}
+
+protocol LeadgenResolving: Sendable {
+    func addresses(for host: String) async -> [String]
+}
+
+struct LeadgenSystemDNS: LeadgenResolving {
+    func addresses(for host: String) async -> [String] { SystemHostLookup.addresses(host) }
 }
 
 struct LeadgenPage: Sendable, Equatable {
     let url: URL
     let bodyText: String
+    var html: String = ""
 }
 
 actor LeadgenSiteReader {
     private let policy: LeadgenSourcePolicy
     private let fetcher: LeadgenFetching
+    private let dns: any LeadgenResolving
     private(set) var fetchedURLs: [String] = []
+    static let maxRedirects = 3
 
-    init(policy: LeadgenSourcePolicy, fetcher: LeadgenFetching) {
+    init(policy: LeadgenSourcePolicy, fetcher: LeadgenFetching, dns: any LeadgenResolving = LeadgenSystemDNS()) {
         self.policy = policy
         self.fetcher = fetcher
+        self.dns = dns
     }
 
-    private func fetch(_ url: URL) async throws -> (status: Int, body: String) {
+    /// Scheme, SSRF (including DNS), then the allowlist. A redirect hop uses the same checks.
+    private func admit(_ url: URL) async throws {
+        let resolved = await dns.addresses(for: url.host ?? "")
+        if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved) {
+            throw LeadgenError.unsafeURL(why)
+        }
         try policy.check(url)
-        fetchedURLs.append(url.absoluteString)
-        return try await fetcher.get(url)
+    }
+
+    /// Fetches `url`, following a redirect only after the next hop passes `admit`. The returned URL is the final one.
+    private func fetch(_ url: URL) async throws -> (status: Int, body: String, finalURL: URL) {
+        var current = url
+        var hops = 0
+        while true {
+            try await admit(current)
+            fetchedURLs.append(current.absoluteString)
+            let response = try await fetcher.get(current)
+            let headers = Dictionary(uniqueKeysWithValues: response.headers.map { ($0.key.lowercased(), $0.value) })
+            if (300..<400).contains(response.status) {
+                let location = headers["location"] ?? ""
+                guard let next = URL(string: location, relativeTo: current)?.absoluteURL, !location.isEmpty else {
+                    throw LeadgenError.unsafeURL("redirect with no location")
+                }
+                guard hops < Self.maxRedirects else { throw LeadgenError.unsafeURL("redirect limit") }
+                hops += 1
+                current = next
+                continue
+            }
+            return (response.status, response.body, current)
+        }
     }
 
     /// Reads robots.txt, then each allowed path on the prospect's own site.
+    /// Every hop is admitted. Page URLs are the final URLs the bodies came from.
     func read(site: URL, paths: [String]) async throws -> [LeadgenPage] {
-        try policy.check(site)
+        try await admit(site)
         guard let robotsURL = URL(string: "/robots.txt", relativeTo: site)?.absoluteURL else {
             throw LeadgenError.fetchFailed(site.absoluteString)
         }
         let robotsResponse = try await fetch(robotsURL)
-        let robots = LeadgenRobots(text: robotsResponse.status == 200 ? robotsResponse.body : "")
+        if robotsResponse.status == 401 || robotsResponse.status == 403 || robotsResponse.status >= 500 {
+            throw LeadgenError.robotsDisallowed("/")
+        }
+        guard (200..<300).contains(robotsResponse.status) || robotsResponse.status == 404 else {
+            throw LeadgenError.fetchFailed(robotsURL.absoluteString)
+        }
+        let robots = LeadgenRobots(text: (200..<300).contains(robotsResponse.status) ? robotsResponse.body : "")
         var pages: [LeadgenPage] = []
         for path in paths {
             guard robots.allows(path: path) else { throw LeadgenError.robotsDisallowed(path) }
             guard let url = URL(string: path, relativeTo: site)?.absoluteURL else { continue }
             let response = try await fetch(url)
             guard response.status == 200 else { continue }
-            pages.append(LeadgenPage(url: url, bodyText: LeadgenHTML.bodyText(response.body)))
+            pages.append(LeadgenPage(url: response.finalURL, bodyText: LeadgenHTML.bodyText(response.body), html: response.body))
         }
         return pages
     }
@@ -273,8 +325,7 @@ enum LeadgenFitFinder {
             }
         }
         guard let first = evidence.first else { throw LeadgenError.noBodyEvidence }
-        let reason = "\(prospect.organization) says on its own site that it uses AI with patients: \"\(first.quote)\" (\(first.url)). "
-            + "A Québec clinic using AI on health information has Loi 25 duties (privacy impact assessment, notice of automated decisions), which is the AI governance work PHAROS offers."
+        let reason = "\(prospect.organization) (\(first.url)): \"\(first.quote)\""
         return LeadgenFit(reason: reason, evidence: evidence)
     }
 }
@@ -340,9 +391,25 @@ enum LeadgenDraftComposer {
         return address
     }
 
-    static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String?) throws -> LeadgenDraft {
+    /// The recipient and the consent source must both appear on a page that was fetched from the clinic's own domain.
+    static func proveOwnPages(prospect: LeadgenProspect, consent: LeadgenConsentBasis, pages: [LeadgenPage]) throws {
+        let domain = LeadgenSourcePolicy.normalize(prospect.site.host ?? "")
+        let own = pages.filter { LeadgenSourcePolicy.normalize($0.url.host ?? "") == domain }
+        let email = prospect.publicContactEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !email.isEmpty, own.contains(where: { $0.bodyText.lowercased().contains(email) }) else {
+            throw LeadgenError.contactNotOnPage(email)
+        }
+        guard let source = URL(string: consent.source),
+              LeadgenSourcePolicy.normalize(source.host ?? "") == domain,
+              own.contains(where: { $0.url.absoluteString == source.absoluteString }) else {
+            throw LeadgenError.consentSourceNotFetched(consent.source)
+        }
+    }
+
+    static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String?, pages: [LeadgenPage]) throws -> LeadgenDraft {
         guard let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty,
               !consent.source.isEmpty, !consent.recordedAt.isEmpty else { throw LeadgenError.missingConsentBasis }
+        try proveOwnPages(prospect: prospect, consent: consent, pages: pages)
         let postalAddress = try checkAddress(postalAddress)
         let quote = fit.evidence.first?.quote ?? ""
         let subject = "Gouvernance de l'IA et Loi 25 pour \(prospect.organization)"
@@ -520,6 +587,115 @@ struct LeadgenD1Writer: Sendable {
     }
 }
 
+// MARK: Discovery from one public directory page
+
+struct LeadgenDiscoveryResult: Sendable, Equatable {
+    let prospect: LeadgenProspect
+    let pages: [LeadgenPage]
+    let consent: LeadgenConsentBasis?
+    let fetchedURLs: [String]
+}
+
+enum LeadgenDiscovery {
+    /// Hosts that are never a clinic's own site, on top of the source-policy block list.
+    static let skipHostFragments = [
+        "linkedin.", "facebook.", "instagram.", "youtube.", "twitter.", "x.com", "tiktok.",
+        "bing.", "duckduckgo.", "yahoo.", "google.", "gstatic.", "googleapis.",
+    ]
+
+    static func origin(of url: URL) -> URL? {
+        var components = URLComponents()
+        components.scheme = url.scheme
+        components.host = url.host
+        components.port = url.port
+        components.path = "/"
+        return components.url
+    }
+
+    /// Picks the one external clinic linked from a directory page. Two clinics, or none, is a refusal.
+    static func clinics(in html: String, directory: URL) -> [(name: String, site: URL)] {
+        let directoryHost = LeadgenSourcePolicy.normalize(directory.host ?? "")
+        let pattern = "<a\\b[^>]*?href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)</a>"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        var byDomain: [String: (name: String, site: URL)] = [:]
+        var order: [String] = []
+        for match in expression.matches(in: html, range: range) {
+            guard match.numberOfRanges == 3,
+                  let hrefRange = Range(match.range(at: 1), in: html),
+                  let textRange = Range(match.range(at: 2), in: html) else { continue }
+            let href = String(html[hrefRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let url = URL(string: href, relativeTo: directory)?.absoluteURL,
+                  let host = url.host, !host.isEmpty else { continue }
+            let domain = LeadgenSourcePolicy.normalize(host)
+            if domain == directoryHost || domain.isEmpty { continue }
+            if HostSafety.refusal(url: url, resolvedAddresses: nil) != nil { continue }
+            if LeadgenSourcePolicy.blockedHostFragments.contains(where: { domain.contains($0) }) { continue }
+            if skipHostFragments.contains(where: { domain.contains($0) }) { continue }
+            guard let site = origin(of: url), !site.absoluteString.isEmpty else { continue }
+            let name = visibleText(String(html[textRange]))
+            let label = name.isEmpty ? domain : name
+            if byDomain[domain] == nil {
+                byDomain[domain] = (label, site)
+                order.append(domain)
+            }
+        }
+        return order.compactMap { byDomain[$0] }
+    }
+
+    static func visibleText(_ html: String) -> String {
+        html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func emails(in text: String) -> [String] {
+        let pattern = "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]).lowercased() }
+        }
+    }
+
+    /// Reads the directory page (robots first), picks the one clinic, then reads that clinic's own site.
+    /// The consent source becomes the own-domain page the recipient address was read from.
+    static func find(directory: URL, paths: [String], consent: LeadgenConsentBasis?, fetcher: LeadgenFetching, dns: any LeadgenResolving) async throws -> LeadgenDiscoveryResult {
+        guard let origin = origin(of: directory) else { throw LeadgenError.unsafeURL("directory has no host") }
+        let directoryReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [directory.host ?? ""]), fetcher: fetcher, dns: dns)
+        var path = directory.path.isEmpty ? "/" : directory.path
+        if let query = directory.query, !query.isEmpty { path += "?\(query)" }
+        let listed = try await directoryReader.read(site: origin, paths: [path])
+        guard let page = listed.first(where: { $0.url.path == directory.path || directory.path.isEmpty || $0.url.absoluteString.hasPrefix(directory.absoluteString) || listed.count == 1 }) ?? listed.first else {
+            throw LeadgenError.fetchFailed(directory.absoluteString)
+        }
+        let found = clinics(in: page.html, directory: directory)
+        guard found.count == 1, let clinic = found.first else { throw LeadgenError.notExactlyOneProspect(found.count) }
+        let siteReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [clinic.site.host ?? ""]), fetcher: fetcher, dns: dns)
+        let pages = try await siteReader.read(site: clinic.site, paths: paths)
+        let domain = LeadgenSourcePolicy.normalize(clinic.site.host ?? "")
+        let own = pages.filter { LeadgenSourcePolicy.normalize($0.url.host ?? "") == domain }
+        var chosen: (email: String, url: String)?
+        for page in own {
+            for email in emails(in: page.bodyText) where MailAddress.domain(email).map({ LeadgenSourcePolicy.normalize($0) == domain }) == true {
+                chosen = (email, page.url.absoluteString)
+                break
+            }
+            if chosen != nil { break }
+        }
+        guard let chosen else { throw LeadgenError.contactNotOnPage(clinic.name) }
+        let prospect = LeadgenProspect(organization: clinic.name, segment: LeadgenProspectPicker.segment, site: clinic.site, publicContactEmail: chosen.email)
+        let proven: LeadgenConsentBasis?
+        if let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty, !consent.recordedAt.isEmpty {
+            proven = LeadgenConsentBasis(basis: consent.basis, source: chosen.url, recordedAt: consent.recordedAt)
+        } else {
+            proven = nil
+        }
+        let fetched = await directoryReader.fetchedURLs + siteReader.fetchedURLs
+        return LeadgenDiscoveryResult(prospect: prospect, pages: pages, consent: proven, fetchedURLs: fetched)
+    }
+}
+
 // MARK: Runner
 
 struct LeadgenRunReport: Sendable {
@@ -539,18 +715,34 @@ struct LeadgenSliceRunner: Sendable {
     let d1: LeadgenD1Port
     let log: LeadgenRunLog
     let now: @Sendable () -> String
+    var dns: any LeadgenResolving = LeadgenSystemDNS()
 
     /// Live order (SPEC runbook): schema check of both DBs (stop if `leads` exists), then per DB
     /// checksum and counts before, apply 0001, INSERT one row, read back, checksum and counts after,
-    /// then the one Gmail create-draft on ml@pharos-ai.ca. Every step is written to `log`.
-    func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String?) async throws -> LeadgenRunReport {
+    /// then the one Gmail create-draft on ml@pharos-ai.ca. The draft is not created unless both checks pass.
+    /// When `directory` is set, the prospect comes from that page, not from `candidates`.
+    func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String?, directory: URL? = nil) async throws -> LeadgenRunReport {
         if config.liveFlag { try config.authorizeLive() }
-        let prospect = try LeadgenProspectPicker.pickOne(candidates)
-        let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher)
-        let pages = try await reader.read(site: prospect.site, paths: paths)
+        let prospect: LeadgenProspect
+        let pages: [LeadgenPage]
+        let resolvedConsent: LeadgenConsentBasis?
+        let fetched: [String]
+        if let directory {
+            await log.write("directory \(directory.absoluteString)")
+            let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns)
+            prospect = found.prospect
+            pages = found.pages
+            resolvedConsent = found.consent
+            fetched = found.fetchedURLs
+        } else {
+            prospect = try LeadgenProspectPicker.pickOne(candidates)
+            let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher, dns: dns)
+            pages = try await reader.read(site: prospect.site, paths: paths)
+            resolvedConsent = consent
+            fetched = await reader.fetchedURLs
+        }
         let fit = try LeadgenFitFinder.find(pages: pages, prospect: prospect)
-        let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: consent, postalAddress: postalAddress)
-        let fetched = await reader.fetchedURLs
+        let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: resolvedConsent, postalAddress: postalAddress, pages: pages)
         guard config.isLive else {
             return LeadgenRunReport(live: false, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: nil, receipts: [])
         }

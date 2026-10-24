@@ -37,6 +37,9 @@ struct LeadgenLocalConfig: Codable, Sendable, Equatable {
         let gmailToken: SecretRef
     }
 
+    /// One public directory page that lists Montréal clinics. Empty until a human chooses the page.
+    /// The prospect is read from this page. A hand-supplied clinic URL is not the discovery source.
+    let directoryURL: String?
     /// The CASL footer address. Lives only in the local config.
     let postalAddress: String?
     let prospect: Prospect?
@@ -57,6 +60,14 @@ struct LeadgenLocalConfig: Codable, Sendable, Equatable {
         do { return try JSONDecoder().decode(LeadgenLocalConfig.self, from: data) } catch {
             throw LeadgenError.configInvalid("\(path): \(error)")
         }
+    }
+
+    /// The configured directory page, or nil when it is missing or blank (`directory not configured`).
+    var directoryValue: URL? {
+        guard let raw = directoryURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+              let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              url.host != nil else { return nil }
+        return url
     }
 
     var prospectValue: LeadgenProspect? {
@@ -129,7 +140,7 @@ actor LeadgenFileLog: LeadgenRunLog {
             _ = try? h.seekToEnd()
             try? h.write(contentsOf: data)
         } else {
-            fm.createFile(atPath: url.path, contents: data)
+            _ = fm.createFile(atPath: url.path, contents: data)
         }
     }
 }
@@ -137,11 +148,36 @@ actor LeadgenFileLog: LeadgenRunLog {
 // MARK: Live adapters (used only by the CLI live path; tests use fakes)
 
 struct LeadgenHTTPFetcher: LeadgenFetching {
-    func get(_ url: URL) async throws -> (status: Int, body: String) {
+    private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+    }
+
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForRequest = 20
+        return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+    }()
+
+    func get(_ url: URL) async throws -> (status: Int, headers: [String: String], body: String) {
+        let resolved = SystemHostLookup.addresses(url.host ?? "")
+        if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved) {
+            throw LeadgenError.unsafeURL(why)
+        }
         var req = URLRequest(url: url)
         req.setValue("ControlWard-leadgen/1 (+mailto:ml@pharos-ai.ca)", forHTTPHeaderField: "User-Agent")
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        return ((resp as? HTTPURLResponse)?.statusCode ?? 0, String(decoding: data, as: UTF8.self))
+        let (data, resp) = try await Self.session.data(for: req)
+        let http = resp as? HTTPURLResponse
+        var headers: [String: String] = [:]
+        for (key, value) in http?.allHeaderFields ?? [:] {
+            headers[String(describing: key).lowercased()] = String(describing: value)
+        }
+        return (http?.statusCode ?? 0, headers, String(decoding: data, as: UTF8.self))
     }
 }
 
@@ -191,6 +227,23 @@ struct LeadgenGmailDrafts: LeadgenDraftMailbox {
     }
 }
 
+actor LeadgenMemoryBuffer: LeadgenRunLog {
+    private(set) var lines: [String] = []
+    func write(_ line: String) async { lines.append(line) }
+}
+
+struct LeadgenUnusedMailbox: LeadgenDraftMailbox {
+    func createDraft(account: String, rawMIME: String) async throws -> String {
+        throw LeadgenError.liveNotAuthorized("dry-run has no mailbox")
+    }
+}
+
+struct LeadgenUnusedD1: LeadgenD1Port {
+    func query(database: String, sql: String, params: [String]) async throws -> [[String: String]] {
+        throw LeadgenError.liveNotAuthorized("dry-run has no database")
+    }
+}
+
 // MARK: CLI
 
 /// What the live path is built from. The CLI builds real adapters; tests inject fakes.
@@ -205,14 +258,15 @@ struct LeadgenLiveDeps: Sendable {
 enum LeadgenCLI {
     static let subcommand = "leadgen"
 
-    static func plan(config: LeadgenLocalConfig?, configPath: String, configError: String?) -> [String] {
-        let prospect = config?.prospectValue
+    static func plan(config: LeadgenLocalConfig?, configPath: String, configError: String?, discovered: String? = nil) -> [String] {
         let address: String
         do { _ = try LeadgenDraftComposer.checkAddress(config?.postalAddress); address = "set (local config)" } catch { address = "REFUSED: \(error)" }
+        let directoryLine = config?.directoryValue.map { "directory: \($0.absoluteString)" } ?? "directory not configured"
         return [
-            "ControlWard lead-gen slice 1: DRY RUN (nothing was fetched, written, or drafted)",
+            "ControlWard lead-gen slice 1: DRY RUN (nothing was written or drafted)",
             "config: \(configPath) \(configError.map { "[\($0)]" } ?? "[loaded]")",
-            "prospect: \(prospect.map { "\($0.organization) \($0.site.absoluteString)" } ?? "not configured")",
+            directoryLine,
+            "prospect: \(discovered ?? "not configured")",
             "pages to read (robots.txt first): \((config?.paths ?? []).joined(separator: " "))",
             "CASL footer address: \(address)",
             "consent basis: \(config?.consent == nil ? "not configured" : "set")",
@@ -229,8 +283,12 @@ enum LeadgenCLI {
         ]
     }
 
-    /// Returns (exit code, output lines). Dry-run never builds live adapters.
+    /// Returns (exit code, output lines). Dry-run never builds Gmail or D1 adapters.
+    /// With a directory URL it fetches that page and the one clinic's own site. Without one it prints
+    /// `directory not configured` and does not treat a hand-supplied clinic URL as the prospect.
     static func run(arguments: [String], environment: [String: String],
+                    makeFetcher: @escaping () -> LeadgenFetching = { LeadgenHTTPFetcher() },
+                    dns: any LeadgenResolving = LeadgenSystemDNS(),
                     makeLive: (LeadgenLocalConfig) throws -> LeadgenLiveDeps) async -> (Int32, [String]) {
         let config = LeadgenRunConfig.from(arguments: arguments, environment: environment)
         let path = LeadgenLocalConfig.defaultPath(environment: environment)
@@ -238,20 +296,39 @@ enum LeadgenCLI {
         var loadError: String?
         do { local = try LeadgenLocalConfig.load(path: path) } catch { loadError = "\(error)" }
 
-        guard config.liveFlag else { return (0, plan(config: local, configPath: path, configError: loadError)) }
+        guard config.liveFlag else {
+            guard let directory = local?.directoryValue else { return (0, plan(config: local, configPath: path, configError: loadError)) }
+            do {
+                _ = try LeadgenDraftComposer.checkAddress(local?.postalAddress)
+                guard let paths = local?.paths, !paths.isEmpty else { return (2, ["refused: local config has no paths"]) }
+                let log = LeadgenMemoryBuffer()
+                let runner = LeadgenSliceRunner(config: .dryRun, fetcher: makeFetcher(), mailbox: LeadgenUnusedMailbox(), d1: LeadgenUnusedD1(), log: log, now: { "dry-run" }, dns: dns)
+                let report = try await runner.run(candidates: [], paths: paths, consent: local?.consentValue, postalAddress: local?.postalAddress, directory: directory)
+                var lines = plan(config: local, configPath: path, configError: loadError, discovered: "\(report.prospect.organization) \(report.prospect.site.absoluteString)")
+                lines.append("fit: \(report.fit.reason)")
+                lines.append("recipient: \(report.prospect.publicContactEmail)")
+                lines.append("consent source: \(report.draft.consent.source)")
+                lines.append(contentsOf: await log.lines)
+                return (0, lines)
+            } catch {
+                var lines = plan(config: local, configPath: path, configError: loadError)
+                lines.append("discovery refused: \(error)")
+                return (1, lines)
+            }
+        }
         do { try config.authorizeLive() } catch { return (2, ["refused: \(error)"]) }
         guard let local else { return (2, ["refused: \(loadError ?? "no local config")"]) }
-        guard let prospect = local.prospectValue, let paths = local.paths, !paths.isEmpty else {
-            return (2, ["refused: local config has no prospect or paths"])
-        }
+        guard let directory = local.directoryValue else { return (2, ["refused: directory not configured"]) }
+        guard let paths = local.paths, !paths.isEmpty else { return (2, ["refused: local config has no paths"]) }
         do {
             _ = try LeadgenDraftComposer.checkAddress(local.postalAddress)
             let deps = try makeLive(local)
             let stamp = ISO8601DateFormatter().string(from: Date())
             await deps.log.write("leadgen live run \(stamp) confirmation=\"\(config.operatorOK ?? "")\"")
-            let runner = LeadgenSliceRunner(config: config, fetcher: deps.fetcher, mailbox: deps.mailbox, d1: deps.d1, log: deps.log, now: { stamp })
-            let report = try await runner.run(candidates: [prospect], paths: paths, consent: local.consentValue, postalAddress: local.postalAddress)
+            let runner = LeadgenSliceRunner(config: config, fetcher: deps.fetcher, mailbox: deps.mailbox, d1: deps.d1, log: deps.log, now: { stamp }, dns: dns)
+            let report = try await runner.run(candidates: [], paths: paths, consent: local.consentValue, postalAddress: local.postalAddress, directory: directory)
             var out = ["live run done: draft \(report.draftID ?? "-") on \(LeadgenDraft.mailbox)"]
+            out.append("prospect: \(report.prospect.organization) \(report.prospect.site.absoluteString)")
             for r in report.receipts { out.append("\(r.databaseID): leads \(r.countBefore) -> \(r.countAfter), existing tables unchanged") }
             out.append("log: \(deps.logPath)")
             return (0, out)
