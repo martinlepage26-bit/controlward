@@ -218,8 +218,16 @@ enum LeadgenFixture {
         ]
     }
     static let liveConfig = LeadgenRunConfig.from(arguments: ["--live"], environment: ["LEADGEN_OPERATOR_OK": LeadgenRunConfig.confirmation])
+    /// An empty do-not-contact file, so tests that are not about suppression can still draft.
+    static func allowEmptySuppression() {
+        if getenv("LEADGEN_SUPPRESSION") != nil { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-sup-empty.json")
+        if !FileManager.default.fileExists(atPath: url.path) { try? Data("[]".utf8).write(to: url) }
+        setenv("LEADGEN_SUPPRESSION", url.path, 0)
+    }
     static func runner(_ config: LeadgenRunConfig, mailbox: LeadgenRecordingMailbox, d1: LeadgenFakeD1, log: LeadgenMemoryLog = LeadgenMemoryLog(), fetcher: LeadgenFakeFetcher = fetcher()) -> LeadgenSliceRunner {
-        LeadgenSliceRunner(config: config, fetcher: fetcher, mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
+        allowEmptySuppression()
+        return LeadgenSliceRunner(config: config, fetcher: fetcher, mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
     }
     static let row = LeadgenLeadRow(id: "lead-x", organization: "X", site: "https://x.ca/", fitReason: "r", fitEvidence: "e", draftRef: "d", consentBasis: "c", createdAt: "2026-10-24T20:30:00Z")
     static func live(_ d1: LeadgenFakeD1, _ mailbox: LeadgenRecordingMailbox = LeadgenRecordingMailbox(), log: LeadgenMemoryLog = LeadgenMemoryLog()) async throws -> LeadgenRunReport {
@@ -491,10 +499,21 @@ enum LeadgenSliceTests {
             try check(refused && calls.isEmpty && inserts.isEmpty, "\(address) still drafted: calls \(calls) inserts \(inserts.count)")
         }
         try await blocked(" Info@CliniqueExemple.CA ")
-        try await blocked("exemple.ca")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-domain-\(UUID().uuidString).json")
+        try "[{\"address\":\"cliniqueexemple.ca\",\"at\":\"2026-01-01T00:00:00Z\",\"via\":\"list\"}]".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let list = try SuppressionList.requireFile(at: file)
+        let covered = LeadgenSuppression.reason(address: "info@team.cliniqueexemple.ca", siteHost: "team.cliniqueexemple.ca", list: list)
+        try check(covered?.contains("cliniqueexemple.ca") == true, "a domain entry did not cover the subdomain: \(covered ?? "nil")")
+        let parentFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-parent-\(UUID().uuidString).json")
+        try "[{\"address\":\"exemple.ca\",\"at\":\"2026-01-01T00:00:00Z\",\"via\":\"list\"}]".write(to: parentFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: parentFile) }
+        let parent = try SuppressionList.requireFile(at: parentFile)
+        try check(LeadgenSuppression.reason(address: "info@cliniqueexemple.ca", siteHost: "www.cliniqueexemple.ca", list: parent) == nil, "a suffix without a dot boundary matched")
     }
 
     static func run() async -> Bool {
+        LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
         let tail = await PortableCheck.suite("Lead-gen slice 1", tailCases())
         return head && tail
@@ -1106,6 +1125,7 @@ enum LeadgenSliceTests {
                 try check(box.request?.value(forHTTPHeaderField: "Host") == "www.cliniqueexemple.ca", "Host header \(String(describing: box.request?.allHTTPHeaderFields))")
             }),
             ("A failed lead row leaves the unsent draft in place and the log names it", {
+                LeadgenFixture.allowEmptySuppression()
                 let me = LeadgenProjectTarget.meCom.databaseID
                 let ph = LeadgenProjectTarget.pharos.databaseID
                 let d1 = LeadgenFakeD1()
@@ -1127,6 +1147,7 @@ enum LeadgenSliceTests {
                 try check(phRows.isEmpty, "failed database still has a row: \(phRows)")
             }),
             ("A failed first lead row leaves the unsent draft and writes no row", {
+                LeadgenFixture.allowEmptySuppression()
                 let d1 = LeadgenFakeD1()
                 await d1.setFailInsert(LeadgenProjectTarget.meCom.databaseID)
                 let mailbox = LeadgenRecordingMailbox(), log = LeadgenMemoryLog()
@@ -1141,6 +1162,7 @@ enum LeadgenSliceTests {
                 try check(lines.contains { $0.contains("draft r-draft-1 left in place") && $0.contains(LeadgenProjectTarget.meCom.databaseID) }, "log \(lines)")
             }),
             ("No lead row is written when the draft is not created", {
+                LeadgenFixture.allowEmptySuppression()
                 let d1 = LeadgenFakeD1()
                 let mailbox = LeadgenRefusingMailbox()
                 let runner = LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
@@ -1152,6 +1174,7 @@ enum LeadgenSliceTests {
                 try check(inserts.isEmpty, "a row points at a draft that does not exist: \(inserts.map(\.db))")
             }),
             ("E1 the Gmail draft is not created when only the first database already has leads", {
+                LeadgenFixture.allowEmptySuppression()
                 let d1 = LeadgenFakeD1()
                 await d1.installLeads(LeadgenProjectTarget.meCom.databaseID)
                 let mailbox = LeadgenRecordingMailbox()

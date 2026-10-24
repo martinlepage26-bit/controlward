@@ -36,6 +36,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case contactNotOnPage(String)
     case consentSourceNotFetched(String)
     case suppressed(String)
+    case suppressionUnavailable(String)
 
     var description: String {
         switch self {
@@ -68,6 +69,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .contactNotOnPage(let email): "recipient \(email) was not found on a page fetched from the clinic's own domain"
         case .consentSourceNotFetched(let url): "consent source was not a page fetched from the clinic's own domain: \(url)"
         case .suppressed(let why): "suppressed: \(why)"
+        case .suppressionUnavailable(let why): "do-not-contact list unavailable: \(why)"
         }
     }
 }
@@ -536,7 +538,7 @@ enum LeadgenSuppression {
             let key = MailAddress.bare(entry.address)
             if key.contains("@") { continue }
             let host = LeadgenSourcePolicy.normalize(key)
-            if domains.contains(host) { return "domain \(host)" }
+            if domains.contains(where: { HostMatch.belongs($0, to: host) }) { return "domain \(host)" }
         }
         return nil
     }
@@ -828,14 +830,16 @@ struct LeadgenSliceRunner: Sendable {
     let log: LeadgenRunLog
     let now: @Sendable () -> String
     var dns: any LeadgenResolving = LeadgenSystemDNS()
-    var suppression: SuppressionList = SuppressionList()
 
-    /// `LEADGEN_SUPPRESSION` names a JSON file of do-not-contact entries. Otherwise the injected list is used.
-    func activeSuppression() -> SuppressionList {
-        guard let raw = getenv("LEADGEN_SUPPRESSION") else { return suppression }
+    /// `LEADGEN_SUPPRESSION` must name a readable JSON file. Missing, empty, unreadable, or unparseable refuses the draft.
+    func activeSuppression() throws -> SuppressionList {
+        guard let raw = getenv("LEADGEN_SUPPRESSION") else {
+            throw LeadgenError.suppressionUnavailable("LEADGEN_SUPPRESSION is not set")
+        }
         let path = String(cString: raw)
-        guard !path.isEmpty else { return suppression }
-        return SuppressionList(storageURL: URL(fileURLWithPath: path))
+        guard !path.isEmpty else { throw LeadgenError.suppressionUnavailable("LEADGEN_SUPPRESSION is empty") }
+        do { return try SuppressionList.requireFile(at: URL(fileURLWithPath: path)) }
+        catch let error as SuppressionFileError { throw LeadgenError.suppressionUnavailable(error.description) }
     }
 
     /// Live order: schema check of both DBs (stop if `leads` exists), then one Gmail create-draft,
@@ -863,7 +867,13 @@ struct LeadgenSliceRunner: Sendable {
             resolvedConsent = consent
             fetched = await reader.fetchedURLs
         }
-        if let why = LeadgenSuppression.reason(address: prospect.publicContactEmail, siteHost: prospect.site.host ?? "", list: activeSuppression()) {
+        let suppression: SuppressionList
+        do { suppression = try activeSuppression() }
+        catch {
+            await log.write("suppression refused: \(error)")
+            throw error
+        }
+        if let why = LeadgenSuppression.reason(address: prospect.publicContactEmail, siteHost: prospect.site.host ?? "", list: suppression) {
             await log.write("suppressed: \(why)")
             throw LeadgenError.suppressed(why)
         }
