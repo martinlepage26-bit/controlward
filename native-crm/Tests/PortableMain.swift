@@ -11,6 +11,7 @@ struct PortableTestMain {
         ok = await MailControlTests.run() && ok
         ok = await ProjectControlTests.run() && ok
         ok = await MailControlPlantedReds.run() && ok
+        ok = await LeadgenSliceTests.run() && ok
         if !ok {
             print("PORTABLE TESTS FAILED")
             exit(1)
