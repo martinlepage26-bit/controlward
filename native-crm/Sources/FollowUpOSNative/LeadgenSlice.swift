@@ -369,6 +369,7 @@ struct LeadgenDraft: Sendable, Equatable {
             "Message-ID: \(messageID)",
             "To: \(to)",
             "Subject: \(subject)",
+            "List-Unsubscribe: <mailto:\(LeadgenDraft.mailbox)?subject=unsubscribe>",
             "X-PHAROS-Consent-Basis: \(consent.basis)",
             "X-PHAROS-Consent-Source: \(consent.source)",
             "X-PHAROS-Consent-Recorded: \(consent.recordedAt)",
