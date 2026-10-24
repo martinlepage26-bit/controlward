@@ -879,11 +879,9 @@ enum LeadgenSliceTests {
                     _ = try await runner.run(candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
                     throw PortableCheckFailure(description: "first row failure was ignored")
                 } catch is PortableCheckFailure { throw PortableCheckFailure(description: "first row failure was ignored") } catch {}
-                let calls = await mailbox.calls, deletes = await mailbox.deletes, lines = await log.lines
-                let meRows = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
-                let phRows = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+                let calls = await mailbox.calls, deletes = await mailbox.deletes, lines = await log.lines, inserts = await d1.inserts()
                 try check(calls == ["createDraft"] && deletes == 0, "draft calls \(calls), deletes \(deletes)")
-                try check(meRows.isEmpty && phRows.isEmpty, "a row was stored after the failed insert: me \(meRows) ph \(phRows)")
+                try check(inserts.isEmpty, "a pre-check failure still attempted an insert: \(inserts.map(\.db))")
                 try check(lines.contains { $0.contains("draft r-draft-1 left in place") && $0.contains(LeadgenProjectTarget.meCom.databaseID) }, "log \(lines)")
             }),
             ("No lead row is written when the draft is not created", {
