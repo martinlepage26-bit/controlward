@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-@main
+
 struct FollowUpOSApp: App {
     @StateObject private var store = makeStore()
     @StateObject private var mail = MailIntakeController()

@@ -800,6 +800,36 @@ enum LeadPipelineTests {
                 try expect(report.skipped["osm:node/3001"] == "website host not fetchable" && !fixture.inner.urls.contains { $0.contains("192.168") },
                            "listing with an internal website: \(report.skipped)")
             }),
+            ("Own-site SSRF after DNS: a name that resolves to loopback, private, link-local, IPv6 non-public, or nothing is refused before the network; a same-domain redirect to such an address is refused too", {
+                let inner = FakeLeadTransport()
+                inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                inner.respond(LeadKit.homePage, body: "<p>Bonjour</p>", headers: ["content-type": "text/html"])
+                inner.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://cdn.clinique-exemple.test/secret"])
+                for addresses in [["127.0.0.1"], ["10.1.2.3"], ["192.168.0.9"], ["172.16.0.4"], ["169.254.169.254"], ["::1"], ["fe80::1"], ["fd00::1"], []] as [[String]] {
+                    let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { _ in addresses })
+                    do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "admitted \(addresses)") }
+                    catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", "\(addresses): \(refusal)") }
+                }
+                try expect(inner.requests.isEmpty, "DNS refusals reached the network: \(inner.urls)")
+                let redirected = FakeLeadTransport()
+                redirected.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                redirected.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://cdn.clinique-exemple.test/secret"])
+                redirected.respond("https://cdn.clinique-exemple.test/secret", body: "<p>secret</p>")
+                let guardRedirect = GuardedLeadTransport(config: config, inner: redirected, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { host in
+                    host == "cdn.clinique-exemple.test" ? ["10.0.0.1"] : ["1.1.1.1"]
+                })
+                do { _ = try await guardRedirect.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "followed private redirect") }
+                catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", refusal.code) }
+                try expect(!redirected.urls.contains { $0.contains("cdn.clinique-exemple") }, "private redirect was fetched: \(redirected.urls)")
+                let openInner = FakeLeadTransport()
+                openInner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                openInner.respond(LeadKit.homePage, body: "<p>Bonjour</p>", headers: ["content-type": "text/html"])
+                let open = GuardedLeadTransport(config: config, inner: openInner, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { _ in ["1.1.1.1"] })
+                let response = try await open.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain))
+                try expect(response.status == 200, "public DNS refused: \(response.status)")
+                let localhost = SystemHostLookup.addresses("localhost")
+                try expect(!localhost.isEmpty && localhost.allSatisfy(HostSafety.isNonPublic), "localhost resolves non-public: \(localhost)")
+            }),
             ("Redirects: an off-site hop is refused with no snapshot; a same-domain hop is re-admitted and robots-checked; at most 3 hops", {
                 let inner = FakeLeadTransport()
                 inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
@@ -819,7 +849,7 @@ enum LeadPipelineTests {
                     catch let refusal as LeadPipelineRefusal { return refusal.code } catch { return "error" }
                 }
                 for (raw, expected, label) in [(LeadKit.homePage, "refused:redirect-off-site", "off-site"),
-                                               ("https://www.clinique-exemple.test/ip", "refused:redirect-off-site", "redirect to an IP literal"),
+                                               ("https://www.clinique-exemple.test/ip", "refused:own-site-host", "redirect to an IP literal"),
                                                (LeadKit.teamPage, "refused:robots", "same-domain hop is robots-checked"),
                                                ("https://www.clinique-exemple.test/a-propos", "ok:200:\(LeadKit.contactPage)", "same-site hop followed, final URL kept"),
                                                ("https://www.clinique-exemple.test/r1", "refused:redirect-limit", "more than 3 hops")] {
