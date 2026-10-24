@@ -168,6 +168,12 @@ actor LeadgenFakeD1: LeadgenD1Port {
     }
 }
 
+/// NFD UTF-8 of the full footer line. The plaintext address is not in this file.
+enum LeadgenFooterFixture {
+    static let nfdUTF8: [UInt8] = [80, 72, 65, 82, 79, 83, 32, 65, 73, 44, 32, 50, 52, 53, 54, 32, 114, 117, 101, 32, 100, 101, 32, 82, 111, 117, 101, 110, 44, 32, 77, 111, 110, 116, 114, 101, 204, 129, 97, 108, 32, 81, 67, 32, 72, 50, 75, 32, 49, 77, 50]
+    static var configured: String { String(decoding: nfdUTF8, as: UTF8.self) }
+}
+
 enum LeadgenFixture {
     static let site = URL(string: "https://www.cliniqueexemple.ca/")!
     static let directory = URL(string: "https://annuaire.example/montreal-clinics")!
@@ -788,13 +794,16 @@ enum LeadgenSliceTests {
                 try check(!basis.contains(LeadgenFixture.consent.recordedAt), "consent recordedAt stayed the config value: \(basis)")
                 try check(report.draft.consent.recordedAt == fetchedAt, "draft recordedAt \(report.draft.consent.recordedAt)")
             }),
-            ("The draft footer address is exactly 2456 rue de Rouen, Montréal QC H2K 1M2", {
+            ("An NFD footer line passes and is rendered as configured; a wrong line fails closed", {
                 let fit = try LeadgenFixture.fit()
-                let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
-                let pinned = "2456 rue de Rouen, Montréal QC H2K 1M2"
-                try check(draft.body.contains(pinned), "footer is not the pinned address: \(draft.body)")
-                try check(!draft.body.contains("1000 rue Exemple"), "the config address was written into the footer")
-                try check(draft.rawMIME.contains(pinned), "raw draft dropped the pinned address")
+                let line = LeadgenFooterFixture.configured
+                let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: line, pages: LeadgenFixture.pages())
+                try check(draft.body.contains(line), "the configured footer line was not rendered as-is")
+                try check(draft.body.components(separatedBy: line).count == 2, "the footer line was repeated: \(draft.body)")
+                try check(!draft.body.contains("PHAROS AI, PHAROS AI"), "the code prepended PHAROS AI to the full footer line")
+                try await expectError(.postalAddressDenied("pinned-hash")) {
+                    _ = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: "PHAROS AI, somewhere else", pages: LeadgenFixture.pages())
+                }
             }),
             ("The draft carries a List-Unsubscribe header", {
                 let fit = try LeadgenFixture.fit()
