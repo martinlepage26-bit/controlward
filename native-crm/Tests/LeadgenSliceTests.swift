@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -87,6 +90,12 @@ actor LeadgenOrderMailbox: LeadgenDraftMailbox {
     }
 }
 
+actor LeadgenRefusingMailbox: LeadgenDraftMailbox {
+    func createDraft(account: String, rawMIME: String) async throws -> String {
+        throw LeadgenError.fetchFailed("draft")
+    }
+}
+
 /// Counts how often the CLI asked for live adapters (it must not in dry-run or on refusal).
 final class LeadgenDepsProbe: @unchecked Sendable {
     var calls = 0
@@ -101,6 +110,7 @@ actor LeadgenFakeD1: LeadgenD1Port {
     var schemas: [String: [String: String]] = [:]
     private(set) var statements: [(db: String, sql: String)] = []
     var tamperRows = false, tamperSchema = false
+    var failInsertDatabase: String?
 
     init(withLeads: Bool = false) {
         for (db, prefix) in [(LeadgenProjectTarget.meCom.databaseID, "me"), (LeadgenProjectTarget.pharos.databaseID, "ph")] {
@@ -114,6 +124,7 @@ actor LeadgenFakeD1: LeadgenD1Port {
     }
 
     func setTamper(rows: Bool, schema: Bool) { tamperRows = rows; tamperSchema = schema }
+    func setFailInsert(_ db: String?) { failInsertDatabase = db }
     func installLeads(_ db: String) {
         tables[db]?["leads"] = []
         schemas[db]?["leads"] = LeadgenMigration.createLeads
@@ -140,6 +151,7 @@ actor LeadgenFakeD1: LeadgenD1Port {
             return tables[db]?[name] ?? []
         }
         if sql.hasPrefix("INSERT INTO leads (") {
+            if failInsertDatabase == db { throw LeadgenError.fetchFailed("row \(db)") }
             let open = sql.firstIndex(of: "(")!, close = sql.firstIndex(of: ")")!
             let cols = sql[sql.index(after: open)..<close].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             var row: [String: String] = [:]
@@ -837,6 +849,66 @@ enum LeadgenSliceTests {
                 try check(box.lookups == 1, "lookup ran \(box.lookups) times")
                 try check(box.request?.url?.host == "1.1.1.1", "request went to \(String(describing: box.request?.url))")
                 try check(box.request?.value(forHTTPHeaderField: "Host") == "www.cliniqueexemple.ca", "Host header \(String(describing: box.request?.allHTTPHeaderFields))")
+            }),
+            ("A failed lead row leaves the unsent draft in place and the log names it", {
+                let me = LeadgenProjectTarget.meCom.databaseID
+                let ph = LeadgenProjectTarget.pharos.databaseID
+                let d1 = LeadgenFakeD1()
+                await d1.setFailInsert(ph)
+                let mailbox = LeadgenRecordingMailbox()
+                let log = LeadgenMemoryLog()
+                let runner = LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
+                do {
+                    _ = try await runner.run(candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                    throw PortableCheckFailure(description: "row failure was ignored")
+                } catch is PortableCheckFailure {
+                    throw PortableCheckFailure(description: "row failure was ignored")
+                } catch {}
+                let calls = await mailbox.calls, deletes = await mailbox.deletes, lines = await log.lines
+                try check(calls == ["createDraft"] && deletes == 0, "draft calls \(calls), deletes \(deletes)")
+                try check(lines.contains { $0.contains("draft r-draft-1 left in place") && $0.contains(ph) }, "log did not name the draft and the failed row: \(lines)")
+                let meRows = await d1.rows(me, "leads"), phRows = await d1.rows(ph, "leads")
+                try check(meRows.count == 1 && meRows[0]["draft_ref"] == "r-draft-1", "surviving row does not point at the real draft: \(meRows)")
+                try check(phRows.isEmpty, "failed database still has a row: \(phRows)")
+            }),
+            ("A failed first lead row leaves the unsent draft and writes no row", {
+                let d1 = LeadgenFakeD1()
+                await d1.setFailInsert(LeadgenProjectTarget.meCom.databaseID)
+                let mailbox = LeadgenRecordingMailbox(), log = LeadgenMemoryLog()
+                let runner = LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
+                do {
+                    _ = try await runner.run(candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                    throw PortableCheckFailure(description: "first row failure was ignored")
+                } catch is PortableCheckFailure { throw PortableCheckFailure(description: "first row failure was ignored") } catch {}
+                let calls = await mailbox.calls, deletes = await mailbox.deletes, lines = await log.lines, inserts = await d1.inserts()
+                try check(calls == ["createDraft"] && deletes == 0, "draft calls \(calls), deletes \(deletes)")
+                try check(inserts.isEmpty, "a row was stored after the failed insert: \(inserts.map(\.db))")
+                try check(lines.contains { $0.contains("draft r-draft-1 left in place") && $0.contains(LeadgenProjectTarget.meCom.databaseID) }, "log \(lines)")
+            }),
+            ("No lead row is written when the draft is not created", {
+                let d1 = LeadgenFakeD1()
+                let mailbox = LeadgenRefusingMailbox()
+                let runner = LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
+                do {
+                    _ = try await runner.run(candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                    throw PortableCheckFailure(description: "a missing draft still finished the run")
+                } catch is PortableCheckFailure { throw PortableCheckFailure(description: "a missing draft still finished the run") } catch {}
+                let inserts = await d1.inserts()
+                try check(inserts.isEmpty, "a row points at a draft that does not exist: \(inserts.map(\.db))")
+            }),
+            ("E1 the Gmail draft is not created when only the first database already has leads", {
+                let d1 = LeadgenFakeD1()
+                await d1.installLeads(LeadgenProjectTarget.meCom.databaseID)
+                let mailbox = LeadgenRecordingMailbox()
+                let log = LeadgenMemoryLog()
+                try await expectError(.leadsTableExists(LeadgenProjectTarget.meCom.databaseID)) {
+                    _ = try await LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS()).run(
+                        candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                }
+                let calls = await mailbox.calls, inserts = await d1.inserts(), lines = await log.lines
+                try check(calls.isEmpty && inserts.isEmpty, "draft or insert ran anyway: calls \(calls), inserts \(inserts)")
+                try check(lines.contains("step schema-check \(LeadgenProjectTarget.meCom.databaseID)"), "first database was not checked")
+                try check(!lines.contains { $0.contains("gmail-create-draft") }, "draft step was logged: \(lines)")
             }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
