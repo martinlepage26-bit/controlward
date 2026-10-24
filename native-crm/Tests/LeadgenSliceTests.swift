@@ -736,7 +736,7 @@ enum LeadgenSliceTests {
     }
 
     static func tailCases() -> [(String, () async throws -> Void)] {
-        [
+        var cases: [(String, () async throws -> Void)] = [
             ("M1 nested RBQ JSON parses, and zero records or a failed check hold construction trades", {
                 let config = try LeadKit.config()
                 let source = try LeadPipelineTests.unwrap(RBQOpenData.source(config), "RBQ source missing from icp.json")
@@ -1199,11 +1199,6 @@ enum LeadgenSliceTests {
             ("An admitted IPv6 address is bracketed in the pinned URL", {
                 try LeadgenSliceTests.ipv6Pin()
             }),
-            #if os(macOS)
-            ("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", {
-                try await LeadgenSliceTests.pinnedTLS()
-            }),
-            #endif
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
@@ -1212,5 +1207,9 @@ enum LeadgenSliceTests {
                 }
             }),
         ]
+        #if os(macOS)
+        cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
+        #endif
+        return cases
     }
 }
