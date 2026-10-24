@@ -458,6 +458,37 @@ enum LeadgenSliceTests {
     }
     #endif
 
+    static func readPolicy() -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+        ])
+    }
+
+    static func writeScopedPolicy() -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+        ])
+    }
+
+    static func activeVerification() -> [LeadgenVerifiedToken?] {
+        [LeadgenVerifiedToken(id: "id-me", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")]
+    }
+
+    static func refuseToken(_ saved: LeadgenDeclaredPolicy?, _ verified: [LeadgenVerifiedToken?]) throws {
+        do {
+            try LeadgenTokenProof.admit(saved: saved, verified: verified)
+            throw PortableCheckFailure(description: "token proof admitted a token it must refuse")
+        } catch LeadgenError.tokenProof {
+            return
+        } catch let error as PortableCheckFailure {
+            throw error
+        } catch {
+            throw PortableCheckFailure(description: "token proof failed as \(error)")
+        }
+    }
+
     static func suppressionFailsClosed() async throws {
         func refuse(path: String?) async throws {
             if let path { setenv("LEADGEN_SUPPRESSION", path, 1) } else { unsetenv("LEADGEN_SUPPRESSION") }
@@ -1274,6 +1305,15 @@ enum LeadgenSliceTests {
                 }
             }),
         ]
+        cases.append(("A write-scoped token declaration is refused", { try LeadgenSliceTests.refuseToken(LeadgenSliceTests.writeScopedPolicy(), LeadgenSliceTests.activeVerification()) }))
+        cases.append(("A missing token declaration is refused", { try LeadgenSliceTests.refuseToken(nil, []) }))
+        cases.append(("An inactive or unverifiable token is refused", {
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "id-me", status: "disabled"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [nil, LeadgenVerifiedToken(id: "id-ph", status: "active")])
+        }))
+        cases.append(("A verify id that does not match the saved token id is refused", {
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "someone-else", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
+        }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
         #if os(macOS)

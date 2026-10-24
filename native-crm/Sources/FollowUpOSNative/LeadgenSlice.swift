@@ -37,6 +37,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case consentSourceNotFetched(String)
     case suppressed(String)
     case suppressionUnavailable(String)
+    case tokenProof(String)
 
     var description: String {
         switch self {
@@ -70,6 +71,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .consentSourceNotFetched(let url): "consent source was not a page fetched from the clinic's own domain: \(url)"
         case .suppressed(let why): "suppressed: \(why)"
         case .suppressionUnavailable(let why): "do-not-contact list unavailable: \(why)"
+        case .tokenProof(let why): "token proof refused: \(why)"
         }
     }
 }
@@ -522,6 +524,44 @@ enum LeadgenDraftComposer {
 /// The only mail capability ControlWard gets in this slice. No send, read, list, or delete exists.
 protocol LeadgenDraftMailbox: Sendable {
     func createDraft(account: String, rawMIME: String) async throws -> String
+}
+
+struct LeadgenDeclaredPermission: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var accountID: String
+}
+
+struct LeadgenDeclaredToken: Codable, Equatable, Sendable {
+    var id: String
+    var env: String
+    var permissions: [LeadgenDeclaredPermission]
+}
+
+/// Gitignored record of a token id and its permission list. It never holds the token value.
+struct LeadgenDeclaredPolicy: Codable, Equatable, Sendable {
+    var tokens: [LeadgenDeclaredToken]
+}
+
+struct LeadgenVerifiedToken: Equatable, Sendable {
+    var id: String
+    var status: String
+}
+
+/// Declared-and-captured proof. `admit` currently accepts every record; the startup check lands with the fix.
+enum LeadgenTokenProof {
+    static let d1ReadPermissionGroupID = "192192df92ee43ac90f2aeeffce67e35"
+    static let d1ReadPermissionGroupName = "D1 Read"
+    static let d1WritePermissionGroupID = "09b2857d1c31407795e75e3fed8617a1"
+    static let d1WritePermissionGroupName = "D1 Write"
+    static let readTokenEnvs = ["LEADGEN_CF_TOKEN_MECOM_READ", "LEADGEN_CF_TOKEN_PHAROS_READ"]
+    static let accountIDs = [
+        "e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1",
+        "959e5bdb-4213-496a-9557-10ec410440d7",
+    ]
+
+    static func admit(saved: LeadgenDeclaredPolicy?, verified: [LeadgenVerifiedToken?]) throws {
+    }
 }
 
 /// Do-not-contact check. An entry is an address, or a domain when it has no `@`.
