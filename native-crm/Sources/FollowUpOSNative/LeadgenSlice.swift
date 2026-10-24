@@ -2,11 +2,9 @@ import Foundation
 
 // PHAROS lead-gen slice 1 (docs/leadgen-slice/SPEC.md).
 // Portable: Foundation only, so bin/test-portable runs it on Linux as well as on the Mac.
-// RED COMMIT: declarations only; every behaviour is a stub so the tests compile and fail.
 // There is no send, read, or delete path for mail anywhere in this file, by design.
 
 enum LeadgenError: Error, Equatable, CustomStringConvertible {
-    case notImplemented
     case liveNotAuthorized(String)
     case hostNotAllowed(String)
     case robotsDisallowed(String)
@@ -28,7 +26,6 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .notImplemented: "not implemented (red commit)"
         case .liveNotAuthorized(let why): "live run refused: \(why)"
         case .hostNotAllowed(let host): "host not allowed: \(host)"
         case .robotsDisallowed(let path): "robots.txt disallows \(path)"
@@ -60,11 +57,17 @@ struct LeadgenRunConfig: Sendable, Equatable {
     static let dryRun = LeadgenRunConfig(liveFlag: false, operatorOK: nil)
 
     /// Live only with the explicit `--live` flag AND a recorded operator OK (env LEADGEN_OPERATOR_OK).
-    static func from(arguments: [String], environment: [String: String]) -> LeadgenRunConfig { return .dryRun }
+    static func from(arguments: [String], environment: [String: String]) -> LeadgenRunConfig {
+        let ok = environment["LEADGEN_OPERATOR_OK"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return LeadgenRunConfig(liveFlag: arguments.contains("--live"), operatorOK: (ok?.isEmpty ?? true) ? nil : ok)
+    }
 
-    var isLive: Bool { false }
+    var isLive: Bool { liveFlag && operatorOK != nil }
 
-    func authorizeLive() throws { throw LeadgenError.notImplemented }
+    func authorizeLive() throws {
+        guard liveFlag else { throw LeadgenError.liveNotAuthorized("no --live flag") }
+        guard operatorOK != nil else { throw LeadgenError.liveNotAuthorized("no operator OK recorded") }
+    }
 }
 
 // MARK: 2. Sources
@@ -87,16 +90,49 @@ struct LeadgenSourcePolicy: Sendable {
         return h.hasPrefix("www.") ? String(h.dropFirst(4)) : h
     }
 
-    func check(_ url: URL) throws { throw LeadgenError.notImplemented }
+    func check(_ url: URL) throws {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              let host = url.host else { throw LeadgenError.hostNotAllowed(url.absoluteString) }
+        let h = LeadgenSourcePolicy.normalize(host)
+        if LeadgenSourcePolicy.blockedHostFragments.contains(where: { h.contains($0) }) {
+            throw LeadgenError.hostNotAllowed(h)
+        }
+        guard allowedHosts.contains(h) else { throw LeadgenError.hostNotAllowed(h) }
+    }
 }
 
 struct LeadgenRobots: Sendable {
     private var allows: [String] = []
     private var disallows: [String] = []
 
-    init(text: String) {  }
+    init(text: String) {
+        var inGroup = false
+        var lastWasAgent = false
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2 else { continue }
+            let key = parts[0].lowercased()
+            if key == "user-agent" {
+                let agent = parts[1].lowercased()
+                let matches = agent == "*" || agent.contains("controlward")
+                inGroup = lastWasAgent ? (inGroup || matches) : matches
+                lastWasAgent = true
+                continue
+            }
+            lastWasAgent = false
+            guard inGroup else { continue }
+            if key == "disallow", !parts[1].isEmpty { disallows.append(parts[1]) }
+            if key == "allow", !parts[1].isEmpty { allows.append(parts[1]) }
+        }
+    }
 
-    func allows(path: String) -> Bool { false }
+    func allows(path: String) -> Bool {
+        let p = path.isEmpty ? "/" : path
+        let d = disallows.filter { p.hasPrefix($0) }.map(\.count).max() ?? -1
+        let a = allows.filter { p.hasPrefix($0) }.map(\.count).max() ?? -1
+        return d < 0 || a >= d
+    }
 }
 
 protocol LeadgenFetching: Sendable {
@@ -125,12 +161,38 @@ actor LeadgenSiteReader {
     }
 
     /// Reads robots.txt, then each allowed path on the prospect's own site.
-    func read(site: URL, paths: [String]) async throws -> [LeadgenPage] { throw LeadgenError.notImplemented }
+    func read(site: URL, paths: [String]) async throws -> [LeadgenPage] {
+        try policy.check(site)
+        guard let robotsURL = URL(string: "/robots.txt", relativeTo: site)?.absoluteURL else {
+            throw LeadgenError.fetchFailed(site.absoluteString)
+        }
+        let robotsResponse = try await fetch(robotsURL)
+        let robots = LeadgenRobots(text: robotsResponse.status == 200 ? robotsResponse.body : "")
+        var pages: [LeadgenPage] = []
+        for path in paths {
+            guard robots.allows(path: path) else { throw LeadgenError.robotsDisallowed(path) }
+            guard let url = URL(string: path, relativeTo: site)?.absoluteURL else { continue }
+            let response = try await fetch(url)
+            guard response.status == 200 else { continue }
+            pages.append(LeadgenPage(url: url, bodyText: LeadgenHTML.bodyText(response.body)))
+        }
+        return pages
+    }
 }
 
 enum LeadgenHTML {
     /// Visible body text without script, style, nav, header, or footer blocks (LIVE-R4).
-    static func bodyText(_ html: String) -> String { html }
+    static func bodyText(_ html: String) -> String {
+        var text = html
+        for tag in ["script", "style", "nav", "header", "footer", "noscript"] {
+            text = text.replacingOccurrences(of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: " ", options: [.regularExpression, .caseInsensitive])
+        }
+        text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        for (entity, char) in [("&amp;", "&"), ("&nbsp;", " "), ("&#39;", "'"), ("&rsquo;", "'"), ("&quot;", "\""), ("&eacute;", "é"), ("&egrave;", "è"), ("&agrave;", "à")] {
+            text = text.replacingOccurrences(of: entity, with: char)
+        }
+        return text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    }
 }
 
 // MARK: 3. Exactly one prospect, one segment
@@ -145,7 +207,13 @@ struct LeadgenProspect: Sendable, Equatable {
 enum LeadgenProspectPicker {
     static let segment = "montreal-clinics"
 
-    static func pickOne(_ candidates: [LeadgenProspect]) throws -> LeadgenProspect { throw LeadgenError.notImplemented }
+    static func pickOne(_ candidates: [LeadgenProspect]) throws -> LeadgenProspect {
+        guard candidates.count == 1, let only = candidates.first else {
+            throw LeadgenError.notExactlyOneProspect(candidates.count)
+        }
+        guard only.segment == segment else { throw LeadgenError.wrongSegment(only.segment) }
+        return only
+    }
 }
 
 // MARK: 4. Fit reason from the prospect's own pages
@@ -167,7 +235,28 @@ enum LeadgenFitFinder {
         " ia ", "(ia)", "l'ia ", "d'ia ", " ai ", "(ai)", "ai-powered",
     ]
 
-    static func find(pages: [LeadgenPage], prospect: LeadgenProspect) throws -> LeadgenFit { throw LeadgenError.notImplemented }
+    static func find(pages: [LeadgenPage], prospect: LeadgenProspect) throws -> LeadgenFit {
+        let home = LeadgenSourcePolicy.normalize(prospect.site.host ?? "")
+        var evidence: [LeadgenFitEvidence] = []
+        for page in pages {
+            let host = LeadgenSourcePolicy.normalize(page.url.host ?? "")
+            guard host == home else { throw LeadgenError.evidenceOffDomain(page.url.absoluteString) }
+            let sentences = page.bodyText
+                .replacingOccurrences(of: "([.!?])\\s+", with: "$1\n", options: .regularExpression)
+                .components(separatedBy: "\n")
+            for sentence in sentences {
+                let s = sentence.trimmingCharacters(in: .whitespaces)
+                let padded = " " + s.lowercased() + " "
+                guard s.count >= 30, aiTerms.contains(where: { padded.contains($0) }) else { continue }
+                evidence.append(LeadgenFitEvidence(url: page.url.absoluteString, quote: s))
+                break
+            }
+        }
+        guard let first = evidence.first else { throw LeadgenError.noBodyEvidence }
+        let reason = "\(prospect.organization) says on its own site that it uses AI with patients: \"\(first.quote)\" (\(first.url)). "
+            + "A Québec clinic using AI on health information has Loi 25 duties (privacy impact assessment, notice of automated decisions), which is the AI governance work PHAROS offers."
+        return LeadgenFit(reason: reason, evidence: evidence)
+    }
 }
 
 // MARK: 5. One draft, create-draft only
@@ -207,7 +296,34 @@ struct LeadgenDraft: Sendable, Equatable {
 enum LeadgenDraftComposer {
     static let signature = "Martin Lepage, PhD\nPHAROS AI\nml@pharos-ai.ca"
 
-    static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String) throws -> LeadgenDraft { throw LeadgenError.notImplemented }
+    static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String) throws -> LeadgenDraft {
+        guard let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty,
+              !consent.source.isEmpty, !consent.recordedAt.isEmpty else { throw LeadgenError.missingConsentBasis }
+        guard !postalAddress.trimmingCharacters(in: .whitespaces).isEmpty else { throw LeadgenError.missingPostalAddress }
+        let quote = fit.evidence.first?.quote ?? ""
+        let subject = "Gouvernance de l'IA et Loi 25 pour \(prospect.organization)"
+        let body = """
+        Bonjour,
+
+        J'ai lu sur votre site : « \(quote) »
+
+        Quand une clinique utilise l'IA avec des renseignements de santé, la Loi 25 demande une évaluation des facteurs relatifs à la vie privée et un avis lorsqu'une décision est automatisée. J'aide les cliniques à mettre cela en place simplement, sans freiner l'outil.
+
+        Seriez-vous ouverts à un appel de 20 minutes dans les prochaines semaines?
+
+        \(signature)
+
+        ---
+        Vous recevez ce message parce que votre adresse est publiée sur votre site (\(consent.source)).
+        Pour ne plus recevoir de messages de PHAROS AI, répondez « désabonnement » à ce courriel; votre demande sera traitée dans les 10 jours ouvrables.
+        To unsubscribe, reply "unsubscribe" to this email.
+        PHAROS AI, \(postalAddress)
+        """
+        for text in [subject, body] where text.contains("\u{2014}") || text.contains("\u{2013}") {
+            throw LeadgenError.dashNotAllowed
+        }
+        return LeadgenDraft(from: LeadgenDraft.mailbox, to: prospect.publicContactEmail, subject: subject, body: body, consent: consent)
+    }
 }
 
 /// The only mail capability ControlWard gets in this slice. No send, read, list, or delete exists.
@@ -225,7 +341,19 @@ enum LeadgenMigration {
 }
 
 enum LeadgenSQLGuard {
-    static func check(_ sql: String, params: [String]) throws { throw LeadgenError.notImplemented }
+    static func check(_ sql: String, params: [String]) throws {
+        let s = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        let upper = s.uppercased()
+        let isRead = upper.hasPrefix("SELECT ")
+        let namesCandidate = s.lowercased().contains("candidate") || params.contains(where: { $0.lowercased().contains("candidate") })
+        if !isRead && namesCandidate { throw LeadgenError.candidateRefused(s) }
+        if s == LeadgenMigration.createLeads { return }
+        if upper.contains("PROJECTS") && !upper.hasPrefix("SELECT ") { throw LeadgenError.candidateRefused("no row in projects: \(s)") }
+        let forbidden = ["UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ", "REPLACE", "UPSERT", "ON CONFLICT", "PRAGMA", "ATTACH", "VACUUM", ";"]
+        if forbidden.contains(where: { upper.contains($0) }) { throw LeadgenError.sqlRefused(s) }
+        if upper.hasPrefix("SELECT ") { return }
+        guard upper.hasPrefix("INSERT INTO LEADS (") else { throw LeadgenError.sqlRefused(s) }
+    }
 }
 
 protocol LeadgenD1Port: Sendable {
@@ -255,7 +383,13 @@ struct LeadgenLeadRow: Sendable, Equatable {
 
     static let status = "waiting-on-martin"
 
-    var columns: [(String, String)] { [] }
+    var columns: [(String, String)] {
+        [("id", id), ("organization", organization), ("segment", LeadgenProspectPicker.segment), ("site", site),
+         ("fit_reason", fitReason), ("fit_evidence", fitEvidence), ("draft_ref", draftRef), ("consent_basis", consentBasis),
+         ("status", LeadgenLeadRow.status),
+         ("next_action", "Martin: read the Gmail draft in ml@pharos-ai.ca, then approve or discard"),
+         ("origin", "controlward-leadgen"), ("created", createdAt)]
+    }
 }
 
 struct LeadgenWriteReceipt: Sendable, Equatable {
@@ -269,7 +403,16 @@ struct LeadgenWriteReceipt: Sendable, Equatable {
 
 enum LeadgenChecksum {
     /// FNV-1a 64 over a canonical rendering of rows (portable, no CryptoKit).
-    static func of(_ rows: [[String: String]]) -> String { "" }
+    static func of(_ rows: [[String: String]]) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for line in rows.map({ row in row.keys.sorted().map { "\($0)=\(row[$0] ?? "")" }.joined(separator: "\u{1f}") }).sorted() {
+            for byte in (line + "\u{1e}").utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01b3
+            }
+        }
+        return String(format: "%016llx", hash)
+    }
 }
 
 /// Every statement passes LeadgenSQLGuard before it reaches the port.
@@ -288,9 +431,41 @@ struct LeadgenD1Writer: Sendable {
     }
 
     /// Row count, row checksum, and schema (`sqlite_master.sql`) checksum of every table except `leads`.
-    func snapshot(_ db: String) async throws -> (tables: [String: String], hasLeads: Bool) { throw LeadgenError.notImplemented }
+    func snapshot(_ db: String) async throws -> (tables: [String: String], hasLeads: Bool) {
+        var out: [String: String] = [:]
+        var hasLeads = false
+        for t in try await run(db, Self.tablesSQL) {
+            guard let name = t["name"] else { continue }
+            if name == "leads" { hasLeads = true; continue }
+            let rows = try await run(db, Self.allRowsSQL(name))
+            out[name] = "rows=\(rows.count) data=\(LeadgenChecksum.of(rows)) schema=\(LeadgenChecksum.of([["sql": t["sql"] ?? ""]]))"
+        }
+        return (out, hasLeads)
+    }
 
-    func insertOne(_ row: LeadgenLeadRow, into target: LeadgenProjectTarget) async throws -> LeadgenWriteReceipt { throw LeadgenError.notImplemented }
+    func insertOne(_ row: LeadgenLeadRow, into target: LeadgenProjectTarget) async throws -> LeadgenWriteReceipt {
+        let db = target.databaseID
+        let (before, hadLeads) = try await snapshot(db)
+        for (t, v) in before.sorted(by: { $0.key < $1.key }) { await log.write("\(db) before \(t) \(v)") }
+        guard !hadLeads else { throw LeadgenError.leadsTableExists(db) }
+        _ = try await run(db, LeadgenMigration.createLeads)
+        let countBefore = Int(try await run(db, Self.countSQL).first?["n"] ?? "") ?? -1
+        let cols = row.columns
+        let sql = "INSERT INTO leads (\(cols.map(\.0).joined(separator: ", "))) VALUES (\(cols.map { _ in "?" }.joined(separator: ", ")))"
+        _ = try await run(db, sql, cols.map(\.1))
+        let back = try await run(db, Self.readBackSQL, [row.id])
+        guard back.count == 1, back[0]["status"] == LeadgenLeadRow.status, back[0]["organization"] == row.organization else {
+            throw LeadgenError.readBackMismatch(row.id)
+        }
+        let countAfter = Int(try await run(db, Self.countSQL).first?["n"] ?? "") ?? -1
+        let after = try await snapshot(db).tables
+        for (t, v) in after.sorted(by: { $0.key < $1.key }) { await log.write("\(db) after \(t) \(v)") }
+        await log.write("\(db) projects before \(before["projects"] ?? "missing") after \(after["projects"] ?? "missing")")
+        await log.write("\(db) leads count before=\(countBefore) after=\(countAfter)")
+        guard countAfter - countBefore == 1 else { throw LeadgenError.rowCountDelta(countAfter - countBefore) }
+        guard before == after else { throw LeadgenError.existingRowsChanged }
+        return LeadgenWriteReceipt(databaseID: db, rowID: row.id, countBefore: countBefore, countAfter: countAfter, checksumBefore: before, checksumAfter: after)
+    }
 }
 
 // MARK: Runner
@@ -313,5 +488,39 @@ struct LeadgenSliceRunner: Sendable {
     let log: LeadgenRunLog
     let now: @Sendable () -> String
 
-    func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String) async throws -> LeadgenRunReport { throw LeadgenError.notImplemented }
+    func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String) async throws -> LeadgenRunReport {
+        if config.liveFlag { try config.authorizeLive() }
+        let prospect = try LeadgenProspectPicker.pickOne(candidates)
+        let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher)
+        let pages = try await reader.read(site: prospect.site, paths: paths)
+        let fit = try LeadgenFitFinder.find(pages: pages, prospect: prospect)
+        let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: consent, postalAddress: postalAddress)
+        let fetched = await reader.fetchedURLs
+        guard config.isLive else {
+            return LeadgenRunReport(live: false, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: nil, receipts: [])
+        }
+        guard draft.from == LeadgenDraft.mailbox else { throw LeadgenError.wrongMailbox(draft.from) }
+        let draftID = try await mailbox.createDraft(account: LeadgenDraft.mailbox, rawMIME: draft.rawMIME)
+        let host = LeadgenSourcePolicy.normalize(prospect.site.host ?? "")
+        let stamp = now()
+        let row = LeadgenLeadRow(
+            id: "lead-\(host.replacingOccurrences(of: ".", with: "-"))-\(stamp.prefix(10))",
+            organization: prospect.organization,
+            site: prospect.site.absoluteString,
+            fitReason: fit.reason,
+            fitEvidence: fit.evidence.map { "\($0.url) | \($0.quote)" }.joined(separator: "\n"),
+            draftRef: draftID,
+            consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
+            createdAt: stamp
+        )
+        let writer = LeadgenD1Writer(port: d1, log: log)
+        for target in [LeadgenProjectTarget.meCom, .pharos] {
+            if try await writer.snapshot(target.databaseID).hasLeads { throw LeadgenError.leadsTableExists(target.databaseID) }
+        }
+        var receipts: [LeadgenWriteReceipt] = []
+        for target in [LeadgenProjectTarget.meCom, .pharos] {
+            receipts.append(try await writer.insertOne(row, into: target))
+        }
+        return LeadgenRunReport(live: true, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: draftID, receipts: receipts)
+    }
 }
