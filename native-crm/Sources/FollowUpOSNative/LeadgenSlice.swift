@@ -23,6 +23,10 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case rowCountDelta(Int)
     case existingRowsChanged
     case leadsTableExists(String)
+    case postalAddressDenied(String)
+    case configMissing(String)
+    case configInvalid(String)
+    case credentialMissing(String)
 
     var description: String {
         switch self {
@@ -44,6 +48,10 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .rowCountDelta(let d): "row count changed by \(d), expected exactly 1"
         case .existingRowsChanged: "checksum of existing rows or schema changed"
         case .leadsTableExists(let db): "stopped before any insert: a leads table already exists in \(db); ask Martin"
+        case .postalAddressDenied(let word): "draft refused: the footer address names a denied street (\(word))"
+        case .configMissing(let path): "local config missing: \(path) (copy docs/leadgen-slice/leadgen.local.example.json)"
+        case .configInvalid(let why): "local config invalid: \(why)"
+        case .credentialMissing(let ref): "credential not found: \(ref) (env or Keychain reference only)"
         }
     }
 }
@@ -55,6 +63,7 @@ struct LeadgenRunConfig: Sendable, Equatable {
     let operatorOK: String?
 
     static let dryRun = LeadgenRunConfig(liveFlag: false, operatorOK: nil)
+    static let confirmation = "leads in e1e9fa25 and leads in 959e5bdb"
 
     /// Live only with the explicit `--live` flag AND a recorded operator OK (env LEADGEN_OPERATOR_OK).
     static func from(arguments: [String], environment: [String: String]) -> LeadgenRunConfig {
@@ -296,7 +305,11 @@ struct LeadgenDraft: Sendable, Equatable {
 enum LeadgenDraftComposer {
     static let signature = "Martin Lepage, PhD\nPHAROS AI\nml@pharos-ai.ca"
 
-    static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String) throws -> LeadgenDraft {
+    static let deniedStreets: [String] = []
+    static func checkAddress(_ postalAddress: String?) throws -> String { postalAddress ?? "" }
+
+    static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String?) throws -> LeadgenDraft {
+        let postalAddress = postalAddress ?? ""
         guard let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty,
               !consent.source.isEmpty, !consent.recordedAt.isEmpty else { throw LeadgenError.missingConsentBasis }
         guard !postalAddress.trimmingCharacters(in: .whitespaces).isEmpty else { throw LeadgenError.missingPostalAddress }
@@ -488,7 +501,7 @@ struct LeadgenSliceRunner: Sendable {
     let log: LeadgenRunLog
     let now: @Sendable () -> String
 
-    func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String) async throws -> LeadgenRunReport {
+    func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String?) async throws -> LeadgenRunReport {
         if config.liveFlag { try config.authorizeLive() }
         let prospect = try LeadgenProspectPicker.pickOne(candidates)
         let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher)

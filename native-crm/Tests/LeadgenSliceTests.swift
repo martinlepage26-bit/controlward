@@ -44,6 +44,25 @@ actor LeadgenMemoryLog: LeadgenRunLog {
     func write(_ line: String) async { lines.append(line) }
 }
 
+/// Mailbox that records how many D1 statements had run when createDraft was called.
+actor LeadgenOrderMailbox: LeadgenDraftMailbox {
+    let d1: LeadgenFakeD1
+    private(set) var d1StatementsAtDraft: [Int] = []
+    init(d1: LeadgenFakeD1) { self.d1 = d1 }
+    func createDraft(account: String, rawMIME: String) async throws -> String {
+        d1StatementsAtDraft.append(await d1.statementCount())
+        return "r-draft-1"
+    }
+}
+
+/// Counts how often the CLI asked for live adapters (it must not in dry-run or on refusal).
+final class LeadgenDepsProbe: @unchecked Sendable {
+    var calls = 0
+    let deps: LeadgenLiveDeps
+    init(deps: LeadgenLiveDeps) { self.deps = deps }
+    func make(_ c: LeadgenLocalConfig) throws -> LeadgenLiveDeps { calls += 1; return deps }
+}
+
 /// In-memory stand-in for the two Project Control D1 databases: tables with rows and a schema line each.
 actor LeadgenFakeD1: LeadgenD1Port {
     var tables: [String: [String: [[String: String]]]] = [:]
@@ -122,13 +141,33 @@ enum LeadgenFixture {
             "https://www.cliniqueexemple.ca/contact": (200, "<html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>"),
         ])
     }
-    static let liveConfig = LeadgenRunConfig.from(arguments: ["--live"], environment: ["LEADGEN_OPERATOR_OK": "recorded first-hand"])
+    static let liveConfig = LeadgenRunConfig.from(arguments: ["--live"], environment: ["LEADGEN_OPERATOR_OK": LeadgenRunConfig.confirmation])
     static func runner(_ config: LeadgenRunConfig, mailbox: LeadgenRecordingMailbox, d1: LeadgenFakeD1, log: LeadgenMemoryLog = LeadgenMemoryLog(), fetcher: LeadgenFakeFetcher = fetcher()) -> LeadgenSliceRunner {
         LeadgenSliceRunner(config: config, fetcher: fetcher, mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" })
     }
     static let row = LeadgenLeadRow(id: "lead-x", organization: "X", site: "https://x.ca/", fitReason: "r", fitEvidence: "e", draftRef: "d", consentBasis: "c", createdAt: "2026-10-24T20:30:00Z")
     static func live(_ d1: LeadgenFakeD1, _ mailbox: LeadgenRecordingMailbox = LeadgenRecordingMailbox(), log: LeadgenMemoryLog = LeadgenMemoryLog()) async throws -> LeadgenRunReport {
         try await runner(liveConfig, mailbox: mailbox, d1: d1, log: log).run(candidates: [prospect], paths: paths, consent: consent, postalAddress: postal)
+    }
+    static func tempConfig(postal: String? = postal) throws -> String {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-cfg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var obj: [String: Any] = [
+            "prospect": ["organization": prospect.organization, "site": site.absoluteString, "publicContactEmail": prospect.publicContactEmail],
+            "paths": paths,
+            "consent": ["basis": consent.basis, "source": consent.source, "recordedAt": consent.recordedAt],
+        ]
+        if let postal { obj["postalAddress"] = postal }
+        let url = dir.appendingPathComponent("leadgen.local.json")
+        try JSONSerialization.data(withJSONObject: obj).write(to: url)
+        return url.path
+    }
+    static var repoRoot: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+    static func fit() throws -> LeadgenFit {
+        let pages = [LeadgenPage(url: site, bodyText: LeadgenHTML.bodyText(home))]
+        return try LeadgenFitFinder.find(pages: pages, prospect: prospect)
     }
     /// Directory holding docs/leadgen-slice/migrations, found from this file's path.
     static var migrationsDir: URL {
@@ -153,6 +192,8 @@ enum LeadgenSliceTests {
                 try check(!LeadgenRunConfig.from(arguments: ["--live"], environment: [:]).isLive, "--live without OK went live")
                 try check(!LeadgenRunConfig.from(arguments: [], environment: ["LEADGEN_OPERATOR_OK": "yes"]).isLive, "OK without --live went live")
                 try check(LeadgenFixture.liveConfig.isLive, "flag + OK not live")
+                try check(!LeadgenRunConfig.from(arguments: ["--live", "--confirm", "yes"], environment: [:]).isLive, "a vague OK went live")
+                try check(LeadgenRunConfig.from(arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation], environment: [:]).isLive, "--confirm with the exact value not live")
                 let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1()
                 let noOK = LeadgenRunConfig.from(arguments: ["--live"], environment: [:])
                 try await expectError(.liveNotAuthorized("no operator OK recorded")) {
@@ -312,6 +353,95 @@ enum LeadgenSliceTests {
                 for word in ["ALTER", "DROP", "UPDATE", "DELETE", "INSERT"] { try check(!upper.contains(word), "migration contains \(word)") }
                 try check(upper.components(separatedBy: "CREATE TABLE IF NOT EXISTS LEADS ").count == 2 && upper.components(separatedBy: "CREATE ").count == 2, "not exactly one CREATE")
                 try check(text.trimmingCharacters(in: .whitespacesAndNewlines) == LeadgenMigration.createLeads, "Swift migration text differs from the file")
+            }),
+            ("LG7 CLI dry-run prints the plan and touches nothing (0 fetch, 0 Gmail, 0 D1, no live adapters)", {
+                let d1 = LeadgenFakeD1(), mailbox = LeadgenRecordingMailbox()
+                let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "-"))
+                let env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig()]
+                let (code, lines) = await LeadgenCLI.run(arguments: [], environment: env, makeLive: probe.make)
+                let calls = await mailbox.calls, statements = await d1.statementCount()
+                try check(code == 0, "dry-run exit \(code)")
+                try check(lines.first?.contains("DRY RUN") == true, "no DRY RUN banner: \(lines.first ?? "")")
+                try check(lines.contains(where: { $0.contains("STOP if a leads table exists") }) && lines.contains(where: { $0.contains(LeadgenRunConfig.confirmation) }), "plan lines missing")
+                try check(probe.calls == 0 && calls.isEmpty && statements == 0, "dry-run built adapters \(probe.calls)x, Gmail \(calls.count)x, D1 \(statements)x")
+            }),
+            ("LG7 --live without the exact confirmation naming leads in both DBs refuses before any adapter", {
+                let d1 = LeadgenFakeD1(), mailbox = LeadgenRecordingMailbox()
+                let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "-"))
+                let env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig()]
+                for args in [["--live"], ["--live", "--confirm", "yes"], ["--live", "--confirm", "leads in e1e9fa25"], ["--live", "--confirm=leads"]] {
+                    let (code, lines) = await LeadgenCLI.run(arguments: args, environment: env, makeLive: probe.make)
+                    try check(code == 2 && lines.first?.hasPrefix("refused:") == true, "\(args) not refused: \(code) \(lines)")
+                }
+                let calls = await mailbox.calls, statements = await d1.statementCount()
+                try check(probe.calls == 0 && calls.isEmpty && statements == 0, "refusal still built adapters \(probe.calls)x, Gmail \(calls.count)x, D1 \(statements)x")
+            }),
+            ("LG7 live step order: schema check both, then per DB before/0001/insert/read-back/after, then Gmail draft last, logged", {
+                let d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
+                let mailbox = LeadgenOrderMailbox(d1: d1)
+                let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, logPath: "mem"))
+                let env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig()]
+                let (code, lines) = await LeadgenCLI.run(arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation], environment: env, makeLive: probe.make)
+                try check(code == 0, "live exit \(code): \(lines)")
+                let me = LeadgenProjectTarget.meCom.databaseID, ph = LeadgenProjectTarget.pharos.databaseID
+                let steps = await log.lines.filter { $0.hasPrefix("step ") }
+                var expected = ["step schema-check \(me)", "step schema-check \(ph)"]
+                for db in [me, ph] { expected += ["checksum-before", "apply-0001", "insert", "read-back", "checksum-after"].map { "step \($0) \(db)" } }
+                expected.append("step gmail-create-draft ml@pharos-ai.ca")
+                try check(steps == expected, "step order \(steps)")
+                let atDraft = await mailbox.d1StatementsAtDraft, total = await d1.statementCount()
+                try check(atDraft == [total], "Gmail draft was not last: D1 statements at draft \(atDraft), total \(total)")
+                let all = await log.lines
+                try check(all.contains(where: { $0.hasPrefix("\(me) projects count before") }) && all.contains(where: { $0.hasPrefix("\(ph) projects count before") }), "projects count before not logged")
+                let inserted = await d1.rows(me, "leads")
+                try check(inserted.first?["draft_ref"]?.hasPrefix("<leadgen-") == true, "draft_ref is not the local Message-ID")
+            }),
+            ("LG7 the run log is written to a file under the log directory", {
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-log-\(UUID().uuidString)")
+                let env = ["HOME": dir.path]
+                try check(LeadgenFileLog.directory(environment: env).path.hasSuffix("Library/Logs/ControlWard/leadgen"), "log dir \(LeadgenFileLog.directory(environment: env).path)")
+                let file = LeadgenFileLog(directory: LeadgenFileLog.directory(environment: env), stamp: "2026-10-24T20:30:00Z")
+                await file.write("step one")
+                await file.write("step two")
+                let text = try String(contentsOf: file.url, encoding: .utf8)
+                try check(text == "step one\nstep two\n", "log file text \(text)")
+            }),
+            ("LG8 the draft refuses to build when the address config is missing", {
+                let fit = try LeadgenFixture.fit()
+                for missing in [nil, "", "   "] as [String?] {
+                    try await expectError(.missingPostalAddress) {
+                        _ = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: missing)
+                    }
+                }
+                let nowhere = "/nonexistent/leadgen-\(UUID().uuidString)/leadgen.local.json"
+                try await expectError(.configMissing(nowhere)) { _ = try LeadgenLocalConfig.load(path: nowhere) }
+                let loaded = try LeadgenLocalConfig.load(path: try LeadgenFixture.tempConfig(postal: nil))
+                try check(loaded.postalAddress == nil, "config without address decoded one")
+                let d1 = LeadgenFakeD1(), mailbox = LeadgenRecordingMailbox()
+                let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "-"))
+                let (code, _) = await LeadgenCLI.run(arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation], environment: ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(postal: nil)], makeLive: probe.make)
+                let statements = await d1.statementCount(), calls = await mailbox.calls
+                try check(code != 0 && probe.calls == 0 && statements == 0 && calls.isEmpty, "live run without address went ahead (exit \(code))")
+            }),
+            ("LG8 a footer address on the denied street (Saint-Hubert) is refused in every spelling", {
+                let fit = try LeadgenFixture.fit()
+                for bad in ["1000 rue Saint-Hubert, Montréal", "1000, rue St-Hubert", "1000 SAINT HUBERT", "1000 rue saint-hubert", "1000 rue Saint‑Hubert"] {
+                    try await expectError(.postalAddressDenied("saint-hubert")) {
+                        _ = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: bad)
+                    }
+                }
+                let ok = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+                try check(ok.body.contains(LeadgenFixture.postal), "a clean address was not used")
+                try check(LeadgenDraftComposer.deniedStreets == ["saint-hubert"], "denylist must hold the street name only")
+            }),
+            ("LG8 the repo holds only a placeholder example config and ignores the local one", {
+                let root = LeadgenFixture.repoRoot
+                let example = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/leadgen.local.example.json"), encoding: .utf8)
+                let parsed = try JSONDecoder().decode(LeadgenLocalConfig.self, from: Data(example.utf8))
+                try check(parsed.postalAddress?.hasPrefix("PLACEHOLDER") == true, "example address is not a placeholder")
+                let ignore = try String(contentsOf: root.appendingPathComponent(".gitignore"), encoding: .utf8)
+                try check(ignore.split(separator: "\n").contains("leadgen.local.json"), ".gitignore does not list leadgen.local.json")
+                try check(!FileManager.default.fileExists(atPath: root.appendingPathComponent("docs/leadgen-slice/leadgen.local.json").path), "a local config sits in the repo tree")
             }),
         ])
     }

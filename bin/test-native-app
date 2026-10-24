@@ -46,6 +46,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/ProspectResearch.swift" \
   "${SOURCE_ROOT}/BuildInfo.swift" \
   "${SOURCE_ROOT}/LeadgenSlice.swift" \
+  "${SOURCE_ROOT}/LeadgenLive.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \

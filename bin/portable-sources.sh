@@ -21,6 +21,7 @@ PORTABLE_SOURCES=(
   MailActionPresentation.swift
   ProjectControlWrites.swift
   LeadgenSlice.swift
+  LeadgenLive.swift
 )
 PORTABLE_TESTS=(
   PortableCheck.swift
