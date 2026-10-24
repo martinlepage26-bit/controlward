@@ -45,6 +45,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/LeadPipelineEnvironment.swift" \
   "${SOURCE_ROOT}/ProspectResearch.swift" \
   "${SOURCE_ROOT}/BuildInfo.swift" \
+  "${SOURCE_ROOT}/LeadgenSlice.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \
@@ -68,6 +69,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ProjectControlTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlPlantedReds.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/LeadgenSliceTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
