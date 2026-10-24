@@ -15,6 +15,14 @@ import Security
 // Lead-gen slice 1 tests (docs/leadgen-slice/SPEC.md). Fakes only: no network, no Gmail, no D1,
 // except the macOS pinned-TLS case, which speaks HTTPS to a local server.
 
+private struct LeadgenFixedVerifier: LeadgenTokenVerifying {
+    var byBearer: [String: LeadgenVerifiedToken]
+    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
+        guard let found = byBearer[bearer] else { throw LeadgenError.tokenProof("unverifiable") }
+        return found
+    }
+}
+
 private func check(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
     try PortableCheck.expect(try condition(), message)
 }
@@ -758,8 +766,17 @@ enum LeadgenSliceTests {
                 let d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
                 let mailbox = LeadgenOrderMailbox(d1: d1)
                 let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, logPath: "mem"))
-                let env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString)]
-                let (code, lines) = await LeadgenCLI.run(arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation], environment: env, dns: LeadgenMappedDNS(), makeLive: probe.make)
+                let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-policy-\(UUID().uuidString).json")
+                try JSONEncoder().encode(LeadgenSliceTests.readPolicy()).write(to: policyFile)
+                var env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString)]
+                env["LEADGEN_TOKEN_POLICY"] = policyFile.path
+                env[LeadgenTokenProof.readTokenEnvs[0]] = "me-read"
+                env[LeadgenTokenProof.readTokenEnvs[1]] = "ph-read"
+                let verifier = LeadgenFixedVerifier(byBearer: [
+                    "me-read": LeadgenVerifiedToken(id: "id-me", status: "active"),
+                    "ph-read": LeadgenVerifiedToken(id: "id-ph", status: "active"),
+                ])
+                let (code, lines) = await LeadgenCLI.run(arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation], environment: env, dns: LeadgenMappedDNS(), verifier: verifier, makeLive: probe.make)
                 try check(code == 0, "live exit \(code): \(lines)")
                 let me = LeadgenProjectTarget.meCom.databaseID, ph = LeadgenProjectTarget.pharos.databaseID
                 let steps = await log.lines.filter { $0.hasPrefix("step ") }
@@ -1310,6 +1327,17 @@ enum LeadgenSliceTests {
         cases.append(("An inactive or unverifiable token is refused", {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "id-me", status: "disabled"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [nil, LeadgenVerifiedToken(id: "id-ph", status: "active")])
+        }))
+        cases.append(("A saved D1-read policy is admitted when verify returns that id and active", {
+            try LeadgenTokenProof.admit(saved: LeadgenSliceTests.readPolicy(), verified: LeadgenSliceTests.activeVerification())
+            let root = LeadgenFixture.repoRoot
+            let example = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/leadgen.token-policy.example.json"), encoding: .utf8)
+            try check(example.contains(LeadgenTokenProof.d1ReadPermissionGroupID), "example policy has no D1 Read group id")
+            try check(!example.contains("Bearer "), "example policy contains a token value")
+            let ignore = try String(contentsOf: root.appendingPathComponent(".gitignore"), encoding: .utf8)
+            try check(ignore.contains("leadgen.token-policy.json"), "gitignore does not list the policy record")
+            let note = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/d1-read-token-policy.md"), encoding: .utf8)
+            try check(note.contains("not live policy introspection"), "the policy note does not say this is a captured proof")
         }))
         cases.append(("A verify id that does not match the saved token id is refused", {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "someone-else", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")])

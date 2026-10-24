@@ -548,7 +548,7 @@ struct LeadgenVerifiedToken: Equatable, Sendable {
     var status: String
 }
 
-/// Declared-and-captured proof. `admit` currently accepts every record; the startup check lands with the fix.
+/// Declared-and-captured proof. Verify returns only id and status. The permission list is the saved record, not a live policy read.
 enum LeadgenTokenProof {
     static let d1ReadPermissionGroupID = "192192df92ee43ac90f2aeeffce67e35"
     static let d1ReadPermissionGroupName = "D1 Read"
@@ -560,8 +560,43 @@ enum LeadgenTokenProof {
         "959e5bdb-4213-496a-9557-10ec410440d7",
     ]
 
-    static func admit(saved: LeadgenDeclaredPolicy?, verified: [LeadgenVerifiedToken?]) throws {
+    static let fileName = "leadgen.token-policy.json"
+
+    static func path(environment: [String: String]) -> String {
+        if let named = environment["LEADGEN_TOKEN_POLICY"], !named.isEmpty { return named }
+        let config = LeadgenLocalConfig.defaultPath(environment: environment)
+        return URL(fileURLWithPath: config).deletingLastPathComponent().appendingPathComponent(fileName).path
     }
+
+    static func load(environment: [String: String]) throws -> LeadgenDeclaredPolicy {
+        let file = path(environment: environment)
+        guard let data = FileManager.default.contents(atPath: file) else { throw LeadgenError.tokenProof("missing-declaration") }
+        guard let saved = try? JSONDecoder().decode(LeadgenDeclaredPolicy.self, from: data) else {
+            throw LeadgenError.tokenProof("missing-declaration")
+        }
+        return saved
+    }
+
+    /// Fail closed unless verify's id matches the saved id, status is active, and the saved list is only D1 Read on the two account ids.
+    static func admit(saved: LeadgenDeclaredPolicy?, verified: [LeadgenVerifiedToken?]) throws {
+        guard let saved, !saved.tokens.isEmpty else { throw LeadgenError.tokenProof("missing-declaration") }
+        guard Set(saved.tokens.map(\.env)) == Set(readTokenEnvs) else { throw LeadgenError.tokenProof("missing-declaration") }
+        let grants = saved.tokens.flatMap(\.permissions)
+        guard !grants.isEmpty else { throw LeadgenError.tokenProof("missing-declaration") }
+        let expected = Set(accountIDs.map { "\(d1ReadPermissionGroupID)|\(d1ReadPermissionGroupName)|\($0)" })
+        let actual = grants.map { "\($0.id)|\($0.name)|\($0.accountID)" }
+        guard Set(actual) == expected, actual.count == expected.count else { throw LeadgenError.tokenProof("not-d1-read") }
+        guard verified.count == saved.tokens.count else { throw LeadgenError.tokenProof("unverifiable") }
+        for (token, result) in zip(saved.tokens, verified) {
+            guard let result else { throw LeadgenError.tokenProof("unverifiable") }
+            guard result.status == "active" else { throw LeadgenError.tokenProof("inactive") }
+            guard result.id == token.id else { throw LeadgenError.tokenProof("id-mismatch") }
+        }
+    }
+}
+
+protocol LeadgenTokenVerifying: Sendable {
+    func verify(bearer: String) async throws -> LeadgenVerifiedToken
 }
 
 /// Do-not-contact check. An entry is an address, or a domain when it has no `@`.

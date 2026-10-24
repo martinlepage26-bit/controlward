@@ -109,6 +109,49 @@ struct LeadgenSystemKeychain: LeadgenSecretSource {
     }
 }
 
+struct LeadgenCloudflareTokenVerifier: LeadgenTokenVerifying {
+    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
+        guard !bearer.isEmpty else { throw LeadgenError.tokenProof("unverifiable") }
+        var req = URLRequest(url: URL(string: "https://api.cloudflare.com/client/v4/user/tokens/verify")!)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["success"] as? Bool == true,
+              let result = obj["result"] as? [String: Any],
+              let id = result["id"] as? String,
+              let status = result["status"] as? String else {
+            throw LeadgenError.tokenProof("unverifiable")
+        }
+        return LeadgenVerifiedToken(id: id, status: status)
+    }
+}
+
+extension LeadgenTokenProof {
+    static func enforce(config: LeadgenLocalConfig?, environment: [String: String], keychain: any LeadgenSecretSource, verifier: any LeadgenTokenVerifying) async throws {
+        let saved = try load(environment: environment)
+        var verified: [LeadgenVerifiedToken?] = []
+        for token in saved.tokens {
+            let secret = try bearer(for: token.env, config: config, environment: environment, keychain: keychain)
+            do { verified.append(try await verifier.verify(bearer: secret)) }
+            catch let error as LeadgenError { throw error }
+            catch { throw LeadgenError.tokenProof("unverifiable") }
+        }
+        try admit(saved: saved, verified: verified)
+    }
+
+    private static func bearer(for envName: String, config: LeadgenLocalConfig?, environment: [String: String], keychain: any LeadgenSecretSource) throws -> String {
+        if let value = environment[envName], !value.isEmpty { return value }
+        let refs = [config?.credentials?.meComReadToken, config?.credentials?.pharosReadToken].compactMap { $0 }
+        if let ref = refs.first(where: { $0.env == envName }) {
+            do { return try LeadgenCredentials.resolve(ref, environment: environment, keychain: keychain) }
+            catch { throw LeadgenError.tokenProof("unverifiable") }
+        }
+        throw LeadgenError.tokenProof("unverifiable")
+    }
+}
+
 enum LeadgenCredentials {
     static func resolve(_ ref: LeadgenLocalConfig.SecretRef, environment: [String: String], keychain: LeadgenSecretSource) throws -> String {
         if let name = ref.env, let v = environment[name], !v.isEmpty { return v }
@@ -320,6 +363,8 @@ enum LeadgenCLI {
     static func run(arguments: [String], environment: [String: String],
                     makeFetcher: @escaping () -> LeadgenFetching = { LeadgenHTTPFetcher() },
                     dns: any LeadgenResolving = LeadgenSystemDNS(),
+                    verifier: any LeadgenTokenVerifying = LeadgenCloudflareTokenVerifier(),
+                    keychain: any LeadgenSecretSource = LeadgenSystemKeychain(),
                     makeLive: (LeadgenLocalConfig) throws -> LeadgenLiveDeps) async -> (Int32, [String]) {
         let config = LeadgenRunConfig.from(arguments: arguments, environment: environment)
         let path = LeadgenLocalConfig.defaultPath(environment: environment)
@@ -353,6 +398,7 @@ enum LeadgenCLI {
         guard let paths = local.paths, !paths.isEmpty else { return (2, ["refused: local config has no paths"]) }
         do {
             _ = try LeadgenDraftComposer.checkAddress(local.postalAddress)
+            try await LeadgenTokenProof.enforce(config: local, environment: environment, keychain: keychain, verifier: verifier)
             let deps = try makeLive(local)
             let stamp = ISO8601DateFormatter().string(from: Date())
             await deps.log.write("leadgen live run \(stamp) confirmation=\"\(config.operatorOK ?? "")\"")

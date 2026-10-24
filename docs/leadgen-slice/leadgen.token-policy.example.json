@@ -1,0 +1,26 @@
+{
+  "tokens": [
+    {
+      "id": "PLACEHOLDER token id from verify, not a secret",
+      "env": "LEADGEN_CF_TOKEN_MECOM_READ",
+      "permissions": [
+        {
+          "id": "192192df92ee43ac90f2aeeffce67e35",
+          "name": "D1 Read",
+          "accountID": "e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1"
+        }
+      ]
+    },
+    {
+      "id": "PLACEHOLDER token id from verify, not a secret",
+      "env": "LEADGEN_CF_TOKEN_PHAROS_READ",
+      "permissions": [
+        {
+          "id": "192192df92ee43ac90f2aeeffce67e35",
+          "name": "D1 Read",
+          "accountID": "959e5bdb-4213-496a-9557-10ec410440d7"
+        }
+      ]
+    }
+  ]
+}
