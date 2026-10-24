@@ -185,19 +185,23 @@ struct LeadgenPage: Sendable, Equatable {
     let url: URL
     let bodyText: String
     var html: String = ""
+    /// When this body was fetched. Empty only for pages built in tests without a clock.
+    var fetchedAt: String = ""
 }
 
 actor LeadgenSiteReader {
     private let policy: LeadgenSourcePolicy
     private let fetcher: LeadgenFetching
     private let dns: any LeadgenResolving
+    private let now: @Sendable () -> String
     private(set) var fetchedURLs: [String] = []
     static let maxRedirects = 3
 
-    init(policy: LeadgenSourcePolicy, fetcher: LeadgenFetching, dns: any LeadgenResolving = LeadgenSystemDNS()) {
+    init(policy: LeadgenSourcePolicy, fetcher: LeadgenFetching, dns: any LeadgenResolving = LeadgenSystemDNS(), now: @escaping @Sendable () -> String = { ISO8601DateFormatter().string(from: Date()) }) {
         self.policy = policy
         self.fetcher = fetcher
         self.dns = dns
+        self.now = now
     }
 
     /// Scheme, SSRF (including DNS), then the allowlist. A redirect hop uses the same checks.
@@ -253,7 +257,7 @@ actor LeadgenSiteReader {
             guard let url = URL(string: path, relativeTo: site)?.absoluteURL else { continue }
             let response = try await fetch(url)
             guard response.status == 200 else { continue }
-            pages.append(LeadgenPage(url: response.finalURL, bodyText: LeadgenHTML.bodyText(response.body), html: response.body))
+            pages.append(LeadgenPage(url: response.finalURL, bodyText: LeadgenHTML.bodyText(response.body), html: response.body, fetchedAt: now()))
         }
         return pages
     }
@@ -300,6 +304,8 @@ enum LeadgenProspectPicker {
 struct LeadgenFitEvidence: Sendable, Equatable {
     let url: String
     let quote: String
+    /// Fetch time of the page the quote came from.
+    var fetchedAt: String = ""
 }
 
 struct LeadgenFit: Sendable, Equatable {
@@ -327,7 +333,7 @@ enum LeadgenFitFinder {
                 let s = sentence.trimmingCharacters(in: .whitespaces)
                 let padded = " " + s.lowercased() + " "
                 guard s.count >= 30, aiTerms.contains(where: { padded.contains($0) }) else { continue }
-                evidence.append(LeadgenFitEvidence(url: page.url.absoluteString, quote: s))
+                evidence.append(LeadgenFitEvidence(url: page.url.absoluteString, quote: s, fetchedAt: page.fetchedAt))
                 break
             }
         }
@@ -687,9 +693,9 @@ enum LeadgenDiscovery {
 
     /// Reads the directory page (robots first), picks the one clinic, then reads that clinic's own site.
     /// The consent source becomes the own-domain page the recipient address was read from.
-    static func find(directory: URL, paths: [String], consent: LeadgenConsentBasis?, fetcher: LeadgenFetching, dns: any LeadgenResolving) async throws -> LeadgenDiscoveryResult {
+    static func find(directory: URL, paths: [String], consent: LeadgenConsentBasis?, fetcher: LeadgenFetching, dns: any LeadgenResolving, now: @escaping @Sendable () -> String = { ISO8601DateFormatter().string(from: Date()) }) async throws -> LeadgenDiscoveryResult {
         guard let origin = origin(of: directory) else { throw LeadgenError.unsafeURL("directory has no host") }
-        let directoryReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [directory.host ?? ""]), fetcher: fetcher, dns: dns)
+        let directoryReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [directory.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
         var path = directory.path.isEmpty ? "/" : directory.path
         if let query = directory.query, !query.isEmpty { path += "?\(query)" }
         let listed = try await directoryReader.read(site: origin, paths: [path])
@@ -698,7 +704,7 @@ enum LeadgenDiscovery {
         }
         let found = clinics(in: page.html, directory: directory)
         guard found.count == 1, let clinic = found.first else { throw LeadgenError.notExactlyOneProspect(found.count) }
-        let siteReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [clinic.site.host ?? ""]), fetcher: fetcher, dns: dns)
+        let siteReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [clinic.site.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
         let pages = try await siteReader.read(site: clinic.site, paths: paths)
         let domain = LeadgenSourcePolicy.normalize(clinic.site.host ?? "")
         let own = pages.filter { LeadgenSourcePolicy.normalize($0.url.host ?? "") == domain }
@@ -765,14 +771,14 @@ struct LeadgenSliceRunner: Sendable {
         let fetched: [String]
         if let directory {
             await log.write("directory \(directory.absoluteString)")
-            let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns)
+            let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now)
             prospect = found.prospect
             pages = found.pages
             resolvedConsent = found.consent
             fetched = found.fetchedURLs
         } else {
             prospect = try LeadgenProspectPicker.pickOne(candidates)
-            let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher, dns: dns)
+            let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
             pages = try await reader.read(site: prospect.site, paths: paths)
             resolvedConsent = consent
             fetched = await reader.fetchedURLs
@@ -782,7 +788,11 @@ struct LeadgenSliceRunner: Sendable {
             throw LeadgenError.suppressed(why)
         }
         let fit = try LeadgenFitFinder.find(pages: pages, prospect: prospect)
-        let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: resolvedConsent, postalAddress: postalAddress, pages: pages)
+        var consentForDraft = resolvedConsent
+        if let at = fit.evidence.first?.fetchedAt, !at.isEmpty, let basis = consentForDraft {
+            consentForDraft = LeadgenConsentBasis(basis: basis.basis, source: basis.source, recordedAt: at)
+        }
+        let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: consentForDraft, postalAddress: postalAddress, pages: pages)
         guard config.isLive else {
             return LeadgenRunReport(live: false, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: nil, receipts: [])
         }
@@ -794,7 +804,9 @@ struct LeadgenSliceRunner: Sendable {
             organization: prospect.organization,
             site: prospect.site.absoluteString,
             fitReason: fit.reason,
-            fitEvidence: fit.evidence.map { "\($0.url) | \($0.quote)" }.joined(separator: "\n"),
+            fitEvidence: fit.evidence.map { e in
+                e.fetchedAt.isEmpty ? "\(e.url) | \(e.quote)" : "\(e.url) | \(e.fetchedAt) | \(e.quote)"
+            }.joined(separator: "\n"),
             draftRef: draft.messageID,
             consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
             createdAt: stamp
