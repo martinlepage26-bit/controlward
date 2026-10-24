@@ -593,6 +593,14 @@ struct LeadgenD1Writer: Sendable {
         return (out, hasLeads)
     }
 
+    /// Reads the leads count. Callers send an INSERT only after this returns.
+    func precheckCount(_ db: String) async throws -> Int {
+        guard let n = Int(try await run(db, Self.countSQL).first?["n"] ?? "") else {
+            throw LeadgenError.fetchFailed("precheck \(db)")
+        }
+        return n
+    }
+
     func insertOne(_ row: LeadgenLeadRow, into target: LeadgenProjectTarget) async throws -> LeadgenWriteReceipt {
         let db = target.databaseID
         await log.write("step checksum-before \(db)")
@@ -602,7 +610,8 @@ struct LeadgenD1Writer: Sendable {
         guard !hadLeads else { throw LeadgenError.leadsTableExists(db) }
         await log.write("step apply-0001 \(db)")
         _ = try await run(db, LeadgenMigration.createLeads)
-        let countBefore = Int(try await run(db, Self.countSQL).first?["n"] ?? "") ?? -1
+        // The count is the pre-check. A failure here must not send an INSERT.
+        let countBefore = try await precheckCount(db)
         let cols = row.columns
         let sql = "INSERT INTO leads (\(cols.map(\.0).joined(separator: ", "))) VALUES (\(cols.map { _ in "?" }.joined(separator: ", ")))"
         await log.write("step insert \(db)")

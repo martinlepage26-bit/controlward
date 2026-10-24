@@ -142,7 +142,10 @@ actor LeadgenFakeD1: LeadgenD1Port {
             if tables[db]?["leads"] == nil { tables[db]?["leads"] = []; schemas[db]?["leads"] = sql }
             return []
         }
-        if sql == LeadgenD1Writer.countSQL { return [["n": "\(tables[db]?["leads"]?.count ?? 0)"]] }
+        if sql == LeadgenD1Writer.countSQL {
+            if failInsertDatabase == db { throw LeadgenError.fetchFailed("precheck \(db)") }
+            return [["n": "\(tables[db]?["leads"]?.count ?? 0)"]]
+        }
         if sql == LeadgenD1Writer.readBackSQL {
             return (tables[db]?["leads"] ?? []).filter { $0["id"] == params.first }.map { r in r.filter { ["id", "organization", "status"].contains($0.key) } }
         }
@@ -151,7 +154,6 @@ actor LeadgenFakeD1: LeadgenD1Port {
             return tables[db]?[name] ?? []
         }
         if sql.hasPrefix("INSERT INTO leads (") {
-            if failInsertDatabase == db { throw LeadgenError.fetchFailed("row \(db)") }
             let open = sql.firstIndex(of: "(")!, close = sql.firstIndex(of: ")")!
             let cols = sql[sql.index(after: open)..<close].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             var row: [String: String] = [:]
