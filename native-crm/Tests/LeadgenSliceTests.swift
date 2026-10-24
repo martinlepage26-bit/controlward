@@ -230,7 +230,13 @@ enum LeadgenFixture {
 
 enum LeadgenSliceTests {
     static func run() async -> Bool {
-        await PortableCheck.suite("Lead-gen slice 1", [
+        let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
+        let tail = await PortableCheck.suite("Lead-gen slice 1", tailCases())
+        return head && tail
+    }
+
+    static func headCases() -> [(String, () async throws -> Void)] {
+        [
             ("LG1 dry-run is the default and makes 0 Gmail and 0 D1 calls", {
                 let config = LeadgenRunConfig.from(arguments: [], environment: [:])
                 try check(!config.isLive && config == .dryRun, "default config is live")
@@ -506,6 +512,11 @@ enum LeadgenSliceTests {
                 try check(ignore.split(separator: "\n").contains("leadgen.local.json"), ".gitignore does not list leadgen.local.json")
                 try check(!FileManager.default.fileExists(atPath: root.appendingPathComponent("docs/leadgen-slice/leadgen.local.json").path), "a local config sits in the repo tree")
             }),
+        ]
+    }
+
+    static func tailCases() -> [(String, () async throws -> Void)] {
+        [
             ("M1 nested RBQ JSON parses, and zero records or a failed check hold construction trades", {
                 let config = try LeadKit.config()
                 let source = try LeadPipelineTests.unwrap(RBQOpenData.source(config), "RBQ source missing from icp.json")
@@ -791,6 +802,20 @@ enum LeadgenSliceTests {
                 try check(HostSafety.ipv6Bytes("2606:4700:4700::1111") != nil && !HostSafety.isNonPublic("2606:4700:4700::1111"), "a public address was blocked")
                 try check(HostSafety.ipv6Bytes("::ffff:8.8.8.8") != nil && !HostSafety.isNonPublic("::ffff:8.8.8.8"), "a public IPv4-mapped address was blocked")
             }),
+            ("Snapshot SELECTs use a read-only token named in config, not a secret in code", {
+                let root = LeadgenFixture.repoRoot
+                let example = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/leadgen.local.example.json"), encoding: .utf8)
+                try check(example.contains("LEADGEN_CF_TOKEN_MECOM_READ"), "me.com snapshot has no read-only token env name")
+                try check(example.contains("LEADGEN_CF_TOKEN_PHAROS_READ"), "PHAROS snapshot has no read-only token env name")
+                let live = try String(contentsOf: root.appendingPathComponent("native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"), encoding: .utf8)
+                try check(live.contains("readToken"), "the D1 adapter has no read-only token")
+                try check(!live.contains("Bearer ey") && !example.contains("Bearer "), "a token value is hard-coded")
+                try check(LeadgenCloudflareD1.credential(sql: LeadgenD1Writer.tablesSQL, read: "read-token", write: "write-token") == "read-token", "snapshot SELECT did not use the read token")
+                try check(LeadgenCloudflareD1.credential(sql: LeadgenD1Writer.countSQL, read: "read-token", write: "write-token") == "read-token", "count SELECT did not use the read token")
+                try check(LeadgenCloudflareD1.credential(sql: LeadgenD1Writer.readBackSQL, read: "read-token", write: "write-token") == "read-token", "read-back SELECT did not use the read token")
+                try check(LeadgenCloudflareD1.credential(sql: "INSERT INTO leads (id) VALUES (?)", read: "read-token", write: "write-token") == "write-token", "INSERT used the read token")
+                try check(LeadgenCloudflareD1.credential(sql: LeadgenMigration.createLeads, read: "read-token", write: "write-token") == "write-token", "migration used the read token")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
@@ -798,6 +823,6 @@ enum LeadgenSliceTests {
                     try check(!text.contains("messages/send") && !text.contains("drafts/send"), "send path in \(name)")
                 }
             }),
-        ])
+        ]
     }
 }
