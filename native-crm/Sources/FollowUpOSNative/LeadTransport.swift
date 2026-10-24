@@ -237,7 +237,8 @@ struct LeadgenPinnedRequest: Equatable, Sendable {
         guard let host = url.host, !host.isEmpty, let address = addresses.first else { return nil }
         if HostSafety.addressRefusal(address) != nil, !(admitLoopback && HostSafety.isLoopback(address)) { return nil }
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
-        components.host = address
+        let literal = address.contains(":") && !address.hasPrefix("[") ? "[\(address)]" : address
+        components.host = literal
         guard let pinned = components.url else { return nil }
         return LeadgenPinnedRequest(url: pinned, hostHeader: host)
     }
@@ -310,6 +311,7 @@ struct URLSessionLeadTransport: LeadTransport {
     /// DER trust anchors for the test CA. Production leaves this empty: system trust, no override.
     var testTrustAnchorDERs: [Data] = []
 
+    #if !os(macOS)
     private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -318,7 +320,7 @@ struct URLSessionLeadTransport: LeadTransport {
     }
 
     /// One ephemeral session for the process: no cookies, no cache. Creating and dropping a session per request
-    /// crashes swift-corelibs-foundation on Linux (_MultiHandle over-release) and wastes connections on macOS.
+    /// crashes swift-corelibs-foundation on Linux (_MultiHandle over-release). macOS uses `LeadgenPinnedHTTPS`.
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
@@ -328,6 +330,7 @@ struct URLSessionLeadTransport: LeadTransport {
         configuration.timeoutIntervalForRequest = 120
         return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
     }()
+    #endif
 
     func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
         var outbound = request
@@ -344,14 +347,16 @@ struct URLSessionLeadTransport: LeadTransport {
             outbound.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
             original = url
         }
-        // URLSession connects to the pinned IP. It does not set SNI to the original hostname, and it
-        // cannot use `testTrustAnchorDERs`. The macOS path replaces this once the pinned TLS client lands.
-        _ = testTrustAnchorDERs
+        #if os(macOS)
+        let (status, headers, data) = try await LeadgenPinnedHTTPS.exchange(request: outbound, trustAnchorDERs: testTrustAnchorDERs)
+        return LeadHTTPResponse(status: status, headers: headers, body: data, url: original ?? request.url)
+        #else
         let (data, response) = try await Self.session.data(for: outbound)
         let http = response as? HTTPURLResponse
         var headers: [String: String] = [:]
         for (key, value) in http?.allHeaderFields ?? [:] { headers[String(describing: key).lowercased()] = String(describing: value) }
         return LeadHTTPResponse(status: http?.statusCode ?? 0, headers: headers, body: data, url: original ?? request.url)
+        #endif
     }
 }
 

@@ -37,6 +37,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/LeadDefinition.swift" \
   "${SOURCE_ROOT}/Outreach.swift" \
   "${SOURCE_ROOT}/LeadTransport.swift" \
+  "${SOURCE_ROOT}/LeadgenPinnedHTTPS.swift" \
   "${SOURCE_ROOT}/RBQOpenData.swift" \
   "${SOURCE_ROOT}/SiteExtractor.swift" \
   "${SOURCE_ROOT}/LeadDiscovery.swift" \

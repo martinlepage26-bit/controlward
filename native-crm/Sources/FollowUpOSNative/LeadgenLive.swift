@@ -160,6 +160,7 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
     /// DER trust anchors for the test CA. Production leaves this empty: system trust, no override.
     var testTrustAnchorDERs: [Data] = []
 
+    #if !os(macOS)
     private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -175,6 +176,7 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
         configuration.timeoutIntervalForRequest = 20
         return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
     }()
+    #endif
 
     func get(_ url: URL) async throws -> (status: Int, headers: [String: String], body: String) {
         let resolved = lookup(url.host ?? "")
@@ -188,8 +190,10 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
         req.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
         req.setValue("ControlWard-leadgen/1 (+mailto:ml@pharos-ai.ca)", forHTTPHeaderField: "User-Agent")
         if let transport { return try await transport(req) }
-        // URLSession connects to the pinned IP. It does not set SNI to the original hostname.
-        _ = testTrustAnchorDERs
+        #if os(macOS)
+        let (status, headers, data) = try await LeadgenPinnedHTTPS.exchange(request: req, trustAnchorDERs: testTrustAnchorDERs)
+        return (status, headers, String(decoding: data, as: UTF8.self))
+        #else
         let (data, resp) = try await Self.session.data(for: req)
         let http = resp as? HTTPURLResponse
         var headers: [String: String] = [:]
@@ -197,6 +201,7 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
             headers[String(describing: key).lowercased()] = String(describing: value)
         }
         return (http?.statusCode ?? 0, headers, String(decoding: data, as: UTF8.self))
+        #endif
     }
 }
 

@@ -8,6 +8,7 @@ PORTABLE_SOURCES=(
   LeadDefinition.swift
   Outreach.swift
   LeadTransport.swift
+  LeadgenPinnedHTTPS.swift
   RBQOpenData.swift
   SiteExtractor.swift
   LeadDiscovery.swift
