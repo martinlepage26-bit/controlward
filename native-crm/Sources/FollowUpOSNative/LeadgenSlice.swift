@@ -382,6 +382,8 @@ struct LeadgenDraft: Sendable, Equatable {
 
 enum LeadgenDraftComposer {
     static let signature = "Martin Lepage, PhD\nPHAROS AI\nml@pharos-ai.ca"
+    /// The only postal address a slice draft may print.
+    static let postalAddress = "2456 rue de Rouen, Montréal QC H2K 1M2"
 
     /// Street names that belong to other businesses and must never appear in a PHAROS footer.
     /// Street name only: no full address is kept in code.
@@ -423,7 +425,8 @@ enum LeadgenDraftComposer {
         guard let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty,
               !consent.source.isEmpty, !consent.recordedAt.isEmpty else { throw LeadgenError.missingConsentBasis }
         try proveOwnPages(prospect: prospect, consent: consent, pages: pages)
-        let postalAddress = try checkAddress(postalAddress)
+        _ = try checkAddress(postalAddress)
+        let postalAddress = Self.postalAddress
         let quote = fit.evidence.first?.quote ?? ""
         let subject = "Gouvernance de l'IA et Loi 25 pour \(prospect.organization)"
         let body = """
