@@ -7,8 +7,13 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
+#if os(macOS)
+import Network
+import Security
+#endif
 
-// Lead-gen slice 1 tests (docs/leadgen-slice/SPEC.md). Fakes only: no network, no Gmail, no D1.
+// Lead-gen slice 1 tests (docs/leadgen-slice/SPEC.md). Fakes only: no network, no Gmail, no D1,
+// except the macOS pinned-TLS case, which speaks HTTPS to a local server.
 
 private func check(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
     try PortableCheck.expect(try condition(), message)
@@ -248,7 +253,203 @@ enum LeadgenFixture {
     }
 }
 
+#if os(macOS)
+/// One-shot HTTPS listener on 127.0.0.1. The certificate's SAN is `pinned.leadgen.test`.
+final class LeadgenLocalTLSServer: @unchecked Sendable {
+    let root: URL
+    let caDER: URL
+    private let p12: URL
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "leadgen.tls.server")
+    private(set) var port: UInt16 = 0
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-tls-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        caDER = root.appendingPathComponent("ca.der")
+        p12 = root.appendingPathComponent("server.p12")
+        try Self.issue(in: root, caDER: caDER, p12: p12)
+    }
+
+    func start() async throws {
+        let identity = try Self.identity(p12: p12, password: "leadgen-test")
+        guard let secIdentity = sec_identity_create(identity) else {
+            throw PortableCheckFailure(description: "the test server identity could not be created")
+        }
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_local_identity(tls.securityProtocolOptions, secIdentity)
+        let params = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
+        let listener = try NWListener(using: params, on: 0)
+        self.listener = listener
+        let ready = OnceResume()
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready: ready.succeed()
+            case .failed(let error): ready.fail(error)
+            case .cancelled: ready.fail(PortableCheckFailure(description: "TLS listener cancelled"))
+            default: break
+            }
+        }
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: self.queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { _, _, _, _ in
+                let body = "pinned-ok"
+                let response = "HTTP/1.1 200 OK\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.start(queue: queue)
+        try await ready.wait()
+        guard let assigned = listener.port?.rawValue, assigned != 0 else {
+            throw PortableCheckFailure(description: "TLS listener did not bind a port")
+        }
+        port = assigned
+    }
+
+    func stop() {
+        listener?.cancel()
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private static func issue(in dir: URL, caDER: URL, p12: URL) throws {
+        let caConf = """
+        [req]
+        distinguished_name = dn
+        x509_extensions = v3
+        prompt = no
+        [dn]
+        CN = Leadgen Test CA
+        [v3]
+        basicConstraints = critical,CA:TRUE
+        keyUsage = critical,keyCertSign,cRLSign
+        """
+        let serverConf = """
+        [req]
+        distinguished_name = dn
+        req_extensions = v3
+        prompt = no
+        [dn]
+        CN = pinned.leadgen.test
+        [v3]
+        basicConstraints = critical,CA:FALSE
+        keyUsage = digitalSignature,keyEncipherment
+        extendedKeyUsage = serverAuth
+        subjectAltName = DNS:pinned.leadgen.test
+        """
+        let caPath = dir.appendingPathComponent("ca.cnf")
+        let serverPath = dir.appendingPathComponent("server.cnf")
+        try caConf.write(to: caPath, atomically: true, encoding: .utf8)
+        try serverConf.write(to: serverPath, atomically: true, encoding: .utf8)
+        let openssl = "/usr/bin/openssl"
+        try run(openssl, ["req", "-x509", "-newkey", "rsa:2048", "-keyout", dir.appendingPathComponent("ca.key").path, "-out", dir.appendingPathComponent("ca.crt").path, "-days", "1", "-nodes", "-config", caPath.path], in: dir)
+        try run(openssl, ["req", "-newkey", "rsa:2048", "-keyout", dir.appendingPathComponent("server.key").path, "-out", dir.appendingPathComponent("server.csr").path, "-nodes", "-config", serverPath.path], in: dir)
+        try run(openssl, ["x509", "-req", "-in", dir.appendingPathComponent("server.csr").path, "-CA", dir.appendingPathComponent("ca.crt").path, "-CAkey", dir.appendingPathComponent("ca.key").path, "-CAcreateserial", "-out", dir.appendingPathComponent("server.crt").path, "-days", "1", "-extfile", serverPath.path, "-extensions", "v3"], in: dir)
+        try run(openssl, ["x509", "-in", dir.appendingPathComponent("ca.crt").path, "-outform", "DER", "-out", caDER.path], in: dir)
+        try run(openssl, ["pkcs12", "-export", "-inkey", dir.appendingPathComponent("server.key").path, "-in", dir.appendingPathComponent("server.crt").path, "-certfile", dir.appendingPathComponent("ca.crt").path, "-out", p12.path, "-passout", "pass:leadgen-test"], in: dir)
+    }
+
+    private static func identity(p12: URL, password: String) throws -> SecIdentity {
+        let data = try Data(contentsOf: p12)
+        var items: CFArray?
+        let options = [kSecImportExportPassphrase as String: password] as CFDictionary
+        let status = SecPKCS12Import(data as CFData, options, &items)
+        guard status == errSecSuccess, let first = (items as? [[String: Any]])?.first, let identity = first[kSecImportItemIdentity as String] else {
+            throw PortableCheckFailure(description: "PKCS12 import failed (\(status))")
+        }
+        return identity as! SecIdentity
+    }
+
+    private static func run(_ tool: String, _ args: [String], in dir: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = args
+        process.currentDirectoryURL = dir
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw PortableCheckFailure(description: "\(tool) \(args.first ?? "") failed: \(text)")
+        }
+    }
+}
+
+private final class OnceResume: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var result: Result<Void, Error>?
+
+    func succeed() { finish(.success(())) }
+    func fail(_ error: Error) { finish(.failure(error)) }
+
+    func wait() async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                cont.resume(with: result)
+                return
+            }
+            continuation = cont
+            lock.unlock()
+        }
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        if self.result != nil { lock.unlock(); return }
+        self.result = result
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume(with: result)
+    }
+}
+#endif
+
 enum LeadgenSliceTests {
+    static func ipv6Pin() throws {
+        let page = URL(string: "https://www.cliniqueexemple.ca/contact")!
+        let plan = LeadgenPinnedRequest.pin(url: page, addresses: ["2606:4700:4700::1111"])
+        try check(plan?.url.host == "2606:4700:4700::1111", "IPv6 target \(String(describing: plan?.url))")
+        try check(plan?.url.absoluteString.contains("[2606:4700:4700::1111]") == true, "IPv6 literal was not bracketed: \(plan?.url.absoluteString ?? "nil")")
+        try check(plan?.hostHeader == "www.cliniqueexemple.ca", "original host was dropped")
+    }
+
+    #if os(macOS)
+    /// Local TLS server whose certificate names `pinned.leadgen.test`, not the loopback address.
+    static func pinnedTLS() async throws {
+        let server = try LeadgenLocalTLSServer()
+        try await server.start()
+        defer { server.stop() }
+        let ca = try Data(contentsOf: server.caDER)
+        let good = URL(string: "https://pinned.leadgen.test:\(server.port)/pinned")!
+        let wrong = URL(string: "https://other.leadgen.test:\(server.port)/pinned")!
+        let fetcher = LeadgenHTTPFetcher(
+            lookup: { _ in ["127.0.0.1"] },
+            admitLoopbackForTests: true,
+            testTrustAnchorDERs: [ca]
+        )
+        let fetched = try await fetcher.get(good)
+        try check(fetched.status == 200 && fetched.body.contains("pinned-ok"), "live fetcher did not trust the hostname certificate: \(fetched.status) \(fetched.body)")
+        var mismatched = false
+        do { _ = try await fetcher.get(wrong) } catch { mismatched = true }
+        try check(mismatched, "a certificate for a different hostname was accepted by the live fetcher")
+        var transport = URLSessionLeadTransport()
+        transport.lookup = { _ in ["127.0.0.1"] }
+        transport.admitLoopbackForTests = true
+        transport.testTrustAnchorDERs = [ca]
+        let sent = try await transport.send(URLRequest(url: good))
+        let text = String(decoding: sent.body, as: UTF8.self)
+        try check(sent.status == 200 && text.contains("pinned-ok"), "pipeline transport did not trust the hostname certificate: \(sent.status) \(text)")
+        var transportMismatch = false
+        do { _ = try await transport.send(URLRequest(url: wrong)) } catch { transportMismatch = true }
+        try check(transportMismatch, "a certificate for a different hostname was accepted by the pipeline transport")
+    }
+    #endif
+
     static func run() async -> Bool {
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
         let tail = await PortableCheck.suite("Lead-gen slice 1", tailCases())
@@ -995,6 +1196,14 @@ enum LeadgenSliceTests {
                 try check(report.fit.evidence.allSatisfy { !$0.url.contains("dpq.quebec") && !$0.url.contains("annuaire.example") }, "evidence used the directory: \(report.fit.evidence)")
                 try check(!report.draft.consent.source.contains("dpq.quebec") && !report.draft.consent.source.contains("annuaire.example"), "consent used the directory")
             }),
+            ("An admitted IPv6 address is bracketed in the pinned URL", {
+                try LeadgenSliceTests.ipv6Pin()
+            }),
+            #if os(macOS)
+            ("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", {
+                try await LeadgenSliceTests.pinnedTLS()
+            }),
+            #endif
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {

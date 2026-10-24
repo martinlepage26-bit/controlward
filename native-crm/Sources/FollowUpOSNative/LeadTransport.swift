@@ -16,14 +16,18 @@ enum HostSafety {
 
     /// `nil` when the URL may be fetched. `resolvedAddresses` nil skips the DNS check (literal and name rules still apply).
     /// An empty address list fails closed: the name was not shown to be public.
-    static func refusal(url: URL, resolvedAddresses: [String]? = nil) -> String? {
+    /// `admitLoopback` is a test-only seam, default off. Production never sets it, so loopback and odd ports stay refused.
+    static func refusal(url: URL, resolvedAddresses: [String]? = nil, admitLoopback: Bool = false) -> String? {
         let scheme = url.scheme?.lowercased() ?? ""
         if scheme != "http" && scheme != "https" { return "scheme \(scheme.isEmpty ? "none" : scheme)" }
         if url.user != nil || url.password != nil || url.absoluteString.contains("\\") { return "user info or delimiter" }
         guard let original = url.host, !original.isEmpty else { return "no host" }
         let host = canonicalHost(original)
         if host.isEmpty { return "no host" }
-        if let port = url.port, port != (scheme == "https" ? 443 : 80) { return "non-default port \(port)" }
+        if let port = url.port, port != (scheme == "https" ? 443 : 80) {
+            let loopbackTarget = admitLoopback && resolvedAddresses?.isEmpty == false && resolvedAddresses?.allSatisfy(isLoopback) == true
+            if !loopbackTarget { return "non-default port \(port)" }
+        }
         if let encoded = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedHost {
             let decoded = canonicalHost(percentDecoded(encoded))
             if decoded != host, let why = nameRefusal(decoded) { return why }
@@ -32,7 +36,10 @@ enum HostSafety {
         if let resolvedAddresses {
             if resolvedAddresses.isEmpty { return "unresolved \(host)" }
             for address in resolvedAddresses {
-                if let why = addressRefusal(address) { return "resolved \(address) (\(why))" }
+                if let why = addressRefusal(address) {
+                    if admitLoopback && isLoopback(address) { continue }
+                    return "resolved \(address) (\(why))"
+                }
             }
         }
         return nil
@@ -80,6 +87,14 @@ enum HostSafety {
     }
 
     static func isNonPublic(_ address: String) -> Bool { addressRefusal(address) != nil }
+
+    /// 127.0.0.0/8 and ::1. Used only by the test seam that admits a local TLS listener.
+    static func isLoopback(_ raw: String) -> Bool {
+        let text = canonicalHost(raw)
+        if let value = ipv4Value(text) { return (value & 0xFF00_0000) == 0x7F00_0000 }
+        guard text.contains(":"), let bytes = ipv6Bytes(text), bytes.count == 16 else { return false }
+        return bytes.dropLast().allSatisfy { $0 == 0 } && bytes[15] == 1
+    }
 
     static func ipv4Value(_ host: String) -> UInt32? {
         let parts = host.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
@@ -217,9 +232,10 @@ struct LeadgenPinnedRequest: Equatable, Sendable {
     var hostHeader: String
 
     /// The first admitted address is the connection target. A non-public address is not pinned.
-    static func pin(url: URL, addresses: [String]) -> LeadgenPinnedRequest? {
+    /// `admitLoopback` is the same test-only seam as `HostSafety.refusal`. Default off.
+    static func pin(url: URL, addresses: [String], admitLoopback: Bool = false) -> LeadgenPinnedRequest? {
         guard let host = url.host, !host.isEmpty, let address = addresses.first else { return nil }
-        if HostSafety.addressRefusal(address) != nil { return nil }
+        if HostSafety.addressRefusal(address) != nil, !(admitLoopback && HostSafety.isLoopback(address)) { return nil }
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
         components.host = address
         guard let pinned = components.url else { return nil }
@@ -287,6 +303,12 @@ protocol LeadTransport: Sendable {
 /// followed here: every 30x goes back to `GuardedLeadTransport`, which re-admits and robots-checks each hop (Argus must-fix 3).
 struct URLSessionLeadTransport: LeadTransport {
     static let followsRedirects = false
+    /// Tests pass a fake. Production uses system DNS.
+    var lookup: @Sendable (String) -> [String] = { SystemHostLookup.addresses($0) }
+    /// Test-only. Production leaves this false, so loopback is still refused.
+    var admitLoopbackForTests = false
+    /// DER trust anchors for the test CA. Production leaves this empty: system trust, no override.
+    var testTrustAnchorDERs: [Data] = []
 
     private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -311,17 +333,20 @@ struct URLSessionLeadTransport: LeadTransport {
         var outbound = request
         var original = request.url
         if let url = request.url {
-            let resolved = SystemHostLookup.addresses(url.host ?? "")
-            if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved) {
+            let resolved = lookup(url.host ?? "")
+            if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved, admitLoopback: admitLoopbackForTests) {
                 throw LeadPipelineRefusal(code: "refused:own-site-host", detail: why)
             }
-            guard let plan = LeadgenPinnedRequest.pin(url: url, addresses: resolved) else {
+            guard let plan = LeadgenPinnedRequest.pin(url: url, addresses: resolved, admitLoopback: admitLoopbackForTests) else {
                 throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "unresolved \(url.host ?? "")")
             }
             outbound.url = plan.url
             outbound.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
             original = url
         }
+        // URLSession connects to the pinned IP. It does not set SNI to the original hostname, and it
+        // cannot use `testTrustAnchorDERs`. The macOS path replaces this once the pinned TLS client lands.
+        _ = testTrustAnchorDERs
         let (data, response) = try await Self.session.data(for: outbound)
         let http = response as? HTTPURLResponse
         var headers: [String: String] = [:]

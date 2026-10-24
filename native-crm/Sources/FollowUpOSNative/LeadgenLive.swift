@@ -155,6 +155,10 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
     var lookup: @Sendable (String) -> [String] = { SystemHostLookup.addresses($0) }
     /// When set, this receives the pinned request and no socket is opened.
     var transport: (@Sendable (URLRequest) async throws -> (Int, [String: String], String))? = nil
+    /// Test-only. Production leaves this false, so loopback is still refused.
+    var admitLoopbackForTests = false
+    /// DER trust anchors for the test CA. Production leaves this empty: system trust, no override.
+    var testTrustAnchorDERs: [Data] = []
 
     private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -174,16 +178,18 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
 
     func get(_ url: URL) async throws -> (status: Int, headers: [String: String], body: String) {
         let resolved = lookup(url.host ?? "")
-        if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved) {
+        if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved, admitLoopback: admitLoopbackForTests) {
             throw LeadgenError.unsafeURL(why)
         }
-        guard let plan = LeadgenPinnedRequest.pin(url: url, addresses: resolved) else {
+        guard let plan = LeadgenPinnedRequest.pin(url: url, addresses: resolved, admitLoopback: admitLoopbackForTests) else {
             throw LeadgenError.unsafeURL("unresolved \(url.host ?? "")")
         }
         var req = URLRequest(url: plan.url)
         req.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
         req.setValue("ControlWard-leadgen/1 (+mailto:ml@pharos-ai.ca)", forHTTPHeaderField: "User-Agent")
         if let transport { return try await transport(req) }
+        // URLSession connects to the pinned IP. It does not set SNI to the original hostname.
+        _ = testTrustAnchorDERs
         let (data, resp) = try await Self.session.data(for: req)
         let http = resp as? HTTPURLResponse
         var headers: [String: String] = [:]
