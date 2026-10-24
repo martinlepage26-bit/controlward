@@ -33,6 +33,9 @@ struct LeadgenLocalConfig: Codable, Sendable, Equatable {
         let pharosAccountID: String
         let meComToken: SecretRef
         let pharosToken: SecretRef
+        /// Read-only Cloudflare token used for the snapshot SELECTs. Names an env var or Keychain item. No secret value.
+        let meComReadToken: SecretRef?
+        let pharosReadToken: SecretRef?
         /// OAuth access token for ml@pharos-ai.ca with the gmail.compose scope only.
         let gmailToken: SecretRef
     }
@@ -183,14 +186,20 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
 
 /// Cloudflare D1 HTTP query API. One account and token per database.
 struct LeadgenCloudflareD1: LeadgenD1Port {
-    struct Binding: Sendable { let accountID: String; let token: String }
+    struct Binding: Sendable { let accountID: String; let token: String; let readToken: String }
     let bindings: [String: Binding]
+
+    /// Snapshot and other reads use the read-only token. Writes use the other token. Neither value is stored in source.
+    static func credential(sql: String, read: String, write: String) -> String {
+        sql.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("SELECT ") ? read : write
+    }
 
     func query(database: String, sql: String, params: [String]) async throws -> [[String: String]] {
         guard let b = bindings[database] else { throw LeadgenError.credentialMissing("D1 binding for \(database)") }
+        let token = Self.credential(sql: sql, read: b.readToken, write: b.token)
         var req = URLRequest(url: URL(string: "https://api.cloudflare.com/client/v4/accounts/\(b.accountID)/d1/database/\(database)/query")!)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(b.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["sql": sql, "params": params])
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -343,14 +352,19 @@ enum LeadgenCLI {
             guard let c = local.credentials else { throw LeadgenError.configInvalid("no credentials block") }
             let me = try LeadgenCredentials.resolve(c.meComToken, environment: environment, keychain: keychain)
             let ph = try LeadgenCredentials.resolve(c.pharosToken, environment: environment, keychain: keychain)
+            guard let meReadRef = c.meComReadToken, let phReadRef = c.pharosReadToken else {
+                throw LeadgenError.credentialMissing("read-only D1 token (LEADGEN_CF_TOKEN_MECOM_READ and LEADGEN_CF_TOKEN_PHAROS_READ)")
+            }
+            let meRead = try LeadgenCredentials.resolve(meReadRef, environment: environment, keychain: keychain)
+            let phRead = try LeadgenCredentials.resolve(phReadRef, environment: environment, keychain: keychain)
             let gmail = try LeadgenCredentials.resolve(c.gmailToken, environment: environment, keychain: keychain)
             let log = LeadgenFileLog(directory: LeadgenFileLog.directory(environment: environment), stamp: ISO8601DateFormatter().string(from: Date()))
             return LeadgenLiveDeps(
                 fetcher: LeadgenHTTPFetcher(),
                 mailbox: LeadgenGmailDrafts(token: gmail),
                 d1: LeadgenCloudflareD1(bindings: [
-                    LeadgenProjectTarget.meCom.databaseID: .init(accountID: c.meComAccountID, token: me),
-                    LeadgenProjectTarget.pharos.databaseID: .init(accountID: c.pharosAccountID, token: ph),
+                    LeadgenProjectTarget.meCom.databaseID: .init(accountID: c.meComAccountID, token: me, readToken: meRead),
+                    LeadgenProjectTarget.pharos.databaseID: .init(accountID: c.pharosAccountID, token: ph, readToken: phRead),
                 ]),
                 log: log,
                 logPath: log.url.path

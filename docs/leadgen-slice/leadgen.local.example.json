@@ -17,6 +17,8 @@
     "pharosAccountID": "PLACEHOLDER Cloudflare account id",
     "meComToken": { "env": "LEADGEN_CF_TOKEN_MECOM", "keychainService": "controlward.leadgen.cf.mecom" },
     "pharosToken": { "env": "LEADGEN_CF_TOKEN_PHAROS", "keychainService": "controlward.leadgen.cf.pharos" },
+    "meComReadToken": { "env": "LEADGEN_CF_TOKEN_MECOM_READ", "keychainService": "controlward.leadgen.cf.mecom.read" },
+    "pharosReadToken": { "env": "LEADGEN_CF_TOKEN_PHAROS_READ", "keychainService": "controlward.leadgen.cf.pharos.read" },
     "gmailToken": { "env": "LEADGEN_GMAIL_TOKEN", "keychainService": "controlward.leadgen.gmail" }
   }
 }
