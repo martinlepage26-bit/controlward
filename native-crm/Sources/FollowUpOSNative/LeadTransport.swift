@@ -198,7 +198,32 @@ enum HostSafety {
             let v4 = UInt32(bytes[12]) << 24 | UInt32(bytes[13]) << 16 | UInt32(bytes[14]) << 8 | UInt32(bytes[15])
             return isNonPublicIPv4(v4)
         }
+        // NAT64 well-known prefix 64:ff9b::/96.
+        if bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == 0xFF && bytes[3] == 0x9B
+            && bytes.dropFirst(4).prefix(8).allSatisfy({ $0 == 0 }) { return true }
+        // IPv4-compatible ::/96 (the last 32 bits are an embedded IPv4 address).
+        if bytes.prefix(12).allSatisfy({ $0 == 0 }) { return true }
+        // 6to4 2002::/16.
+        if bytes[0] == 0x20 && bytes[1] == 0x02 { return true }
+        // Teredo 2001::/32.
+        if bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x00 && bytes[3] == 0x00 { return true }
         return false
+    }
+}
+
+/// Connects to an address that already passed `HostSafety`, and keeps the original host for the HTTP Host header.
+struct LeadgenPinnedRequest: Equatable, Sendable {
+    var url: URL
+    var hostHeader: String
+
+    /// The first admitted address is the connection target. A non-public address is not pinned.
+    static func pin(url: URL, addresses: [String]) -> LeadgenPinnedRequest? {
+        guard let host = url.host, !host.isEmpty, let address = addresses.first else { return nil }
+        if HostSafety.addressRefusal(address) != nil { return nil }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return nil }
+        components.host = address
+        guard let pinned = components.url else { return nil }
+        return LeadgenPinnedRequest(url: pinned, hostHeader: host)
     }
 }
 
@@ -283,17 +308,25 @@ struct URLSessionLeadTransport: LeadTransport {
     }()
 
     func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
+        var outbound = request
+        var original = request.url
         if let url = request.url {
             let resolved = SystemHostLookup.addresses(url.host ?? "")
             if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved) {
                 throw LeadPipelineRefusal(code: "refused:own-site-host", detail: why)
             }
+            guard let plan = LeadgenPinnedRequest.pin(url: url, addresses: resolved) else {
+                throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "unresolved \(url.host ?? "")")
+            }
+            outbound.url = plan.url
+            outbound.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
+            original = url
         }
-        let (data, response) = try await Self.session.data(for: request)
+        let (data, response) = try await Self.session.data(for: outbound)
         let http = response as? HTTPURLResponse
         var headers: [String: String] = [:]
         for (key, value) in http?.allHeaderFields ?? [:] { headers[String(describing: key).lowercased()] = String(describing: value) }
-        return LeadHTTPResponse(status: http?.statusCode ?? 0, headers: headers, body: data, url: http?.url ?? request.url)
+        return LeadHTTPResponse(status: http?.statusCode ?? 0, headers: headers, body: data, url: original ?? request.url)
     }
 }
 
