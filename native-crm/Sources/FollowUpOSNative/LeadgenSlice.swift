@@ -955,8 +955,12 @@ struct LeadgenSliceRunner: Sendable {
             throw LeadgenError.suppressed(why)
         }
         let fit = try LeadgenFitFinder.find(pages: pages, prospect: prospect)
+        if fit.evidence.contains(where: { $0.fetchedAt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            await log.write("fetchedAt refused: empty")
+            throw LeadgenError.missingFetchedAt
+        }
         var consentForDraft = resolvedConsent
-        if let at = fit.evidence.first?.fetchedAt, !at.isEmpty, let basis = consentForDraft {
+        if let at = fit.evidence.first?.fetchedAt, let basis = consentForDraft {
             consentForDraft = LeadgenConsentBasis(basis: basis.basis, source: basis.source, recordedAt: at)
         }
         let draft: LeadgenDraft
@@ -990,9 +994,7 @@ struct LeadgenSliceRunner: Sendable {
             organization: prospect.organization,
             site: prospect.site.absoluteString,
             fitReason: fit.reason,
-            fitEvidence: fit.evidence.map { e in
-                e.fetchedAt.isEmpty ? "\(e.url) | \(e.quote)" : "\(e.url) | \(e.fetchedAt) | \(e.quote)"
-            }.joined(separator: "\n"),
+            fitEvidence: fit.evidence.map { e in "\(e.url) | \(e.fetchedAt) | \(e.quote)" }.joined(separator: "\n"),
             draftRef: draftID,
             consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
             createdAt: stamp
