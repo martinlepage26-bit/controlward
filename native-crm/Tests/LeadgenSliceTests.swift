@@ -777,6 +777,20 @@ enum LeadgenSliceTests {
                 let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
                 try check(draft.rawMIME.contains("List-Unsubscribe: <mailto:ml@pharos-ai.ca?subject=unsubscribe>"), "missing List-Unsubscribe header: \(draft.rawMIME)")
             }),
+            ("NAT64, IPv4-compatible, 6to4 and Teredo addresses are not public targets", {
+                let blocked = [
+                    "64:ff9b::808:808",
+                    "::808:808",
+                    "2002:808:808::",
+                    "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+                ]
+                for address in blocked {
+                    try check(HostSafety.ipv6Bytes(address) != nil, "\(address) did not parse")
+                    try check(HostSafety.isNonPublic(address), "\(address) was treated as a public address")
+                }
+                try check(HostSafety.ipv6Bytes("2606:4700:4700::1111") != nil && !HostSafety.isNonPublic("2606:4700:4700::1111"), "a public address was blocked")
+                try check(HostSafety.ipv6Bytes("::ffff:8.8.8.8") != nil && !HostSafety.isNonPublic("::ffff:8.8.8.8"), "a public IPv4-mapped address was blocked")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
