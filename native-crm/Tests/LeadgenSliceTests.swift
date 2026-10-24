@@ -451,7 +451,7 @@ enum LeadgenSliceTests {
                 let calls = await mailbox.calls, statements = await d1.statementCount()
                 try check(probe.calls == 0 && calls.isEmpty && statements == 0, "refusal still built adapters \(probe.calls)x, Gmail \(calls.count)x, D1 \(statements)x")
             }),
-            ("LG7 live step order: schema check both, then per DB before/0001/insert/read-back/after, then Gmail draft last, logged", {
+            ("LG7 live step order: schema check both, then the Gmail draft, then per DB before/0001/insert/read-back/after, logged", {
                 let d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
                 let mailbox = LeadgenOrderMailbox(d1: d1)
                 let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, logPath: "mem"))
@@ -460,17 +460,16 @@ enum LeadgenSliceTests {
                 try check(code == 0, "live exit \(code): \(lines)")
                 let me = LeadgenProjectTarget.meCom.databaseID, ph = LeadgenProjectTarget.pharos.databaseID
                 let steps = await log.lines.filter { $0.hasPrefix("step ") }
-                var expected = ["step schema-check \(me)", "step schema-check \(ph)"]
+                var expected = ["step schema-check \(me)", "step schema-check \(ph)", "step gmail-create-draft ml@pharos-ai.ca"]
                 for db in [me, ph] { expected += ["checksum-before", "apply-0001", "insert", "read-back", "checksum-after"].map { "step \($0) \(db)" } }
-                expected.append("step gmail-create-draft ml@pharos-ai.ca")
                 try check(steps == expected, "step order \(steps)")
                 let atDraft = await mailbox.d1StatementsAtDraft, total = await d1.statementCount()
-                try check(atDraft == [total], "Gmail draft was not last: D1 statements at draft \(atDraft), total \(total)")
+                try check(atDraft.count == 1 && atDraft[0] < total, "draft was not created before the row writes: D1 statements at draft \(atDraft), total \(total)")
                 let all = await log.lines
                 try check(all.contains("directory \(LeadgenFixture.directory.absoluteString)"), "directory URL was not written to the run log: \(all)")
                 try check(all.contains(where: { $0.hasPrefix("\(me) projects count before") }) && all.contains(where: { $0.hasPrefix("\(ph) projects count before") }), "projects count before not logged")
                 let inserted = await d1.rows(me, "leads")
-                try check(inserted.first?["draft_ref"]?.hasPrefix("<leadgen-") == true, "draft_ref is not the local Message-ID")
+                try check(inserted.first?["draft_ref"] == "r-draft-1", "draft_ref is not the id returned by createDraft: \(inserted)")
             }),
             ("LG7 the run log is written to a file under the log directory", {
                 let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-log-\(UUID().uuidString)")
@@ -880,9 +879,11 @@ enum LeadgenSliceTests {
                     _ = try await runner.run(candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
                     throw PortableCheckFailure(description: "first row failure was ignored")
                 } catch is PortableCheckFailure { throw PortableCheckFailure(description: "first row failure was ignored") } catch {}
-                let calls = await mailbox.calls, deletes = await mailbox.deletes, lines = await log.lines, inserts = await d1.inserts()
+                let calls = await mailbox.calls, deletes = await mailbox.deletes, lines = await log.lines
+                let meRows = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+                let phRows = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
                 try check(calls == ["createDraft"] && deletes == 0, "draft calls \(calls), deletes \(deletes)")
-                try check(inserts.isEmpty, "a row was stored after the failed insert: \(inserts.map(\.db))")
+                try check(meRows.isEmpty && phRows.isEmpty, "a row was stored after the failed insert: me \(meRows) ph \(phRows)")
                 try check(lines.contains { $0.contains("draft r-draft-1 left in place") && $0.contains(LeadgenProjectTarget.meCom.databaseID) }, "log \(lines)")
             }),
             ("No lead row is written when the draft is not created", {

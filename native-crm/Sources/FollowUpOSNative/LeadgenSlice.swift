@@ -763,9 +763,9 @@ struct LeadgenSliceRunner: Sendable {
         return SuppressionList(storageURL: URL(fileURLWithPath: path))
     }
 
-    /// Live order (SPEC runbook): schema check of both DBs (stop if `leads` exists), then per DB
-    /// checksum and counts before, apply 0001, INSERT one row, read back, checksum and counts after,
-    /// then the one Gmail create-draft on ml@pharos-ai.ca. The draft is not created unless both checks pass.
+    /// Live order: schema check of both DBs (stop if `leads` exists), then one Gmail create-draft,
+    /// then each row with that draft's real id. A failed insert leaves the unsent draft in place and
+    /// the log names the draft id and which database failed. No row is written if the draft was not created.
     /// When `directory` is set, the prospect comes from that page, not from `candidates`.
     func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String?, directory: URL? = nil) async throws -> LeadgenRunReport {
         if config.liveFlag { try config.authorizeLive() }
@@ -803,18 +803,6 @@ struct LeadgenSliceRunner: Sendable {
         guard draft.from == LeadgenDraft.mailbox else { throw LeadgenError.wrongMailbox(draft.from) }
         let host = LeadgenSourcePolicy.normalize(prospect.site.host ?? "")
         let stamp = now()
-        let row = LeadgenLeadRow(
-            id: "lead-\(host.replacingOccurrences(of: ".", with: "-"))-\(stamp.prefix(10))",
-            organization: prospect.organization,
-            site: prospect.site.absoluteString,
-            fitReason: fit.reason,
-            fitEvidence: fit.evidence.map { e in
-                e.fetchedAt.isEmpty ? "\(e.url) | \(e.quote)" : "\(e.url) | \(e.fetchedAt) | \(e.quote)"
-            }.joined(separator: "\n"),
-            draftRef: draft.messageID,
-            consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
-            createdAt: stamp
-        )
         let writer = LeadgenD1Writer(port: d1, log: log)
         let targets = [LeadgenProjectTarget.meCom, .pharos]
         for target in targets {
@@ -824,13 +812,30 @@ struct LeadgenSliceRunner: Sendable {
                 throw LeadgenError.leadsTableExists(target.databaseID)
             }
         }
-        var receipts: [LeadgenWriteReceipt] = []
-        for target in targets {
-            receipts.append(try await writer.insertOne(row, into: target))
-        }
         await log.write("step gmail-create-draft \(LeadgenDraft.mailbox)")
         let draftID = try await mailbox.createDraft(account: LeadgenDraft.mailbox, rawMIME: draft.rawMIME)
         await log.write("draft created id=\(draftID) message-id=\(draft.messageID)")
+        let row = LeadgenLeadRow(
+            id: "lead-\(host.replacingOccurrences(of: ".", with: "-"))-\(stamp.prefix(10))",
+            organization: prospect.organization,
+            site: prospect.site.absoluteString,
+            fitReason: fit.reason,
+            fitEvidence: fit.evidence.map { e in
+                e.fetchedAt.isEmpty ? "\(e.url) | \(e.quote)" : "\(e.url) | \(e.fetchedAt) | \(e.quote)"
+            }.joined(separator: "\n"),
+            draftRef: draftID,
+            consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
+            createdAt: stamp
+        )
+        var receipts: [LeadgenWriteReceipt] = []
+        for target in targets {
+            do {
+                receipts.append(try await writer.insertOne(row, into: target))
+            } catch {
+                await log.write("draft \(draftID) left in place; row failed for \(target.databaseID)")
+                throw error
+            }
+        }
         await log.write("done rows=\(receipts.count)")
         return LeadgenRunReport(live: true, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: draftID, receipts: receipts)
     }

@@ -151,6 +151,11 @@ actor LeadgenFileLog: LeadgenRunLog {
 // MARK: Live adapters (used only by the CLI live path; tests use fakes)
 
 struct LeadgenHTTPFetcher: LeadgenFetching {
+    /// One lookup. Tests pass a fake; the live default is system DNS, called once per request.
+    var lookup: @Sendable (String) -> [String] = { SystemHostLookup.addresses($0) }
+    /// When set, this receives the pinned request and no socket is opened.
+    var transport: (@Sendable (URLRequest) async throws -> (Int, [String: String], String))? = nil
+
     private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -168,12 +173,17 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
     }()
 
     func get(_ url: URL) async throws -> (status: Int, headers: [String: String], body: String) {
-        let resolved = SystemHostLookup.addresses(url.host ?? "")
+        let resolved = lookup(url.host ?? "")
         if let why = HostSafety.refusal(url: url, resolvedAddresses: resolved) {
             throw LeadgenError.unsafeURL(why)
         }
-        var req = URLRequest(url: url)
+        guard let plan = LeadgenPinnedRequest.pin(url: url, addresses: resolved) else {
+            throw LeadgenError.unsafeURL("unresolved \(url.host ?? "")")
+        }
+        var req = URLRequest(url: plan.url)
+        req.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
         req.setValue("ControlWard-leadgen/1 (+mailto:ml@pharos-ai.ca)", forHTTPHeaderField: "User-Agent")
+        if let transport { return try await transport(req) }
         let (data, resp) = try await Self.session.data(for: req)
         let http = resp as? HTTPURLResponse
         var headers: [String: String] = [:]
@@ -281,13 +291,14 @@ enum LeadgenCLI {
             "consent basis: \(config?.consent == nil ? "not configured" : "set")",
             "live plan, in order:",
             "  1. read-only schema check of D1 \(LeadgenProjectTarget.meCom.databaseID) and \(LeadgenProjectTarget.pharos.databaseID); STOP if a leads table exists",
-            "  2. per DB: checksum (rows + sqlite_master.sql) of every table and projects count, before",
-            "  3. per DB: apply docs/leadgen-slice/migrations/0001_create_leads.sql (CREATE TABLE IF NOT EXISTS leads)",
-            "  4. per DB: INSERT one row into leads, status \(LeadgenLeadRow.status)",
-            "  5. per DB: read the row back",
-            "  6. per DB: checksum and counts after; any change outside leads fails the run",
-            "  7. Gmail create-draft only, on \(LeadgenDraft.mailbox) (no send, no read, no delete)",
-            "  8. run log under ~/Library/Logs/ControlWard/leadgen/",
+            "  2. Gmail create-draft only, on \(LeadgenDraft.mailbox) (no send, no read, no delete)",
+            "  3. per DB: checksum (rows + sqlite_master.sql) of every table and projects count, before",
+            "  4. per DB: apply docs/leadgen-slice/migrations/0001_create_leads.sql (CREATE TABLE IF NOT EXISTS leads)",
+            "  5. per DB: INSERT one row into leads, status \(LeadgenLeadRow.status), draft_ref is the draft id from step 2",
+            "  6. per DB: read the row back",
+            "  7. per DB: checksum and counts after; any change outside leads fails the run",
+            "  8. if a row insert fails, leave the unsent draft and log its id and which database failed",
+            "  9. run log under ~/Library/Logs/ControlWard/leadgen/",
             "to run live: leadgen --live --confirm \"\(LeadgenRunConfig.confirmation)\"",
         ]
     }
