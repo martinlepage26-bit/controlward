@@ -42,7 +42,7 @@ enum LeadgenPinnedHTTPS {
         do {
             try await ready(connection, queue: queue)
             try await send(connection, request: request, url: url, serverName: serverName)
-            let data = try await read(connection)
+            let data = try await read(connection, queue: queue)
             connection.cancel()
             guard let parsed = parse(data, complete: true) else {
                 throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "truncated HTTP response")
@@ -66,6 +66,9 @@ enum LeadgenPinnedHTTPS {
                 }
             }
             connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + 20) {
+                gate.run { cont.resume(throwing: LeadPipelineRefusal(code: "refused:own-site-host", detail: "connection timed out")) }
+            }
         }
     }
 
@@ -94,13 +97,19 @@ enum LeadgenPinnedHTTPS {
                 if let error { gate.run { cont.resume(throwing: error) } }
                 else { gate.run { cont.resume() } }
             })
+            DispatchQueue.global().asyncAfter(deadline: .now() + 20) {
+                gate.run { cont.resume(throwing: LeadPipelineRefusal(code: "refused:own-site-host", detail: "send timed out")) }
+            }
         }
     }
 
-    private static func read(_ connection: NWConnection) async throws -> Data {
+    private static func read(_ connection: NWConnection, queue: DispatchQueue) async throws -> Data {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
             let gate = Once()
             let box = Buffer()
+            queue.asyncAfter(deadline: .now() + 20) {
+                gate.run { cont.resume(throwing: LeadPipelineRefusal(code: "refused:own-site-host", detail: "read timed out")) }
+            }
             func receive() {
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
                     if let data { box.append(data) }

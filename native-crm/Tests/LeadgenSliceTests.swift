@@ -315,6 +315,9 @@ final class LeadgenLocalTLSServer: @unchecked Sendable {
             }
         }
         listener.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 20) {
+            ready.fail(PortableCheckFailure(description: "TLS listener timed out"))
+        }
         try await ready.wait()
         guard let assigned = listener.port?.rawValue, assigned != 0 else {
             throw PortableCheckFailure(description: "TLS listener did not bind a port")
