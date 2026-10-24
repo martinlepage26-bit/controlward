@@ -75,7 +75,7 @@ TODO: a human still has to choose one public HTML directory page. `directoryURL`
 
 An empty `directoryURL` is `directory not configured`: the dry run prints that and `prospect: not configured` and does not fetch. It does not treat a hand-supplied clinic URL as the prospect. When a human sets the URL, the dry run fetches that page (robots.txt first), collapses every link on one own domain into one prospect, and refuses the page unless exactly one prospect remains. It then reads that prospect's own domain for the fit quote, the recipient address and the consent source. `consent.recordedAt` is the fetch time of the evidence page, and the lead row stores that URL and time. The directory URL is written to the run log. Google Maps, data brokers and search-engine pages are not sources. M2 and M3 apply to every fetch.
 
-Before any draft, the run checks the do-not-contact list. A suppressed address or domain writes no draft and no row, and the log says why. The footer address is `2456 rue de Rouen, Montréal QC H2K 1M2`. The draft carries a List-Unsubscribe header. Snapshot SELECTs use the read-only token named in config (`LEADGEN_CF_TOKEN_MECOM_READ`, `LEADGEN_CF_TOKEN_PHAROS_READ`).
+Before any draft, the run checks the do-not-contact list. A suppressed address or domain writes no draft and no row, and the log says why. The footer is the full line from local config, NFC-normalized and compared to the pinned sha256 (`LeadgenDraftComposer.footerLineSHA256`). A mismatch refuses the draft and is logged. The plaintext line is not stored in the repo. The draft carries a List-Unsubscribe header. Snapshot SELECTs use the read-only token named in config (`LEADGEN_CF_TOKEN_MECOM_READ`, `LEADGEN_CF_TOKEN_PHAROS_READ`).
 
 ## Hard limits
 

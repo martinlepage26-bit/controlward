@@ -23,7 +23,7 @@ enum LeadPipelineTests {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
                 try expect(config.conflictAreas.first?.description == "plumbing, excavation and related trades in the city of Saguenay (its boroughs and merged former towns)", "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
-                try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "2456 rue de Rouen, Montréal QC H2K 1M2", "sender identity")
+                try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "PLACEHOLDER street, city, province, postal code", "sender identity keeps the street out of the repo")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
             ("ICP config: clinic and trades take named people from the own site only", {
@@ -936,7 +936,7 @@ enum LeadPipelineTests {
                 let prospect = LeadKit.readyClinic()
                 for language in ["fr", "en"] {
                     let draft = LeadKit.draft(for: prospect, config: config, language: language)
-                    try expect(draft.body.contains("PHAROS AI") && draft.body.contains("2456 rue de Rouen, Montréal QC H2K 1M2") && draft.from == "ml@pharos-ai.ca", language)
+                    try expect(draft.body.contains("PHAROS AI") && draft.body.contains(config.sender.mailingAddress) && draft.from == "ml@pharos-ai.ca", language)
                     let refusal = OutreachDraftGate.check(draft, prospect: prospect, config: config, suppression: SuppressionList(), now: now)
                     try expect(refusal == nil, "\(language): \(String(describing: refusal))")
                 }

@@ -413,7 +413,7 @@
     "name": "Martin Lepage",
     "organization": "PHAROS AI",
     "from": "ml@pharos-ai.ca",
-    "mailing_address": "2456 rue de Rouen, Montréal QC H2K 1M2",
+    "mailing_address": "PLACEHOLDER street, city, province, postal code",
     "unsubscribe_mailto": "ml@pharos-ai.ca",
     "unsubscribe_subject": "unsubscribe"
   },

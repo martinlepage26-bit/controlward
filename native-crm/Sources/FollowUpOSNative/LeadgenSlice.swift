@@ -57,7 +57,10 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .rowCountDelta(let d): "row count changed by \(d), expected exactly 1"
         case .existingRowsChanged: "checksum of existing rows or schema changed"
         case .leadsTableExists(let db): "stopped before any insert: a leads table already exists in \(db); ask Martin"
-        case .postalAddressDenied(let word): "draft refused: the footer address names a denied street (\(word))"
+        case .postalAddressDenied(let word):
+            word == "pinned-hash"
+                ? "draft refused: the footer line does not match the pinned hash"
+                : "draft refused: the footer address names a denied street (\(word))"
         case .configMissing(let path): "local config missing: \(path) (copy docs/leadgen-slice/leadgen.local.example.json)"
         case .configInvalid(let why): "local config invalid: \(why)"
         case .credentialMissing(let ref): "credential not found: \(ref) (env or Keychain reference only)"
@@ -381,10 +384,67 @@ struct LeadgenDraft: Sendable, Equatable {
     }
 }
 
+enum LeadgenSHA256 {
+    static func hex(_ bytes: [UInt8]) -> String { hash(bytes).map { String(format: "%02x", $0) }.joined() }
+
+    static func hash(_ message: [UInt8]) -> [UInt8] {
+        var h: [UInt32] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+        let k: [UInt32] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        ]
+        var msg = message
+        let bitLength = UInt64(message.count) &* 8
+        msg.append(0x80)
+        while msg.count % 64 != 56 { msg.append(0) }
+        for shift in stride(from: 56, through: 0, by: -8) { msg.append(UInt8((bitLength >> UInt64(shift)) & 0xff)) }
+        func rotr(_ x: UInt32, _ n: UInt32) -> UInt32 { (x >> n) | (x << (32 - n)) }
+        var offset = 0
+        while offset < msg.count {
+            var w = [UInt32](repeating: 0, count: 64)
+            for i in 0..<16 {
+                let j = offset + i * 4
+                w[i] = (UInt32(msg[j]) << 24) | (UInt32(msg[j + 1]) << 16) | (UInt32(msg[j + 2]) << 8) | UInt32(msg[j + 3])
+            }
+            for i in 16..<64 {
+                let s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3)
+                let s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10)
+                w[i] = w[i - 16] &+ s0 &+ w[i - 7] &+ s1
+            }
+            var a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7]
+            for i in 0..<64 {
+                let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+                let ch = (e & f) ^ (~e & g)
+                let t1 = hh &+ s1 &+ ch &+ k[i] &+ w[i]
+                let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+                let maj = (a & b) ^ (a & c) ^ (b & c)
+                hh = g; g = f; f = e; e = d &+ t1; d = c; c = b; b = a; a = t1 &+ (s0 &+ maj)
+            }
+            h[0] = h[0] &+ a; h[1] = h[1] &+ b; h[2] = h[2] &+ c; h[3] = h[3] &+ d
+            h[4] = h[4] &+ e; h[5] = h[5] &+ f; h[6] = h[6] &+ g; h[7] = h[7] &+ hh
+            offset += 64
+        }
+        var out: [UInt8] = []
+        for value in h {
+            out.append(UInt8((value >> 24) & 0xff))
+            out.append(UInt8((value >> 16) & 0xff))
+            out.append(UInt8((value >> 8) & 0xff))
+            out.append(UInt8(value & 0xff))
+        }
+        return out
+    }
+}
+
 enum LeadgenDraftComposer {
     static let signature = "Martin Lepage, PhD\nPHAROS AI\nml@pharos-ai.ca"
-    /// The only postal address a slice draft may print.
-    static let postalAddress = "2456 rue de Rouen, Montréal QC H2K 1M2"
+    /// SHA-256 of the NFC UTF-8 bytes of the full footer line. The line itself lives only in local config.
+    static let footerLineSHA256 = "e3befc4fae6cdb04461ea60b1633bc6e11e3349df76c1ff7fa738c90f9095f0d"
 
     /// Street names that belong to other businesses and must never appear in a PHAROS footer.
     /// Street name only: no full address is kept in code.
@@ -404,6 +464,8 @@ enum LeadgenDraftComposer {
         }
         let norm = " " + normalizedAddress(address)
         if let hit = deniedStreets.first(where: { norm.contains($0) }) { throw LeadgenError.postalAddressDenied(hit) }
+        let nfc = address.precomposedStringWithCanonicalMapping
+        guard LeadgenSHA256.hex(Array(nfc.utf8)) == footerLineSHA256 else { throw LeadgenError.postalAddressDenied("pinned-hash") }
         return address
     }
 
@@ -426,8 +488,7 @@ enum LeadgenDraftComposer {
         guard let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty,
               !consent.source.isEmpty, !consent.recordedAt.isEmpty else { throw LeadgenError.missingConsentBasis }
         try proveOwnPages(prospect: prospect, consent: consent, pages: pages)
-        _ = try checkAddress(postalAddress)
-        let postalAddress = Self.postalAddress
+        let footerLine = try checkAddress(postalAddress)
         let quote = fit.evidence.first?.quote ?? ""
         let subject = "Gouvernance de l'IA et Loi 25 pour \(prospect.organization)"
         let body = """
@@ -445,7 +506,7 @@ enum LeadgenDraftComposer {
         Vous recevez ce message parce que votre adresse est publiée sur votre site (\(consent.source)).
         Pour ne plus recevoir de messages de PHAROS AI, répondez « désabonnement » à ce courriel; votre demande sera traitée dans les 10 jours ouvrables.
         To unsubscribe, reply "unsubscribe" to this email.
-        PHAROS AI, \(postalAddress)
+        \(footerLine)
         """
         for text in [subject, body] where text.contains("\u{2014}") || text.contains("\u{2013}") {
             throw LeadgenError.dashNotAllowed
@@ -805,7 +866,14 @@ struct LeadgenSliceRunner: Sendable {
         if let at = fit.evidence.first?.fetchedAt, !at.isEmpty, let basis = consentForDraft {
             consentForDraft = LeadgenConsentBasis(basis: basis.basis, source: basis.source, recordedAt: at)
         }
-        let draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: consentForDraft, postalAddress: postalAddress, pages: pages)
+        let draft: LeadgenDraft
+        do {
+            draft = try LeadgenDraftComposer.compose(prospect: prospect, fit: fit, consent: consentForDraft, postalAddress: postalAddress, pages: pages)
+        } catch {
+            if case LeadgenError.missingPostalAddress = error { await log.write("footer refused: \(error)") }
+            if case LeadgenError.postalAddressDenied = error { await log.write("footer refused: \(error)") }
+            throw error
+        }
         guard config.isLive else {
             return LeadgenRunReport(live: false, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: nil, receipts: [])
         }

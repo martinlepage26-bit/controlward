@@ -47,7 +47,7 @@ enum LeadProofVerifier {
               && draft.body.contains("mailto:\(sender.unsubscribeMailto)") && draft.listUnsubscribe != nil && draft.consent != nil
               && MailAddress.bare(draft.from) == MailAddress.bare(sender.from))
         }
-        checks.append(Check(number: 4, name: "Draft carries sender ID, rue de Rouen address, unsubscribe and consent basis",
+        checks.append(Check(number: 4, name: "Draft carries sender ID, configured mailing address, unsubscribe and consent basis",
                             passed: !drafts.isEmpty && badDrafts.isEmpty, detail: "drafts=\(drafts.count) failing=\(badDrafts.count)"))
 
         let sends = lines.filter { $0["action"] == "send" }

@@ -185,7 +185,7 @@ enum LeadgenFixture {
     """
     static let prospect = LeadgenProspect(organization: "Clinique Exemple", segment: "montreal-clinics", site: site, publicContactEmail: "info@cliniqueexemple.ca")
     static let consent = LeadgenConsentBasis(basis: "CASL s.10(9)(b) conspicuous publication; Loi 25 public business contact", source: "https://www.cliniqueexemple.ca/contact", recordedAt: "2026-10-24T20:00:00Z")
-    static let postal = "1000 rue Exemple, Montréal (Québec) H0H 0H0"
+    static let postal = LeadgenFooterFixture.configured
     static let paths = ["/", "/services", "/contact"]
     static let home = """
     <html><head><style>.x{}</style></head><body><nav>Accueil Services</nav>
@@ -347,7 +347,7 @@ enum LeadgenSliceTests {
                 let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
                 let raw = draft.rawMIME
                 try check(raw.contains("X-PHAROS-Consent-Basis: CASL") && raw.contains("Loi 25"), "no consent basis header")
-                try check(draft.body.contains("désabonnement") && draft.body.contains("unsubscribe") && draft.body.contains(LeadgenDraftComposer.postalAddress), "no CASL footer")
+                try check(draft.body.contains("désabonnement") && draft.body.contains("unsubscribe") && draft.body.contains(LeadgenFixture.postal), "no CASL footer")
                 try check(draft.body.contains("Martin Lepage, PhD") && draft.from == "ml@pharos-ai.ca", "signature or sender wrong")
                 try check(!raw.contains("\u{2014}") && !raw.contains("\u{2013}"), "dash in draft")
                 try await expectError(.missingConsentBasis) { _ = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: nil, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages()) }
@@ -517,7 +517,7 @@ enum LeadgenSliceTests {
                     }
                 }
                 let ok = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
-                try check(ok.body.contains(LeadgenDraftComposer.postalAddress), "a clean address was not replaced by the pinned footer")
+                try check(ok.body.contains(LeadgenFixture.postal), "the configured footer line was not rendered")
                 try check(LeadgenDraftComposer.deniedStreets == ["saint-hubert"], "denylist must hold the street name only")
             }),
             ("LG8 the repo holds only a placeholder example config and ignores the local one", {
