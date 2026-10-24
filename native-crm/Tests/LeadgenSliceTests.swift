@@ -751,6 +751,19 @@ enum LeadgenSliceTests {
                     try check(lines.contains { $0.contains("suppressed") && $0.contains(entry.lowercased()) }, "log did not name the suppression: \(lines)")
                 }
             }),
+            ("The lead row stores the evidence URL and its fetch time, and consent.recordedAt is that time", {
+                let d1 = LeadgenFakeD1()
+                let report = try await LeadgenFixture.live(d1)
+                let row = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads").first
+                let evidence = row?["fit_evidence"] ?? ""
+                let basis = row?["consent_basis"] ?? ""
+                let fetchedAt = "2026-10-24T20:30:00Z"
+                try check(evidence.contains("https://www.cliniqueexemple.ca/"), "evidence URL missing: \(evidence)")
+                try check(evidence.contains(fetchedAt), "fetch time missing from the lead row: \(evidence)")
+                try check(basis.contains(fetchedAt), "consent recordedAt is not the fetch time: \(basis)")
+                try check(!basis.contains(LeadgenFixture.consent.recordedAt), "consent recordedAt stayed the config value: \(basis)")
+                try check(report.draft.consent.recordedAt == fetchedAt, "draft recordedAt \(report.draft.consent.recordedAt)")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
