@@ -4,14 +4,27 @@ import Foundation
 @main
 struct PortableTestMain {
     static func main() async {
+        let plan: [(String, () async -> Bool)] = [
+            ("MailActionOutcomeTests", { await MailActionOutcomeTests.run() }),
+            ("LeadPipelineTests", { await LeadPipelineTests.run() }),
+            ("LeadPipelinePlantedReds", { await LeadPipelinePlantedReds.run() }),
+            ("MailControlTests", { await MailControlTests.run() }),
+            ("ProjectControlTests", { await ProjectControlTests.run() }),
+            ("MailControlPlantedReds", { await MailControlPlantedReds.run() }),
+            ("LeadgenSliceTests", { await LeadgenSliceTests.run() }),
+        ]
+        let asked = PortableSuiteFilter.names
+        let chosen = asked.isEmpty ? plan : plan.filter { asked.contains($0.0) }
+        if !asked.isEmpty, chosen.count != Set(asked).count {
+            let known = Set(plan.map(\.0))
+            print("unknown suite \(asked.filter { !known.contains($0) }.joined(separator: " "))")
+            print("suites: \(plan.map(\.0).joined(separator: " "))")
+            exit(2)
+        }
         var ok = true
-        ok = await MailActionOutcomeTests.run() && ok
-        ok = await LeadPipelineTests.run() && ok
-        ok = await LeadPipelinePlantedReds.run() && ok
-        ok = await MailControlTests.run() && ok
-        ok = await ProjectControlTests.run() && ok
-        ok = await MailControlPlantedReds.run() && ok
-        ok = await LeadgenSliceTests.run() && ok
+        for (_, run) in chosen {
+            ok = await run() && ok
+        }
         if !ok {
             print("PORTABLE TESTS FAILED")
             exit(1)

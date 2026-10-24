@@ -6,6 +6,16 @@ struct PortableCheckFailure: Error, CustomStringConvertible {
     var description: String
 }
 
+/// Command-line suite names. No names means every suite.
+/// `./bin/test-portable LeadgenSliceTests` and `./bin/test-native-app LeadgenSliceTests` run one suite at that SHA.
+enum PortableSuiteFilter {
+    static var names: [String] {
+        CommandLine.arguments.dropFirst()
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
 enum PortableCheck {
     static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
         guard try condition() else { throw PortableCheckFailure(description: message) }

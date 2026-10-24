@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Builds and runs the platform-neutral ControlWard tests (no SwiftUI, no AppKit).
 # Runs on macOS and on Linux with a Swift 6 toolchain. GitHub Actions is not used.
+# Prints the full git SHA first. One suite: ./bin/test-portable LeadgenSliceTests
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+echo "git rev-parse HEAD: $(git -C "${PROJECT_ROOT}" rev-parse HEAD)"
 SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
 TEST_ROOT="${PROJECT_ROOT}/native-crm/Tests"
 BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/portable-tests"

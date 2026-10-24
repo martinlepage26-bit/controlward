@@ -77,6 +77,17 @@ An empty `directoryURL` is `directory not configured`: the dry run prints that a
 
 Before any draft, the run checks the do-not-contact list. A suppressed address or domain writes no draft and no row, and the log says why. The footer is the full line from local config, NFC-normalized and compared to the pinned sha256 (`LeadgenDraftComposer.footerLineSHA256`). A mismatch refuses the draft and is logged. The plaintext line is not stored in the repo. The draft carries a List-Unsubscribe header. Snapshot SELECTs use the read-only token named in config (`LEADGEN_CF_TOKEN_MECOM_READ`, `LEADGEN_CF_TOKEN_PHAROS_READ`).
 
+## Running one suite
+
+`bin/test-portable` and `bin/test-native-app` print `git rev-parse HEAD` before anything else. With no arguments they run every suite. One suite at that same SHA:
+
+```
+./bin/test-portable LeadgenSliceTests
+./bin/test-native-app LeadgenSliceTests
+```
+
+The portable names are `MailActionOutcomeTests`, `LeadPipelineTests`, `LeadPipelinePlantedReds`, `MailControlTests`, `ProjectControlTests`, `MailControlPlantedReds`, and `LeadgenSliceTests`. The Mac runner accepts those plus the other smoke suites (`SecurityTests`, `IntegrationTests`, and the rest of the types in `NativeSmokeTests`).
+
 ## Hard limits
 
 No live Gmail or D1 calls except the read-only schema inspection above. All tests use fakes. No sending, inbox reading, deleting, bulk, or deploy. Credentials come from env or Keychain only.

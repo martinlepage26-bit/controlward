@@ -14,6 +14,14 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        let asked = PortableSuiteFilter.names
+        if !asked.isEmpty {
+            for name in asked {
+                let ok = try await runNamedSuite(name)
+                if !ok { throw SmokeTestFailure.failed("\(name) failed") }
+            }
+            return
+        }
         guard WorkspaceModuleTests.run() else { throw SmokeTestFailure.failed("Workspace module policy tests failed") }
         guard OverviewModelTests.run() else { throw SmokeTestFailure.failed("Overview model tests failed") }
         guard ControlWardTests.run() else { throw SmokeTestFailure.failed("ControlWard workflow tests failed") }
@@ -234,6 +242,35 @@ struct NativeSmokeTests {
         try expect(discoveryPassed, "discovery tests failed")
         try expect(csvPassed, "CSV import tests failed")
         try expect(gtmPassed, "account intelligence tests failed")
+    }
+
+    /// One suite at this SHA. Names match the test types. No argument runs every suite, including the app smoke below.
+    private static func runNamedSuite(_ name: String) async throws -> Bool {
+        switch name {
+        case "WorkspaceModuleTests": return WorkspaceModuleTests.run()
+        case "OverviewModelTests": return OverviewModelTests.run()
+        case "ControlWardTests": return ControlWardTests.run()
+        case "SecurityTests": return SecurityTests.run()
+        case "IntegrationTests": return await IntegrationTests.run()
+        case "LeadInboxTests": return await LeadInboxTests.run()
+        case "GapAnalysisTests": return await GapAnalysisTests.run()
+        case "KairosTests": return await KairosTests.run()
+        case "MailIntakeTests": return await MailIntakeTests.run()
+        case "MailboxTests": return await MailboxTests.run()
+        case "MailActionOutcomeTests": return await MailActionOutcomeTests.run()
+        case "LeadPipelineTests": return await LeadPipelineTests.run()
+        case "LeadPipelinePlantedReds": return await LeadPipelinePlantedReds.run()
+        case "MailControlTests": return await MailControlTests.run()
+        case "ProjectControlTests": return await ProjectControlTests.run()
+        case "MailControlPlantedReds": return await MailControlPlantedReds.run()
+        case "LeadgenSliceTests": return await LeadgenSliceTests.run()
+        case "BuildInfoTests": return BuildInfoTests.run()
+        case "DiscoveryTests": return await DiscoveryTests.run()
+        case "GTMTests": return GTMTests.run()
+        case "CSVImportTests": return CSVImportTests.run()
+        default:
+            throw SmokeTestFailure.failed("unknown suite \(name)")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
