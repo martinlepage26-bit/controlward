@@ -911,6 +911,23 @@ enum LeadgenSliceTests {
                 try check(lines.contains("step schema-check \(LeadgenProjectTarget.meCom.databaseID)"), "first database was not checked")
                 try check(!lines.contains { $0.contains("gmail-create-draft") }, "draft step was logged: \(lines)")
             }),
+            ("Several directory entries on one own domain are one prospect", {
+                let html = """
+                <html><body>
+                <a href="https://www.cliniqueexemple.ca/a">Installation A</a>
+                <a href="https://cliniqueexemple.ca/b">Installation B</a>
+                <a href="https://www.cliniqueexemple.ca/c">Installation C</a>
+                </body></html>
+                """
+                let fetcher = LeadgenFixture.fetcher()
+                fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
+                let found = try await LeadgenDiscovery.find(directory: LeadgenFixture.directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+                try check(found.prospect.organization == "Installation A", "picked \(found.prospect.organization)")
+                try check(LeadgenSourcePolicy.normalize(found.prospect.site.host ?? "") == "cliniqueexemple.ca", "site \(found.prospect.site)")
+                try check(found.prospect.publicContactEmail == "info@cliniqueexemple.ca", "email \(found.prospect.publicContactEmail)")
+                try check(found.consent?.source == "https://www.cliniqueexemple.ca/contact", "consent source \(found.consent?.source ?? "")")
+                try check(!fetcher.requested.contains { $0.contains("autreclinique") }, "another domain was fetched: \(fetcher.requested)")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
