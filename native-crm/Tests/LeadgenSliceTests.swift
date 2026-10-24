@@ -816,6 +816,28 @@ enum LeadgenSliceTests {
                 try check(LeadgenCloudflareD1.credential(sql: "INSERT INTO leads (id) VALUES (?)", read: "read-token", write: "write-token") == "write-token", "INSERT used the read token")
                 try check(LeadgenCloudflareD1.credential(sql: LeadgenMigration.createLeads, read: "read-token", write: "write-token") == "write-token", "migration used the read token")
             }),
+            ("The connection uses the address that passed the check", {
+                let page = URL(string: "https://www.cliniqueexemple.ca/contact")!
+                let plan = LeadgenPinnedRequest.pin(url: page, addresses: ["1.1.1.1", "8.8.8.8"])
+                try check(plan?.url.host == "1.1.1.1", "connection target \(String(describing: plan?.url.host))")
+                try check(plan?.hostHeader == "www.cliniqueexemple.ca", "original host was dropped: \(String(describing: plan?.hostHeader))")
+                try check(LeadgenPinnedRequest.pin(url: page, addresses: ["8.8.8.8"])?.url.host == "8.8.8.8", "a different admitted address was not kept")
+                try check(LeadgenPinnedRequest.pin(url: page, addresses: ["10.0.0.1"]) == nil, "a private address was pinned")
+                final class Box: @unchecked Sendable {
+                    var request: URLRequest?
+                    var lookups = 0
+                }
+                let box = Box()
+                let fetcher = LeadgenHTTPFetcher(
+                    lookup: { _ in box.lookups += 1; return ["1.1.1.1"] },
+                    transport: { req in box.request = req; return (200, [:], "ok") }
+                )
+                let response = try await fetcher.get(page)
+                try check(response.status == 200, "status \(response.status)")
+                try check(box.lookups == 1, "lookup ran \(box.lookups) times")
+                try check(box.request?.url?.host == "1.1.1.1", "request went to \(String(describing: box.request?.url))")
+                try check(box.request?.value(forHTTPHeaderField: "Host") == "www.cliniqueexemple.ca", "Host header \(String(describing: box.request?.allHTTPHeaderFields))")
+            }),
             ("The slice source has no Gmail send path", {
                 let root = LeadgenFixture.repoRoot
                 for name in ["native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift", "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"] {
