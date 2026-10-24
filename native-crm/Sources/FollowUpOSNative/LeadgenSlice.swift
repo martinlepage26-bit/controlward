@@ -63,19 +63,30 @@ struct LeadgenRunConfig: Sendable, Equatable {
     let operatorOK: String?
 
     static let dryRun = LeadgenRunConfig(liveFlag: false, operatorOK: nil)
+
+    /// The exact confirmation the live run needs. It names the new `leads` table in both D1s.
     static let confirmation = "leads in e1e9fa25 and leads in 959e5bdb"
 
-    /// Live only with the explicit `--live` flag AND a recorded operator OK (env LEADGEN_OPERATOR_OK).
+    /// Live only with the explicit `--live` flag AND the confirmation, given as `--confirm <value>`,
+    /// `--confirm=<value>`, or env LEADGEN_OPERATOR_OK.
     static func from(arguments: [String], environment: [String: String]) -> LeadgenRunConfig {
-        let ok = environment["LEADGEN_OPERATOR_OK"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return LeadgenRunConfig(liveFlag: arguments.contains("--live"), operatorOK: (ok?.isEmpty ?? true) ? nil : ok)
+        var ok = environment["LEADGEN_OPERATOR_OK"]
+        for (i, arg) in arguments.enumerated() {
+            if arg == "--confirm", i + 1 < arguments.count { ok = arguments[i + 1] }
+            if arg.hasPrefix("--confirm=") { ok = String(arg.dropFirst("--confirm=".count)) }
+        }
+        let trimmed = ok?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return LeadgenRunConfig(liveFlag: arguments.contains("--live"), operatorOK: (trimmed?.isEmpty ?? true) ? nil : trimmed)
     }
 
-    var isLive: Bool { liveFlag && operatorOK != nil }
+    var isLive: Bool { liveFlag && operatorOK == Self.confirmation }
 
     func authorizeLive() throws {
         guard liveFlag else { throw LeadgenError.liveNotAuthorized("no --live flag") }
-        guard operatorOK != nil else { throw LeadgenError.liveNotAuthorized("no operator OK recorded") }
+        guard let ok = operatorOK else { throw LeadgenError.liveNotAuthorized("no operator OK recorded") }
+        guard ok == Self.confirmation else {
+            throw LeadgenError.liveNotAuthorized("confirmation must be exactly \"\(Self.confirmation)\"")
+        }
     }
 }
 
@@ -285,10 +296,13 @@ struct LeadgenDraft: Sendable, Equatable {
     let subject: String
     let body: String
     let consent: LeadgenConsentBasis
+    /// Generated locally, stored as `draft_ref` in the leads row before the draft exists.
+    let messageID: String
 
     var rawMIME: String {
         [
             "From: Martin Lepage, PhD <\(from)>",
+            "Message-ID: \(messageID)",
             "To: \(to)",
             "Subject: \(subject)",
             "X-PHAROS-Consent-Basis: \(consent.basis)",
@@ -305,14 +319,31 @@ struct LeadgenDraft: Sendable, Equatable {
 enum LeadgenDraftComposer {
     static let signature = "Martin Lepage, PhD\nPHAROS AI\nml@pharos-ai.ca"
 
-    static let deniedStreets: [String] = []
-    static func checkAddress(_ postalAddress: String?) throws -> String { postalAddress ?? "" }
+    /// Street names that belong to other businesses and must never appear in a PHAROS footer.
+    /// Street name only: no full address is kept in code.
+    static let deniedStreets = ["saint-hubert"]
+
+    static func normalizedAddress(_ text: String) -> String {
+        var s = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "fr_CA")).lowercased()
+        for sep in [" ", "\u{2010}", "\u{2011}", "_"] { s = s.replacingOccurrences(of: "saint\(sep)", with: "saint-") }
+        for short in ["st-", "st.-", "st. ", "st "] { s = s.replacingOccurrences(of: " \(short)", with: " saint-") }
+        if s.hasPrefix("st-") || s.hasPrefix("st ") { s = "saint-" + s.dropFirst(3) }
+        return s
+    }
+
+    static func checkAddress(_ postalAddress: String?) throws -> String {
+        guard let address = postalAddress?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty else {
+            throw LeadgenError.missingPostalAddress
+        }
+        let norm = " " + normalizedAddress(address)
+        if let hit = deniedStreets.first(where: { norm.contains($0) }) { throw LeadgenError.postalAddressDenied(hit) }
+        return address
+    }
 
     static func compose(prospect: LeadgenProspect, fit: LeadgenFit, consent: LeadgenConsentBasis?, postalAddress: String?) throws -> LeadgenDraft {
-        let postalAddress = postalAddress ?? ""
         guard let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty,
               !consent.source.isEmpty, !consent.recordedAt.isEmpty else { throw LeadgenError.missingConsentBasis }
-        guard !postalAddress.trimmingCharacters(in: .whitespaces).isEmpty else { throw LeadgenError.missingPostalAddress }
+        let postalAddress = try checkAddress(postalAddress)
         let quote = fit.evidence.first?.quote ?? ""
         let subject = "Gouvernance de l'IA et Loi 25 pour \(prospect.organization)"
         let body = """
@@ -335,7 +366,9 @@ enum LeadgenDraftComposer {
         for text in [subject, body] where text.contains("\u{2014}") || text.contains("\u{2013}") {
             throw LeadgenError.dashNotAllowed
         }
-        return LeadgenDraft(from: LeadgenDraft.mailbox, to: prospect.publicContactEmail, subject: subject, body: body, consent: consent)
+        let host = LeadgenSourcePolicy.normalize(prospect.site.host ?? "prospect")
+        let messageID = "<leadgen-\(host.replacingOccurrences(of: ".", with: "-"))-\(consent.recordedAt.prefix(10))@pharos-ai.ca>"
+        return LeadgenDraft(from: LeadgenDraft.mailbox, to: prospect.publicContactEmail, subject: subject, body: body, consent: consent, messageID: messageID)
     }
 }
 
@@ -458,19 +491,25 @@ struct LeadgenD1Writer: Sendable {
 
     func insertOne(_ row: LeadgenLeadRow, into target: LeadgenProjectTarget) async throws -> LeadgenWriteReceipt {
         let db = target.databaseID
+        await log.write("step checksum-before \(db)")
         let (before, hadLeads) = try await snapshot(db)
         for (t, v) in before.sorted(by: { $0.key < $1.key }) { await log.write("\(db) before \(t) \(v)") }
+        await log.write("\(db) projects count before \(before["projects"] ?? "missing")")
         guard !hadLeads else { throw LeadgenError.leadsTableExists(db) }
+        await log.write("step apply-0001 \(db)")
         _ = try await run(db, LeadgenMigration.createLeads)
         let countBefore = Int(try await run(db, Self.countSQL).first?["n"] ?? "") ?? -1
         let cols = row.columns
         let sql = "INSERT INTO leads (\(cols.map(\.0).joined(separator: ", "))) VALUES (\(cols.map { _ in "?" }.joined(separator: ", ")))"
+        await log.write("step insert \(db)")
         _ = try await run(db, sql, cols.map(\.1))
+        await log.write("step read-back \(db)")
         let back = try await run(db, Self.readBackSQL, [row.id])
         guard back.count == 1, back[0]["status"] == LeadgenLeadRow.status, back[0]["organization"] == row.organization else {
             throw LeadgenError.readBackMismatch(row.id)
         }
         let countAfter = Int(try await run(db, Self.countSQL).first?["n"] ?? "") ?? -1
+        await log.write("step checksum-after \(db)")
         let after = try await snapshot(db).tables
         for (t, v) in after.sorted(by: { $0.key < $1.key }) { await log.write("\(db) after \(t) \(v)") }
         await log.write("\(db) projects before \(before["projects"] ?? "missing") after \(after["projects"] ?? "missing")")
@@ -501,6 +540,9 @@ struct LeadgenSliceRunner: Sendable {
     let log: LeadgenRunLog
     let now: @Sendable () -> String
 
+    /// Live order (SPEC runbook): schema check of both DBs (stop if `leads` exists), then per DB
+    /// checksum and counts before, apply 0001, INSERT one row, read back, checksum and counts after,
+    /// then the one Gmail create-draft on ml@pharos-ai.ca. Every step is written to `log`.
     func run(candidates: [LeadgenProspect], paths: [String], consent: LeadgenConsentBasis?, postalAddress: String?) async throws -> LeadgenRunReport {
         if config.liveFlag { try config.authorizeLive() }
         let prospect = try LeadgenProspectPicker.pickOne(candidates)
@@ -513,7 +555,6 @@ struct LeadgenSliceRunner: Sendable {
             return LeadgenRunReport(live: false, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: nil, receipts: [])
         }
         guard draft.from == LeadgenDraft.mailbox else { throw LeadgenError.wrongMailbox(draft.from) }
-        let draftID = try await mailbox.createDraft(account: LeadgenDraft.mailbox, rawMIME: draft.rawMIME)
         let host = LeadgenSourcePolicy.normalize(prospect.site.host ?? "")
         let stamp = now()
         let row = LeadgenLeadRow(
@@ -522,18 +563,27 @@ struct LeadgenSliceRunner: Sendable {
             site: prospect.site.absoluteString,
             fitReason: fit.reason,
             fitEvidence: fit.evidence.map { "\($0.url) | \($0.quote)" }.joined(separator: "\n"),
-            draftRef: draftID,
+            draftRef: draft.messageID,
             consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
             createdAt: stamp
         )
         let writer = LeadgenD1Writer(port: d1, log: log)
-        for target in [LeadgenProjectTarget.meCom, .pharos] {
-            if try await writer.snapshot(target.databaseID).hasLeads { throw LeadgenError.leadsTableExists(target.databaseID) }
+        let targets = [LeadgenProjectTarget.meCom, .pharos]
+        for target in targets {
+            await log.write("step schema-check \(target.databaseID)")
+            if try await writer.snapshot(target.databaseID).hasLeads {
+                await log.write("STOP leads table already exists in \(target.databaseID)")
+                throw LeadgenError.leadsTableExists(target.databaseID)
+            }
         }
         var receipts: [LeadgenWriteReceipt] = []
-        for target in [LeadgenProjectTarget.meCom, .pharos] {
+        for target in targets {
             receipts.append(try await writer.insertOne(row, into: target))
         }
+        await log.write("step gmail-create-draft \(LeadgenDraft.mailbox)")
+        let draftID = try await mailbox.createDraft(account: LeadgenDraft.mailbox, rawMIME: draft.rawMIME)
+        await log.write("draft created id=\(draftID) message-id=\(draft.messageID)")
+        await log.write("done rows=\(receipts.count)")
         return LeadgenRunReport(live: true, fetchedURLs: fetched, prospect: prospect, fit: fit, draft: draft, draftID: draftID, receipts: receipts)
     }
 }

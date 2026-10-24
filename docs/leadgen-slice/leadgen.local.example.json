@@ -1,0 +1,21 @@
+{
+  "postalAddress": "PLACEHOLDER street, city, province, postal code",
+  "prospect": {
+    "organization": "PLACEHOLDER clinic name",
+    "site": "https://www.example-clinic.ca/",
+    "publicContactEmail": "info@example-clinic.ca"
+  },
+  "paths": ["/", "/services", "/contact"],
+  "consent": {
+    "basis": "CASL s.10(9)(b) conspicuous publication; Loi 25 public business contact",
+    "source": "https://www.example-clinic.ca/contact",
+    "recordedAt": "2026-01-01T00:00:00Z"
+  },
+  "credentials": {
+    "meComAccountID": "PLACEHOLDER Cloudflare account id",
+    "pharosAccountID": "PLACEHOLDER Cloudflare account id",
+    "meComToken": { "env": "LEADGEN_CF_TOKEN_MECOM", "keychainService": "controlward.leadgen.cf.mecom" },
+    "pharosToken": { "env": "LEADGEN_CF_TOKEN_PHAROS", "keychainService": "controlward.leadgen.cf.pharos" },
+    "gmailToken": { "env": "LEADGEN_GMAIL_TOKEN", "keychainService": "controlward.leadgen.gmail" }
+  }
+}

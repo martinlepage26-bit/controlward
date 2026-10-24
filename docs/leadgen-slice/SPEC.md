@@ -52,8 +52,22 @@ Neither database has a `leads` table or any table whose name contains "candidate
 ## Open questions
 
 - Q1 resolved, see decision (b).
-- Q2: no live adapter or UI entry point is wired into the app in this slice. The one live run needs a small runner using env or Keychain credentials, added only after Martin's OK.
-- Q3: the CASL footer needs PHAROS AI's real mailing address, which the live runner takes from config. It is not in code.
+- Q2 resolved: the live runner is wired as the CLI subcommand `FollowUpOSNative leadgen` (`LeadgenLive.swift`, `LeadgenEntry.swift`). It is dry-run by default: it prints the plan and makes no fetch, Gmail, or D1 call. `--live` also needs `--confirm "leads in e1e9fa25 and leads in 959e5bdb"`, and the run refuses anything else. Live order: read-only schema check of both DBs (STOP if `leads` exists); then, per DB, checksum (rows plus `sqlite_master.sql`) and `projects` count before, apply 0001, INSERT one row, read back, checksum and counts after; then the one Gmail create-draft on ml@pharos-ai.ca; every step goes to `~/Library/Logs/ControlWard/leadgen/leadgen-run-<time>.log`. The row's `draft_ref` is the draft's locally generated Message-ID, so no UPDATE is needed after the draft exists. Credentials are resolved at run time from env or Keychain references named in the local config, never from code. There is no UI button in this slice.
+- Q3 resolved: the CASL footer address comes only from the uncommitted local config `~/Library/Application Support/ControlWard/leadgen.local.json` (`leadgen.local.json` is in `.gitignore`; `docs/leadgen-slice/leadgen.local.example.json` is the committed template with placeholders). The draft refuses to build without an address. A denylist in code holds only one street name, Saint-Hubert (that address belongs to another business), and it matches every spelling.
+
+## Tests added for Q2 and Q3 (failing first)
+
+LG1 a vague `--confirm` is not live; LG7 CLI dry-run prints the plan and touches nothing; LG7 `--live` without the exact confirmation refuses before any adapter is built; LG7 live step order, with the Gmail draft last; LG7 run log file under the log directory; LG8 the draft refuses to build without the address config; LG8 a Saint-Hubert footer address is refused; LG8 the repo holds only the placeholder example and ignores the local config.
+
+## Runbook: the one live run (only after Martin's OK names the `leads` table in both DBs)
+
+1. On the Mac, at the PR head: `swift build --package-path native-crm`.
+2. Edit `~/Library/Application Support/ControlWard/leadgen.local.json` (mode 600): keep `postalAddress`, then add the one `prospect` (organization, own-domain site, published contact email), `paths`, `consent` (basis, the URL where the address is published, time recorded), and `credentials` (the two Cloudflare account IDs plus env or Keychain reference names for the two D1 tokens and the Gmail compose token). Store the secrets in Keychain (`security add-generic-password -s <service> -a leadgen -w`), not in the file.
+3. Dry-run: `native-crm/.build/debug/FollowUpOSNative leadgen`. Check that the prospect, pages, address `set`, and consent `set` lines are right.
+4. Live, once: `native-crm/.build/debug/FollowUpOSNative leadgen --live --confirm "leads in e1e9fa25 and leads in 959e5bdb"`.
+5. Check the printed result: `leads 0 -> 1` and `existing tables unchanged` for each DB, plus the draft ID. Open the run log path it prints: the before/after checksums of every table and the `projects` counts must match.
+6. If it prints `stopped before any insert: a leads table already exists`, or any other stop, do nothing more and report the log.
+7. Martin reads the draft in ml@pharos-ai.ca and sends or discards it himself. The runner never sends.
 
 ## Hard limits
 
