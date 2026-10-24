@@ -497,6 +497,24 @@ enum LeadgenSliceTests {
         }
     }
 
+    static func emptyFetchedAtRefuses() async throws {
+        LeadgenFixture.allowEmptySuppression()
+        for clock in ["", "   "] {
+            let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1()
+            var refused = false
+            do {
+                _ = try await LeadgenSliceRunner(config: LeadgenFixture.liveConfig, fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), now: { clock }, dns: LeadgenMappedDNS()).run(
+                    candidates: [LeadgenFixture.prospect], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal)
+            } catch LeadgenError.missingFetchedAt {
+                refused = true
+            } catch {
+                throw PortableCheckFailure(description: "empty fetchedAt failed as \(error)")
+            }
+            let calls = await mailbox.calls, inserts = await d1.inserts()
+            try check(refused && calls.isEmpty && inserts.isEmpty, "fetch time \(clock.debugDescription) still drafted: calls \(calls) inserts \(inserts.count)")
+        }
+    }
+
     static func suppressionFailsClosed() async throws {
         func refuse(path: String?) async throws {
             if let path { setenv("LEADGEN_SUPPRESSION", path, 1) } else { unsetenv("LEADGEN_SUPPRESSION") }
@@ -1342,6 +1360,7 @@ enum LeadgenSliceTests {
         cases.append(("A verify id that does not match the saved token id is refused", {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "someone-else", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
         }))
+        cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
         #if os(macOS)

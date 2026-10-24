@@ -38,6 +38,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case suppressed(String)
     case suppressionUnavailable(String)
     case tokenProof(String)
+    case missingFetchedAt
 
     var description: String {
         switch self {
@@ -72,6 +73,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .suppressed(let why): "suppressed: \(why)"
         case .suppressionUnavailable(let why): "do-not-contact list unavailable: \(why)"
         case .tokenProof(let why): "token proof refused: \(why)"
+        case .missingFetchedAt: "draft refused: evidence has no fetch time"
         }
     }
 }
