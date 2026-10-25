@@ -680,6 +680,70 @@ enum LeadgenSliceTests {
         try check(!body.contains("\u{2014}") && !body.contains("\u{2013}"), "dash in draft")
     }
 
+    /// The row keeps the clinic, the dentist, the role address, and the two source records. A rejection is logged and not deleted here.
+    static func minimizedLead() async throws {
+        final class Clock: @unchecked Sendable {
+            var n = 0
+            func next() -> String { n += 1; return String(format: "2026-10-24T21:%02d:00Z", n) }
+        }
+        let html = try LeadgenFixture.dpqHTML()
+        let contact = """
+        <html><body><main>
+        <p>marie.tremblay@cliniqueexemple.ca</p>
+        <p>info@cliniqueexemple.ca</p>
+        </main></body></html>
+        """
+        func prepared() -> LeadgenFakeFetcher {
+            let fetcher = LeadgenFixture.fetcher()
+            fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
+            fetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: contact)
+            return fetcher
+        }
+        LeadgenFixture.allowEmptySuppression()
+        let d1 = LeadgenFakeD1()
+        let clock = Clock()
+        _ = try await LeadgenSliceRunner(
+            config: LeadgenFixture.liveConfig, fetcher: prepared(), mailbox: LeadgenRecordingMailbox(), d1: d1,
+            log: LeadgenMemoryLog(), now: { clock.next() }, dns: LeadgenMappedDNS()
+        ).run(candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+        let row = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads").first ?? [:]
+        let stored = row.values.joined(separator: "\n")
+        let directoryURL = LeadgenFixture.directory.absoluteString
+        try check(stored.contains("Marie Tremblay"), "dentist name was not stored: \(stored)")
+        try check(stored.contains("Clinique Exemple"), "clinic name missing: \(stored)")
+        try check(stored.contains("info@cliniqueexemple.ca"), "role email missing: \(stored)")
+        try check(stored.contains("\(directoryURL) | 2026-10-24T21:01:00Z"), "DPQ source record missing: \(stored)")
+        try check(stored.contains("https://www.cliniqueexemple.ca/contact | 2026-10-24T21:04:00Z"), "clinic source record missing: \(stored)")
+        try check(!stored.contains("marie.tremblay@"), "a personal mailbox was stored: \(stored)")
+        try check(!stored.localizedCaseInsensitiveContains("rue fictive"), "a street address was stored: \(stored)")
+        try check(!stored.contains("google.com/maps") && !stored.contains("maps.google"), "a maps link was stored: \(stored)")
+        let kept = await d1.statements
+        try check(kept.allSatisfy { !$0.sql.uppercased().contains("DELETE") }, "a purge was sent: \(kept.map(\.sql))")
+
+        let refusedContact = "<html><body><main><p>info@cliniqueexemple.ca</p><p>Aucune sollicitation.</p></main></body></html>"
+        let refusedFetcher = LeadgenFixture.fetcher()
+        refusedFetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
+        refusedFetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: refusedContact)
+        let d2 = LeadgenFakeD1(), log = LeadgenMemoryLog()
+        do {
+            _ = try await LeadgenSliceRunner(
+                config: LeadgenFixture.liveConfig, fetcher: refusedFetcher, mailbox: LeadgenRecordingMailbox(), d1: d2,
+                log: log, now: { "2026-10-24T21:00:00Z" }, dns: LeadgenMappedDNS()
+            ).run(candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+            throw PortableCheckFailure(description: "a no-solicitation entry was drafted")
+        } catch is PortableCheckFailure {
+            throw PortableCheckFailure(description: "a no-solicitation entry was drafted")
+        } catch {}
+        let lines = await log.lines, inserts = await d2.inserts(), refusedSQL = await d2.statements
+        try check(lines.contains { $0.contains("suppressed:") }, "rejection was not logged as suppressed: \(lines)")
+        try check(inserts.isEmpty, "a rejected lead was stored: \(inserts.map(\.db))")
+        try check(refusedSQL.allSatisfy { !$0.sql.uppercased().contains("DELETE") && !$0.sql.uppercased().contains("UPDATE") }, "rejection changed a row: \(refusedSQL.map(\.sql))")
+        let root = LeadgenFixture.repoRoot
+        let spec = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/SPEC.md"), encoding: .utf8)
+        let source = try String(contentsOf: root.appendingPathComponent("native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift"), encoding: .utf8)
+        try check(spec.contains("TODO: Martin purges") || source.contains("TODO: Martin purges"), "purging the lead is not left as a TODO for Martin")
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1475,6 +1539,7 @@ enum LeadgenSliceTests {
         cases.append(("Email is a published role address on the clinic site; no-solicitation or no address refuses the entry", { try await LeadgenSliceTests.roleEmailOnly() }))
         cases.append(("The lead row stores the DPQ entry URL and the clinic page URL, each with its fetch time", { try await LeadgenSliceTests.directoryEvidenceRow() }))
         cases.append(("The draft is about the clinic's AI governance and Law 25 obligations, not a person", { try LeadgenSliceTests.clinicDraft() }))
+        cases.append(("A directory lead keeps only the clinic, the dentist, the role email, and the two source records; rejection is logged, not purged", { try await LeadgenSliceTests.minimizedLead() }))
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
