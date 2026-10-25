@@ -268,6 +268,15 @@ enum LeadgenFixture {
             .appendingPathComponent("docs/leadgen-slice/migrations")
     }
     /// Fictional DPQ fiche page. No live fetch, and no real member is in this file.
+    /// Pages for the fake domain used by the trimmed DPQ fixture.
+    static func withDPQSite(_ fetcher: LeadgenFakeFetcher, contact: String = "<html><body><main><p>Écrivez à info@example-clinic-1.test pour nous joindre.</p></main></body></html>") -> LeadgenFakeFetcher {
+        let origin = "https://example-clinic-1.test"
+        fetcher.set("\(origin)/robots.txt", status: 200, body: "User-agent: *\nDisallow: /admin\n")
+        fetcher.set("\(origin)/", status: 200, body: home)
+        fetcher.set("\(origin)/services", status: 200, body: "<html><body><main><p>Médecine familiale et pédiatrie.</p></main></body></html>")
+        fetcher.set("\(origin)/contact", status: 200, body: contact)
+        return fetcher
+    }
     static func dpqHTML() throws -> String {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/dpq-repertoire.html")
         return try String(contentsOf: url, encoding: .utf8)
@@ -583,19 +592,19 @@ enum LeadgenSliceTests {
         let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
         let clinics = LeadgenDiscovery.clinics(in: html, directory: directory)
         try check(clinics.count == 1, "DPQ fiches became \(clinics.count) clinics: \(clinics.map(\.name))")
-        try check(clinics.first?.name == "Clinique Exemple", "clinic name came from the link text, not the fiche: \(clinics.first?.name ?? "none")")
-        try check(LeadgenSourcePolicy.normalize(clinics.first?.site.host ?? "") == "cliniqueexemple.ca", "own site \(String(describing: clinics.first?.site))")
+        try check(clinics.first?.name == "Example Clinic 1", "clinic name came from the link text, not the fiche: \(clinics.first?.name ?? "none")")
+        try check(LeadgenSourcePolicy.normalize(clinics.first?.site.host ?? "") == "example-clinic-1.test", "own site \(String(describing: clinics.first?.site))")
         try check(clinics.allSatisfy { site in
             let host = (site.site.host ?? "").lowercased()
             return !host.contains("google") && !host.contains("pagesjaunes") && !host.contains("maps")
         }, "a maps or aggregator link was kept: \(clinics)")
-        let fetcher = LeadgenFixture.fetcher()
+        let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
         fetcher.set(directory.absoluteString, status: 200, body: html)
         fetcher.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: html)
         let found = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
         let reflected = String(reflecting: found.prospect)
-        try check(reflected.contains("Marie Tremblay"), "dentist name was not kept: \(reflected)")
-        try check(!reflected.contains("Paul Martin") && !reflected.contains("Clinique Sans Site") && !reflected.contains("Alex Aggregateur"), "a maps-only or aggregator entry was kept: \(reflected)")
+        try check(reflected.contains("Alex Exemple"), "dentist name was not kept: \(reflected)")
+        try check(!reflected.contains("Noel Exemple") && !reflected.contains("Camille Exemple") && !reflected.contains("Example Clinic Maps"), "a maps-only or duplicate entry was kept: \(reflected)")
         try check(!fetcher.requested.contains { $0.contains("google") || $0.contains("maps") || $0.contains("pagesjaunes") }, "a maps or aggregator URL was fetched: \(fetcher.requested)")
     }
 
@@ -663,7 +672,7 @@ enum LeadgenSliceTests {
         }
         let clock = Clock()
         let html = try LeadgenFixture.dpqHTML()
-        let fetcher = LeadgenFixture.fetcher()
+        let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
         fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
         LeadgenFixture.allowEmptySuppression()
         let d1 = LeadgenFakeD1()
@@ -677,10 +686,10 @@ enum LeadgenSliceTests {
         let directoryURL = LeadgenFixture.directory.absoluteString
         try check(evidence.contains(directoryURL), "DPQ entry URL missing from the lead row: \(evidence)")
         try check(evidence.contains("\(directoryURL) | 2026-10-24T21:01:00Z"), "DPQ fetch time is not the clock time of that fetch: \(evidence)")
-        try check(evidence.contains("https://www.cliniqueexemple.ca/contact | 2026-10-24T21:04:00Z"), "clinic page URL or its fetch time is missing: \(evidence)")
+        try check(evidence.contains("https://example-clinic-1.test/contact | 2026-10-24T21:04:00Z"), "clinic page URL or its fetch time is missing: \(evidence)")
         try check(!evidence.contains(LeadgenFixture.consent.recordedAt), "the config time was stored in place of a fetch time: \(evidence)")
         try check(report.fit.evidence.allSatisfy { !$0.url.contains("dpq.quebec") }, "the fit quote used the directory: \(report.fit.evidence)")
-        try check(report.draft.consent.source == "https://www.cliniqueexemple.ca/contact", "consent source \(report.draft.consent.source)")
+        try check(report.draft.consent.source == "https://example-clinic-1.test/contact", "consent source \(report.draft.consent.source)")
     }
 
     /// The draft talks about the clinic's obligations, not about a person.
@@ -708,14 +717,13 @@ enum LeadgenSliceTests {
         let html = try LeadgenFixture.dpqHTML()
         let contact = """
         <html><body><main>
-        <p>marie.tremblay@cliniqueexemple.ca</p>
-        <p>info@cliniqueexemple.ca</p>
+        <p>camille.exemple@example-clinic-1.test</p>
+        <p>info@example-clinic-1.test</p>
         </main></body></html>
         """
         func prepared() -> LeadgenFakeFetcher {
-            let fetcher = LeadgenFixture.fetcher()
+            let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher(), contact: contact)
             fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
-            fetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: contact)
             return fetcher
         }
         LeadgenFixture.allowEmptySuppression()
@@ -728,21 +736,21 @@ enum LeadgenSliceTests {
         let row = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads").first ?? [:]
         let stored = row.values.joined(separator: "\n")
         let directoryURL = LeadgenFixture.directory.absoluteString
-        try check(stored.contains("Marie Tremblay"), "dentist name was not stored: \(stored)")
-        try check(stored.contains("Clinique Exemple"), "clinic name missing: \(stored)")
-        try check(stored.contains("info@cliniqueexemple.ca"), "role email missing: \(stored)")
+        try check(stored.contains("Alex Exemple"), "dentist name was not stored: \(stored)")
+        try check(stored.contains("Example Clinic 1"), "clinic name missing: \(stored)")
+        try check(!stored.contains("Camille Exemple") && !stored.contains("Noel Exemple"), "a duplicate or maps-only name was stored: \(stored)")
+        try check(stored.contains("info@example-clinic-1.test"), "role email missing: \(stored)")
         try check(stored.contains("\(directoryURL) | 2026-10-24T21:01:00Z"), "DPQ source record missing: \(stored)")
-        try check(stored.contains("https://www.cliniqueexemple.ca/contact | 2026-10-24T21:04:00Z"), "clinic source record missing: \(stored)")
-        try check(!stored.contains("marie.tremblay@"), "a personal mailbox was stored: \(stored)")
-        try check(!stored.localizedCaseInsensitiveContains("rue fictive"), "a street address was stored: \(stored)")
+        try check(stored.contains("https://example-clinic-1.test/contact | 2026-10-24T21:04:00Z"), "clinic source record missing: \(stored)")
+        try check(!stored.contains("camille.exemple@"), "a personal mailbox was stored: \(stored)")
+        try check(!stored.localizedCaseInsensitiveContains("rue exemple"), "a street address was stored: \(stored)")
         try check(!stored.contains("google.com/maps") && !stored.contains("maps.google"), "a maps link was stored: \(stored)")
         let kept = await d1.statements
         try check(kept.allSatisfy { !$0.sql.uppercased().contains("DELETE") }, "a purge was sent: \(kept.map(\.sql))")
 
-        let refusedContact = "<html><body><main><p>info@cliniqueexemple.ca</p><p>Aucune sollicitation.</p></main></body></html>"
-        let refusedFetcher = LeadgenFixture.fetcher()
+        let refusedContact = "<html><body><main><p>info@example-clinic-1.test</p><p>Aucune sollicitation.</p></main></body></html>"
+        let refusedFetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher(), contact: refusedContact)
         refusedFetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
-        refusedFetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: refusedContact)
         let d2 = LeadgenFakeD1(), log = LeadgenMemoryLog()
         do {
             _ = try await LeadgenSliceRunner(
@@ -781,7 +789,7 @@ enum LeadgenSliceTests {
         _ = try await http.get(URL(string: "https://dpq.quebec/robots.txt")!)
         try check(box.agent == "PHAROS AI ControlWard (+https://pharos-ai.ca; ml@pharos-ai.ca)", "User-Agent \(box.agent ?? "missing")")
         let html = try LeadgenFixture.dpqHTML()
-        let fetcher = LeadgenFixture.fetcher()
+        let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
         fetcher.set(directory.absoluteString, status: 200, body: html)
         fetcher.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: html)
         _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
@@ -800,7 +808,7 @@ enum LeadgenSliceTests {
         try await expectError(.notExactlyOneProspect(2)) {
             _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: two, dns: LeadgenMappedDNS())
         }
-        try check(!two.requested.contains { $0.contains("autreclinique") || $0.contains("cliniqueexemple") }, "more than one prospect was fetched: \(two.requested)")
+        try check(!two.requested.contains { $0.contains("autreclinique") || $0.contains("example-clinic-1.test") }, "more than one prospect was fetched: \(two.requested)")
     }
 
     static func run() async -> Bool {
