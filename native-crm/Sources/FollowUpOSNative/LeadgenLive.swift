@@ -109,13 +109,33 @@ struct LeadgenSystemKeychain: LeadgenSecretSource {
     }
 }
 
+/// Live token, D1, and Gmail calls. Request and resource deadlines are both 20 seconds, so a quiet socket cannot outlive a run.
+enum LeadgenLiveHTTP {
+    static let requestTimeout: TimeInterval = 20
+    static let resourceTimeout: TimeInterval = 20
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration)
+    }()
+
+    static func request(_ url: URL, method: String) -> URLRequest {
+        var req = URLRequest(url: url, timeoutInterval: requestTimeout)
+        req.httpMethod = method
+        return req
+    }
+}
+
 struct LeadgenCloudflareTokenVerifier: LeadgenTokenVerifying {
     func verify(bearer: String) async throws -> LeadgenVerifiedToken {
         guard !bearer.isEmpty else { throw LeadgenError.tokenProof("unverifiable") }
-        var req = URLRequest(url: URL(string: "https://api.cloudflare.com/client/v4/user/tokens/verify")!)
-        req.httpMethod = "GET"
+        var req = LeadgenLiveHTTP.request(URL(string: "https://api.cloudflare.com/client/v4/user/tokens/verify")!, method: "GET")
         req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await LeadgenLiveHTTP.session.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               obj["success"] as? Bool == true,
@@ -261,12 +281,11 @@ struct LeadgenCloudflareD1: LeadgenD1Port {
     func query(database: String, sql: String, params: [String]) async throws -> [[String: String]] {
         guard let b = bindings[database] else { throw LeadgenError.credentialMissing("D1 binding for \(database)") }
         let token = Self.credential(sql: sql, read: b.readToken, write: b.token)
-        var req = URLRequest(url: URL(string: "https://api.cloudflare.com/client/v4/accounts/\(b.accountID)/d1/database/\(database)/query")!)
-        req.httpMethod = "POST"
+        var req = LeadgenLiveHTTP.request(URL(string: "https://api.cloudflare.com/client/v4/accounts/\(b.accountID)/d1/database/\(database)/query")!, method: "POST")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["sql": sql, "params": params])
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await LeadgenLiveHTTP.session.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               obj["success"] as? Bool == true,
@@ -286,12 +305,11 @@ struct LeadgenGmailDrafts: LeadgenDraftMailbox {
         guard account == LeadgenDraft.mailbox else { throw LeadgenError.wrongMailbox(account) }
         let raw = Data(rawMIME.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-        var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/drafts")!)
-        req.httpMethod = "POST"
+        var req = LeadgenLiveHTTP.request(URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/drafts")!, method: "POST")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["message": ["raw": raw]])
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await LeadgenLiveHTTP.session.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any], let id = obj["id"] as? String else {
             throw LeadgenError.fetchFailed("gmail drafts.create: \(String(decoding: data.prefix(300), as: UTF8.self))")

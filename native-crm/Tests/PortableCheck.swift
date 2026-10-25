@@ -2,7 +2,7 @@ import Foundation
 
 /// Failure type and runner shared by the portable test files.
 /// These files compile without SwiftUI or AppKit, so they run on Linux as well as on the Mac.
-struct PortableCheckFailure: Error, CustomStringConvertible {
+struct PortableCheckFailure: Error, CustomStringConvertible, Sendable {
     var description: String
 }
 

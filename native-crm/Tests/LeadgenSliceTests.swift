@@ -15,11 +15,34 @@ import Security
 // Lead-gen slice 1 tests (docs/leadgen-slice/SPEC.md). Fakes only: no network, no Gmail, no D1,
 // except the macOS pinned-TLS case, which speaks HTTPS to a local server.
 
+/// A test double must return, or fail, inside this bound. An unconfigured response cannot hold the suite open.
+enum LeadgenTestClock {
+    static let bound: Double = 20
+
+    static func within<T: Sendable>(_ seconds: Double = bound, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+                throw PortableCheckFailure(description: "test double timed out")
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else {
+                throw PortableCheckFailure(description: "test double timed out")
+            }
+            return first
+        }
+    }
+}
+
 private struct LeadgenFixedVerifier: LeadgenTokenVerifying {
     var byBearer: [String: LeadgenVerifiedToken]
     func verify(bearer: String) async throws -> LeadgenVerifiedToken {
-        guard let found = byBearer[bearer] else { throw LeadgenError.tokenProof("unverifiable") }
-        return found
+        let found = byBearer[bearer]
+        return try await LeadgenTestClock.within {
+            guard let found else { throw LeadgenError.tokenProof("unverifiable") }
+            return found
+        }
     }
 }
 
@@ -53,10 +76,13 @@ final class LeadgenFakeFetcher: LeadgenFetching, @unchecked Sendable {
     }
 
     func get(_ url: URL) async throws -> (status: Int, headers: [String: String], body: String) {
-        lock.withLock {
-            requestedURLs.append(url.absoluteString)
-            guard let hit = pages[url.absoluteString] else { return (404, [:], "") }
-            return (hit.0, hit.1, hit.2)
+        let url = url
+        return try await LeadgenTestClock.within {
+            self.lock.withLock {
+                self.requestedURLs.append(url.absoluteString)
+                guard let hit = self.pages[url.absoluteString] else { return (404, [:], "") }
+                return (hit.0, hit.1, hit.2)
+            }
         }
     }
 }
@@ -79,6 +105,10 @@ actor LeadgenRecordingMailbox: LeadgenDraftMailbox {
     private(set) var raws: [String] = []
     private(set) var sends = 0, reads = 0, deletes = 0
     func createDraft(account: String, rawMIME: String) async throws -> String {
+        try await LeadgenTestClock.within { await self.record(account: account, rawMIME: rawMIME) }
+    }
+
+    private func record(account: String, rawMIME: String) -> String {
         calls.append("createDraft"); accounts.append(account); raws.append(rawMIME)
         return "r-draft-1"
     }
@@ -98,14 +128,22 @@ actor LeadgenOrderMailbox: LeadgenDraftMailbox {
     private(set) var d1StatementsAtDraft: [Int] = []
     init(d1: LeadgenFakeD1) { self.d1 = d1 }
     func createDraft(account: String, rawMIME: String) async throws -> String {
-        d1StatementsAtDraft.append(await d1.statementCount())
+        let d1 = self.d1
+        return try await LeadgenTestClock.within {
+            let count = await d1.statementCount()
+            return await self.note(count)
+        }
+    }
+
+    private func note(_ count: Int) -> String {
+        d1StatementsAtDraft.append(count)
         return "r-draft-1"
     }
 }
 
 actor LeadgenRefusingMailbox: LeadgenDraftMailbox {
     func createDraft(account: String, rawMIME: String) async throws -> String {
-        throw LeadgenError.fetchFailed("draft")
+        try await LeadgenTestClock.within { throw LeadgenError.fetchFailed("draft") }
     }
 }
 
@@ -154,6 +192,10 @@ actor LeadgenFakeD1: LeadgenD1Port {
     func rows(_ db: String, _ table: String) -> [[String: String]] { tables[db]?[table] ?? [] }
 
     func query(database db: String, sql: String, params: [String]) async throws -> [[String: String]] {
+        try await LeadgenTestClock.within { try await self.answer(database: db, sql: sql, params: params) }
+    }
+
+    private func answer(database db: String, sql: String, params: [String]) throws -> [[String: String]] {
         statements.append((db, sql))
         if sql == LeadgenD1Writer.tablesSQL {
             return (schemas[db] ?? [:]).keys.sorted().map { ["name": $0, "sql": schemas[db]?[$0] ?? ""] }
@@ -555,6 +597,22 @@ enum LeadgenSliceTests {
             }
             let calls = await mailbox.calls, inserts = await d1.inserts()
             try check(refused && calls.isEmpty && inserts.isEmpty, "fetch time \(clock.debugDescription) still drafted: calls \(calls) inserts \(inserts.count)")
+        }
+    }
+
+    /// A double with no response must fail the case. It must not hold the suite past the bound.
+    static func unconfiguredDoubleTimesOut() async throws {
+        try check(LeadgenLiveHTTP.requestTimeout == 20 && LeadgenLiveHTTP.resourceTimeout == 20, "live token, D1, or Gmail can outlive the run")
+        let started = ContinuousClock.now
+        do {
+            _ = try await LeadgenTestClock.within(1) {
+                try await Task.sleep(nanoseconds: 60_000_000_000)
+                return "late"
+            }
+            throw PortableCheckFailure(description: "a double with no response returned")
+        } catch let error as PortableCheckFailure where error.description == "test double timed out" {
+            let elapsed = ContinuousClock.now - started
+            try check(elapsed < .seconds(15), "the suite waited on the double: \(elapsed)")
         }
     }
 
@@ -1822,6 +1880,7 @@ enum LeadgenSliceTests {
         cases.append(("A site that publishes only a personal address on its own domain is refused", { try await LeadgenSliceTests.personalAddressRefused() }))
         cases.append(("info.drtremblay@, info.jtremblay@, clinique-jean@, and contactjean@ are refused", { try await LeadgenSliceTests.longerLocalPartRefused() }))
         cases.append(("office@, hello@, appointments@, clinic@, secretariat@, secretaire@, and bonjour@ are refused", { try await LeadgenSliceTests.extraRoleNamesRefused() }))
+        cases.append(("An unconfigured test double fails inside its bound", { try await LeadgenSliceTests.unconfiguredDoubleTimesOut() }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif
