@@ -599,6 +599,25 @@ enum LeadgenSliceTests {
         try check(!fetcher.requested.contains { $0.contains("google") || $0.contains("maps") || $0.contains("pagesjaunes") }, "a maps or aggregator URL was fetched: \(fetcher.requested)")
     }
 
+    /// The saved fixture is a trimmed copy of the real DPQ page, with the fetch time and the original sha256, and no real member data.
+    static func dpqRealFixture() throws {
+        let html = try LeadgenFixture.dpqHTML()
+        try check(html.contains("fetched: 2026-10-25T00:20:11Z"), "fixture header has no fetch time of the real page")
+        try check(html.contains("sha256: 6d9b82dc0518d93a627cbd7476e376448b7209363e83c351d8b5999fad5880ce"), "fixture header has no sha256 of the original page")
+        try check(html.contains("class=\"dpqr-grille\"") && html.contains("dpqr-fiche__corps") && html.contains("dpqr-bouton"), "fixture is not the DPQ fiche markup")
+        let ownHrefs = html.components(separatedBy: "example-clinic-1.test").count - 1
+        try check(ownHrefs >= 2, "fixture does not contain two entries on one domain: \(ownHrefs)")
+        let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
+        let clinics = LeadgenDiscovery.clinics(in: html, directory: directory)
+        try check(clinics.count == 1, "shared-domain fiches were not one prospect: \(clinics.map(\.name))")
+        try check(clinics.first?.name == "Example Clinic 1", "clinic \(clinics.first?.name ?? "none")")
+        try check(LeadgenSourcePolicy.normalize(clinics.first?.site.host ?? "") == "example-clinic-1.test", "own site \(String(describing: clinics.first?.site))")
+        try check(html.contains("google.com/maps"), "fixture has no Maps entry")
+        try check(clinics.allSatisfy { !($0.site.host ?? "").contains("google") }, "a Maps entry was kept")
+        let reflected = clinics.map { "\($0.dentist) \($0.name)" }.joined(separator: " ")
+        try check(reflected.contains("Alex Exemple") && !reflected.contains("Camille Exemple") && !reflected.contains("Noel Exemple"), "dedup kept the wrong fiche: \(reflected)")
+    }
+
     /// The address is one published on the clinic's own site. A role mailbox wins. No-solicitation wording, or no address, refuses the entry.
     static func roleEmailOnly() async throws {
         func discover(contact: String) async throws -> LeadgenDiscoveryResult {
@@ -1576,6 +1595,7 @@ enum LeadgenSliceTests {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "someone-else", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
         }))
         cases.append(("DPQ discovery keeps the clinic name, the dentist name, and the clinic's own site, and never follows a maps link", { try await LeadgenSliceTests.dpqOwnSiteOnly() }))
+        cases.append(("The DPQ fixture is a trimmed real page with a fetch time, the original sha256, and one deduped domain", { try LeadgenSliceTests.dpqRealFixture() }))
         cases.append(("Email is a published role address on the clinic site; no-solicitation or no address refuses the entry", { try await LeadgenSliceTests.roleEmailOnly() }))
         cases.append(("The lead row stores the DPQ entry URL and the clinic page URL, each with its fetch time", { try await LeadgenSliceTests.directoryEvidenceRow() }))
         cases.append(("The draft is about the clinic's AI governance and Law 25 obligations, not a person", { try LeadgenSliceTests.clinicDraft() }))
