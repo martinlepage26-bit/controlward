@@ -231,7 +231,7 @@ struct LeadgenHTTPFetcher: LeadgenFetching {
         }
         var req = URLRequest(url: plan.url)
         req.setValue(plan.hostHeader, forHTTPHeaderField: "Host")
-        req.setValue("ControlWard-leadgen/1 (+mailto:ml@pharos-ai.ca)", forHTTPHeaderField: "User-Agent")
+        req.setValue("PHAROS AI ControlWard (+https://pharos-ai.ca; ml@pharos-ai.ca)", forHTTPHeaderField: "User-Agent")
         if let transport { return try await transport(req) }
         #if os(macOS)
         let (status, headers, data) = try await LeadgenPinnedHTTPS.exchange(request: req, trustAnchorDERs: testTrustAnchorDERs)

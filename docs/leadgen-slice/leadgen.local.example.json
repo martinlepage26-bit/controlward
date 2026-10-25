@@ -1,6 +1,6 @@
 {
-  "directoryURL": "",
-  "directoryTODO": "A human still has to choose one public HTML directory page. The installations file was not approved as a source because it has no website or email column.",
+  "directoryURL": "https://dpq.quebec/repertoire-des-membres/",
+  "directoryTODO": "Argus chose this one static HTML page. robots.txt allows it. Pending Water's spec confirmation. A live run still refuses unless exactly one fiche links the clinic's own website. The installations file was not approved as a source because it has no website or email column.",
   "postalAddress": "PLACEHOLDER street, city, province, postal code",
   "prospect": {
     "organization": "PLACEHOLDER clinic name",

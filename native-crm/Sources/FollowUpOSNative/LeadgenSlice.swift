@@ -964,6 +964,7 @@ enum LeadgenDiscovery {
         guard let origin = origin(of: directory) else { throw LeadgenError.unsafeURL("directory has no host") }
         let directoryReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [directory.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
         var path = directory.path.isEmpty ? "/" : directory.path
+        if directory.absoluteString.hasSuffix("/"), path != "/", !path.hasSuffix("/") { path += "/" }
         if let query = directory.query, !query.isEmpty { path += "?\(query)" }
         let listed = try await directoryReader.read(site: origin, paths: [path])
         guard let page = listed.first(where: { $0.url.path == directory.path || directory.path.isEmpty || $0.url.absoluteString.hasPrefix(directory.absoluteString) || listed.count == 1 }) ?? listed.first else {
