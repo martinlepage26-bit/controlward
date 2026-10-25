@@ -1,7 +1,7 @@
 {
   "tokens": [
     {
-      "id": "PLACEHOLDER token id from verify, not a secret",
+      "id": "62c2378b0d4a7897d34406cee8a5beca",
       "env": "LEADGEN_CF_TOKEN_MECOM_READ",
       "permissions": [
         {
@@ -12,7 +12,7 @@
       ]
     },
     {
-      "id": "PLACEHOLDER token id from verify, not a secret",
+      "id": "eb5707869afdc0844b5810b314efc58c",
       "env": "LEADGEN_CF_TOKEN_PHAROS_READ",
       "permissions": [
         {

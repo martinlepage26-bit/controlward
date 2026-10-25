@@ -1,6 +1,6 @@
 # D1 read token: declared-and-captured proof
 
-This is a declared-and-captured proof, not live policy introspection. Cloudflare's `GET /user/tokens/verify` returns the token id and status only. It does not return the permission list, and reading that list would need another token permission. The runner never probes with a write.
+This is a declared-and-captured proof, not live policy introspection. Verify is `GET /accounts/{account id}/tokens/verify` on that token's configured account. `LEADGEN_CF_TOKEN_MECOM_READ` is checked against `meComAccountID`, and `LEADGEN_CF_TOKEN_PHAROS_READ` against `pharosAccountID`. The response is the token id and status only. It does not return the permission list. Reading that list would need API Tokens Read and would break the D1-Read-only rule, so the runner never does it. The runner never calls the user-level token verify endpoint and never probes with a write.
 
 Martin creates the token himself. Nothing in this repo creates or requests a token, and no token value is stored here.
 

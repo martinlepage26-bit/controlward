@@ -611,7 +611,7 @@ enum LeadgenTokenProof {
 }
 
 protocol LeadgenTokenVerifying: Sendable {
-    func verify(bearer: String) async throws -> LeadgenVerifiedToken
+    func verify(bearer: String, accountID: String) async throws -> LeadgenVerifiedToken
 }
 
 /// Do-not-contact check. An entry is an address, or a domain when it has no `@`.

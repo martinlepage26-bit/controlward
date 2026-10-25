@@ -106,9 +106,15 @@ enum LeadgenLiveHTTP {
 }
 
 struct LeadgenCloudflareTokenVerifier: LeadgenTokenVerifying {
-    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
-        guard !bearer.isEmpty else { throw LeadgenError.tokenProof("unverifiable") }
-        var req = LeadgenLiveHTTP.request(URL(string: "https://api.cloudflare.com/client/v4/user/tokens/verify")!, method: "GET")
+    /// Account-owned tokens verify here. There is no user-level verify call.
+    static func verifyURL(accountID: String) -> URL {
+        URL(string: "https://api.cloudflare.com/client/v4/accounts/\(accountID)/tokens/verify")!
+    }
+
+    func verify(bearer: String, accountID: String) async throws -> LeadgenVerifiedToken {
+        let account = accountID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bearer.isEmpty, !account.isEmpty else { throw LeadgenError.tokenProof("unverifiable") }
+        var req = LeadgenLiveHTTP.request(Self.verifyURL(accountID: account), method: "GET")
         req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         let (data, resp) = try await LeadgenLiveHTTP.session.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
@@ -127,10 +133,16 @@ extension LeadgenTokenProof {
     static func enforce(environment: [String: String], verifier: any LeadgenTokenVerifying) async throws {
         let saved = try load(environment: environment)
         let accounts = try configuredAccountIDs(environment: environment)
+        let trimmed = accounts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard trimmed.count == 2, !trimmed[0].isEmpty, !trimmed[1].isEmpty else {
+            throw LeadgenError.tokenProof("missing-account")
+        }
+        let byEnv = [readTokenEnvs[0]: trimmed[0], readTokenEnvs[1]: trimmed[1]]
         var verified: [LeadgenVerifiedToken?] = []
         for token in saved.tokens {
+            guard let accountID = byEnv[token.env] else { throw LeadgenError.tokenProof("missing-account") }
             let secret = try bearer(for: token.env, environment: environment)
-            do { verified.append(try await verifier.verify(bearer: secret)) }
+            do { verified.append(try await verifier.verify(bearer: secret, accountID: accountID)) }
             catch let error as LeadgenError { throw error }
             catch { throw LeadgenError.tokenProof("unverifiable") }
         }
