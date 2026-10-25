@@ -636,6 +636,34 @@ enum LeadgenSliceTests {
         }
     }
 
+    /// Two evidence lines on the lead row: the DPQ page and the clinic page where the address was published, each with the clock time of that fetch.
+    static func directoryEvidenceRow() async throws {
+        final class Clock: @unchecked Sendable {
+            var n = 0
+            func next() -> String { n += 1; return String(format: "2026-10-24T21:%02d:00Z", n) }
+        }
+        let clock = Clock()
+        let html = try LeadgenFixture.dpqHTML()
+        let fetcher = LeadgenFixture.fetcher()
+        fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
+        LeadgenFixture.allowEmptySuppression()
+        let d1 = LeadgenFakeD1()
+        let runner = LeadgenSliceRunner(
+            config: LeadgenFixture.liveConfig, fetcher: fetcher, mailbox: LeadgenRecordingMailbox(), d1: d1,
+            log: LeadgenMemoryLog(), now: { clock.next() }, dns: LeadgenMappedDNS())
+        let report = try await runner.run(
+            candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent,
+            postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+        let evidence = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads").first?["fit_evidence"] ?? ""
+        let directoryURL = LeadgenFixture.directory.absoluteString
+        try check(evidence.contains(directoryURL), "DPQ entry URL missing from the lead row: \(evidence)")
+        try check(evidence.contains("\(directoryURL) | 2026-10-24T21:01:00Z"), "DPQ fetch time is not the clock time of that fetch: \(evidence)")
+        try check(evidence.contains("https://www.cliniqueexemple.ca/contact | 2026-10-24T21:04:00Z"), "clinic page URL or its fetch time is missing: \(evidence)")
+        try check(!evidence.contains(LeadgenFixture.consent.recordedAt), "the config time was stored in place of a fetch time: \(evidence)")
+        try check(report.fit.evidence.allSatisfy { !$0.url.contains("dpq.quebec") }, "the fit quote used the directory: \(report.fit.evidence)")
+        try check(report.draft.consent.source == "https://www.cliniqueexemple.ca/contact", "consent source \(report.draft.consent.source)")
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1429,6 +1457,7 @@ enum LeadgenSliceTests {
         }))
         cases.append(("DPQ discovery keeps the clinic name, the dentist name, and the clinic's own site, and never follows a maps link", { try await LeadgenSliceTests.dpqOwnSiteOnly() }))
         cases.append(("Email is a published role address on the clinic site; no-solicitation or no address refuses the entry", { try await LeadgenSliceTests.roleEmailOnly() }))
+        cases.append(("The lead row stores the DPQ entry URL and the clinic page URL, each with its fetch time", { try await LeadgenSliceTests.directoryEvidenceRow() }))
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
