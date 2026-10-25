@@ -656,7 +656,7 @@ enum LeadgenSliceTests {
         try check(reflected.contains("Alex Exemple") && !reflected.contains("Camille Exemple") && !reflected.contains("Noel Exemple"), "dedup kept the wrong fiche: \(reflected)")
     }
 
-    /// The address is one published on the clinic's own site. A role mailbox wins. No-solicitation wording, or no address, refuses the entry.
+    /// The address is an allowlisted role local-part on the clinic's domain or a subdomain of it. A personal address, no role address, or no-solicitation wording refuses the entry.
     static func roleEmailOnly() async throws {
         func discover(contact: String) async throws -> LeadgenDiscoveryResult {
             let fetcher = LeadgenFixture.fetcher()
