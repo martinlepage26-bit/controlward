@@ -67,7 +67,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
                 : "draft refused: the footer address names a denied street (\(word))"
         case .configMissing(let path): "local config missing: \(path) (copy docs/leadgen-slice/leadgen.local.example.json)"
         case .configInvalid(let why): "local config invalid: \(why)"
-        case .credentialMissing(let ref): "credential not found: \(ref) (env or Keychain reference only)"
+        case .credentialMissing(let ref): "credential not found: \(ref)"
         case .unsafeURL(let why): "url refused: \(why)"
         case .contactNotOnPage(let email): "recipient \(email) was not found on a page fetched from the clinic's own domain"
         case .noRoleAddress(let clinic): "noRoleAddress: \(clinic)"

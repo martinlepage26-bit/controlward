@@ -6,8 +6,8 @@ import FoundationNetworking
 // Lead-gen slice 1 live runner and CLI entry (docs/leadgen-slice/SPEC.md, Q2 and Q3).
 // `FollowUpOSNative leadgen` prints the plan and touches nothing.
 // `FollowUpOSNative leadgen --live --confirm "<LeadgenRunConfig.confirmation>"` runs the one live run.
-// Secrets are never read from this file or from the config: the config only names env variables
-// or Keychain items, and LeadgenCredentials resolves them at run time.
+// Secrets are never read from this file or from the config: the config only names env variables,
+// and LeadgenCredentials resolves them at run time. The runner does not read the Keychain.
 
 // MARK: Local config (not committed; docs/leadgen-slice/leadgen.local.example.json is the template)
 
@@ -22,10 +22,9 @@ struct LeadgenLocalConfig: Codable, Sendable, Equatable {
         let source: String
         let recordedAt: String
     }
-    /// A credential reference: an env variable name, or a Keychain generic-password service name.
+    /// A credential reference: an env variable name. The runner does not read the Keychain.
     struct SecretRef: Codable, Sendable, Equatable {
         let env: String?
-        let keychainService: String?
     }
     struct Credentials: Codable, Sendable, Equatable {
         /// Cloudflare account IDs (identifiers, not secrets) for each D1.
@@ -33,7 +32,7 @@ struct LeadgenLocalConfig: Codable, Sendable, Equatable {
         let pharosAccountID: String
         let meComToken: SecretRef
         let pharosToken: SecretRef
-        /// Read-only Cloudflare token used for the snapshot SELECTs. Names an env var or Keychain item. No secret value.
+        /// Read-only Cloudflare token used for the snapshot SELECTs. Names an env var. No secret value.
         let meComReadToken: SecretRef?
         let pharosReadToken: SecretRef?
         /// OAuth access token for ml@pharos-ai.ca with the gmail.compose scope only.
@@ -83,31 +82,7 @@ struct LeadgenLocalConfig: Codable, Sendable, Equatable {
     }
 }
 
-// MARK: Credentials (env or Keychain reference only)
-
-protocol LeadgenSecretSource: Sendable {
-    func keychain(service: String) -> String?
-}
-
-struct LeadgenSystemKeychain: LeadgenSecretSource {
-    func keychain(service: String) -> String? {
-        #if os(macOS)
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        p.arguments = ["find-generic-password", "-s", service, "-w"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return nil }
-        let v = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (v?.isEmpty ?? true) ? nil : v
-        #else
-        return nil
-        #endif
-    }
-}
+// MARK: Credentials (environment variables only)
 
 /// Live token, D1, and Gmail calls. Request and resource deadlines are both 20 seconds, so a quiet socket cannot outlive a run.
 enum LeadgenLiveHTTP {
@@ -149,11 +124,11 @@ struct LeadgenCloudflareTokenVerifier: LeadgenTokenVerifying {
 }
 
 extension LeadgenTokenProof {
-    static func enforce(config: LeadgenLocalConfig?, environment: [String: String], keychain: any LeadgenSecretSource, verifier: any LeadgenTokenVerifying) async throws {
+    static func enforce(environment: [String: String], verifier: any LeadgenTokenVerifying) async throws {
         let saved = try load(environment: environment)
         var verified: [LeadgenVerifiedToken?] = []
         for token in saved.tokens {
-            let secret = try bearer(for: token.env, config: config, environment: environment, keychain: keychain)
+            let secret = try bearer(for: token.env, environment: environment)
             do { verified.append(try await verifier.verify(bearer: secret)) }
             catch let error as LeadgenError { throw error }
             catch { throw LeadgenError.tokenProof("unverifiable") }
@@ -161,22 +136,16 @@ extension LeadgenTokenProof {
         try admit(saved: saved, verified: verified)
     }
 
-    private static func bearer(for envName: String, config: LeadgenLocalConfig?, environment: [String: String], keychain: any LeadgenSecretSource) throws -> String {
+    private static func bearer(for envName: String, environment: [String: String]) throws -> String {
         if let value = environment[envName], !value.isEmpty { return value }
-        let refs = [config?.credentials?.meComReadToken, config?.credentials?.pharosReadToken].compactMap { $0 }
-        if let ref = refs.first(where: { $0.env == envName }) {
-            do { return try LeadgenCredentials.resolve(ref, environment: environment, keychain: keychain) }
-            catch { throw LeadgenError.tokenProof("unverifiable") }
-        }
-        throw LeadgenError.tokenProof("unverifiable")
+        throw LeadgenError.tokenProof("\(envName) is not in the environment")
     }
 }
 
 enum LeadgenCredentials {
-    static func resolve(_ ref: LeadgenLocalConfig.SecretRef, environment: [String: String], keychain: LeadgenSecretSource) throws -> String {
+    static func resolve(_ ref: LeadgenLocalConfig.SecretRef, environment: [String: String]) throws -> String {
         if let name = ref.env, let v = environment[name], !v.isEmpty { return v }
-        if let service = ref.keychainService, let v = keychain.keychain(service: service) { return v }
-        throw LeadgenError.credentialMissing(ref.env.map { "env \($0)" } ?? ref.keychainService.map { "keychain \($0)" } ?? "none")
+        throw LeadgenError.credentialMissing(ref.env.map { "env \($0)" } ?? "none")
     }
 }
 
@@ -384,7 +353,6 @@ enum LeadgenCLI {
                     makeFetcher: @escaping () -> LeadgenFetching = { LeadgenHTTPFetcher() },
                     dns: any LeadgenResolving = LeadgenSystemDNS(),
                     verifier: any LeadgenTokenVerifying = LeadgenCloudflareTokenVerifier(),
-                    keychain: any LeadgenSecretSource = LeadgenSystemKeychain(),
                     makeLive: (LeadgenLocalConfig) throws -> LeadgenLiveDeps) async -> (Int32, [String]) {
         let config = LeadgenRunConfig.from(arguments: arguments, environment: environment)
         let path = LeadgenLocalConfig.defaultPath(environment: environment)
@@ -418,7 +386,7 @@ enum LeadgenCLI {
         guard let paths = local.paths, !paths.isEmpty else { return (2, ["refused: local config has no paths"]) }
         do {
             _ = try LeadgenDraftComposer.checkAddress(local.postalAddress)
-            try await LeadgenTokenProof.enforce(config: local, environment: environment, keychain: keychain, verifier: verifier)
+            try await LeadgenTokenProof.enforce(environment: environment, verifier: verifier)
             let deps = try makeLive(local)
             let stamp = ISO8601DateFormatter().string(from: Date())
             await deps.log.write("leadgen live run \(stamp) confirmation=\"\(config.operatorOK ?? "")\"")
@@ -435,17 +403,17 @@ enum LeadgenCLI {
     }
 
     /// Real adapters for the one live run. Called only after the confirmation check passes.
-    static func liveDeps(environment: [String: String], keychain: LeadgenSecretSource = LeadgenSystemKeychain()) -> (LeadgenLocalConfig) throws -> LeadgenLiveDeps {
+    static func liveDeps(environment: [String: String]) -> (LeadgenLocalConfig) throws -> LeadgenLiveDeps {
         { local in
             guard let c = local.credentials else { throw LeadgenError.configInvalid("no credentials block") }
-            let me = try LeadgenCredentials.resolve(c.meComToken, environment: environment, keychain: keychain)
-            let ph = try LeadgenCredentials.resolve(c.pharosToken, environment: environment, keychain: keychain)
+            let me = try LeadgenCredentials.resolve(c.meComToken, environment: environment)
+            let ph = try LeadgenCredentials.resolve(c.pharosToken, environment: environment)
             guard let meReadRef = c.meComReadToken, let phReadRef = c.pharosReadToken else {
                 throw LeadgenError.credentialMissing("read-only D1 token (LEADGEN_CF_TOKEN_MECOM_READ and LEADGEN_CF_TOKEN_PHAROS_READ)")
             }
-            let meRead = try LeadgenCredentials.resolve(meReadRef, environment: environment, keychain: keychain)
-            let phRead = try LeadgenCredentials.resolve(phReadRef, environment: environment, keychain: keychain)
-            let gmail = try LeadgenCredentials.resolve(c.gmailToken, environment: environment, keychain: keychain)
+            let meRead = try LeadgenCredentials.resolve(meReadRef, environment: environment)
+            let phRead = try LeadgenCredentials.resolve(phReadRef, environment: environment)
+            let gmail = try LeadgenCredentials.resolve(c.gmailToken, environment: environment)
             let log = LeadgenFileLog(directory: LeadgenFileLog.directory(environment: environment), stamp: ISO8601DateFormatter().string(from: Date()))
             return LeadgenLiveDeps(
                 fetcher: LeadgenHTTPFetcher(),
