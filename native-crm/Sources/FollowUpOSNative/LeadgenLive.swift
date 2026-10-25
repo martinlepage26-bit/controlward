@@ -106,7 +106,8 @@ enum LeadgenLiveHTTP {
 }
 
 struct LeadgenCloudflareTokenVerifier: LeadgenTokenVerifying {
-    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
+    func verify(bearer: String, accountID: String) async throws -> LeadgenVerifiedToken {
+        _ = accountID
         guard !bearer.isEmpty else { throw LeadgenError.tokenProof("unverifiable") }
         var req = LeadgenLiveHTTP.request(URL(string: "https://api.cloudflare.com/client/v4/user/tokens/verify")!, method: "GET")
         req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
@@ -130,7 +131,7 @@ extension LeadgenTokenProof {
         var verified: [LeadgenVerifiedToken?] = []
         for token in saved.tokens {
             let secret = try bearer(for: token.env, environment: environment)
-            do { verified.append(try await verifier.verify(bearer: secret)) }
+            do { verified.append(try await verifier.verify(bearer: secret, accountID: "")) }
             catch let error as LeadgenError { throw error }
             catch { throw LeadgenError.tokenProof("unverifiable") }
         }

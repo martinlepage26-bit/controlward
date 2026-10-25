@@ -37,7 +37,8 @@ enum LeadgenTestClock {
 
 private struct LeadgenFixedVerifier: LeadgenTokenVerifying {
     var byBearer: [String: LeadgenVerifiedToken]
-    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
+    func verify(bearer: String, accountID: String) async throws -> LeadgenVerifiedToken {
+        _ = accountID
         let found = byBearer[bearer]
         return try await LeadgenTestClock.within {
             guard let found else { throw LeadgenError.tokenProof("unverifiable") }
@@ -52,9 +53,38 @@ private final class LeadgenCountingVerifier: LeadgenTokenVerifying, @unchecked S
     private var n = 0
     init(inner: LeadgenFixedVerifier) { self.inner = inner }
     var calls: Int { lock.withLock { n } }
-    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
+    func verify(bearer: String, accountID: String) async throws -> LeadgenVerifiedToken {
         lock.withLock { n += 1 }
-        return try await inner.verify(bearer: bearer)
+        return try await inner.verify(bearer: bearer, accountID: accountID)
+    }
+}
+
+/// Records the account id it is asked to verify, and the account verify URL that id implies.
+private final class LeadgenAccountVerifier: LeadgenTokenVerifying, @unchecked Sendable {
+    struct Call: Equatable {
+        var bearer: String
+        var accountID: String
+        var url: String
+    }
+    private let lock = NSLock()
+    private var recorded: [Call] = []
+    var calls: [Call] { lock.withLock { recorded } }
+    var allowed: [String: String]
+    var tokens: [String: LeadgenVerifiedToken]
+    init(allowed: [String: String], tokens: [String: LeadgenVerifiedToken]) {
+        self.allowed = allowed
+        self.tokens = tokens
+    }
+    func verify(bearer: String, accountID: String) async throws -> LeadgenVerifiedToken {
+        let url = "https://api.cloudflare.com/client/v4/accounts/\(accountID)/tokens/verify"
+        lock.withLock { recorded.append(Call(bearer: bearer, accountID: accountID, url: url)) }
+        return try await LeadgenTestClock.within {
+            guard !url.contains("/user/tokens/verify") else { throw LeadgenError.tokenProof("unverifiable") }
+            guard let home = self.allowed[bearer], home == accountID, let token = self.tokens[bearer] else {
+                throw LeadgenError.tokenProof("unverifiable")
+            }
+            return token
+        }
     }
 }
 
@@ -777,6 +807,119 @@ enum LeadgenSliceTests {
             try check(code == 0 && calls == ["createDraft"] && rows.count == 1 && phRows.count == 1 && verifier.calls == 2,
                 "valid account ids were not admitted: exit \(code) lines \(lines) gmail \(calls.count) rows \(rows.count + phRows.count) verify \(verifier.calls)")
         }
+    }
+
+    static let meReadTokenID = "62c2378b0d4a7897d34406cee8a5beca"
+    static let phReadTokenID = "eb5707869afdc0844b5810b314efc58c"
+
+    static func accountTokenVerifyURL(_ accountID: String) -> String {
+        "https://api.cloudflare.com/client/v4/accounts/\(accountID)/tokens/verify"
+    }
+
+    static func accountVerifyPolicy(meAccount: String, phAccount: String) -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: meReadTokenID, env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: meAccount)]),
+            LeadgenDeclaredToken(id: phReadTokenID, env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: phAccount)]),
+        ])
+    }
+
+    /// `expectWrongAccount` is the account id the me.com read token must be checked against when that account is not its own.
+    static func assertAccountTokenVerify(configMe: String, configPh: String, expectWrongAccount: String?) async throws {
+        let homeMe = hexAccountIDs[0]
+        let homePh = hexAccountIDs[1]
+        let verifier = LeadgenAccountVerifier(
+            allowed: ["me-read": homeMe, "ph-read": homePh],
+            tokens: [
+                "me-read": LeadgenVerifiedToken(id: meReadTokenID, status: "active"),
+                "ph-read": LeadgenVerifiedToken(id: phReadTokenID, status: "active"),
+            ]
+        )
+        let d1 = LeadgenFakeD1()
+        let mailbox = LeadgenRecordingMailbox()
+        let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "mem"))
+        let launcher = LeadgenCountingLauncher()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-acctverify-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let policyFile = dir.appendingPathComponent("policy.json")
+        try JSONEncoder().encode(accountVerifyPolicy(meAccount: configMe, phAccount: configPh)).write(to: policyFile)
+        let config: [String: Any] = [
+            "postalAddress": LeadgenFixture.postal,
+            "directoryURL": LeadgenFixture.directory.absoluteString,
+            "paths": LeadgenFixture.paths,
+            "consent": [
+                "basis": LeadgenFixture.consent.basis,
+                "source": LeadgenFixture.consent.source,
+                "recordedAt": LeadgenFixture.consent.recordedAt,
+            ],
+            "credentials": [
+                "meComAccountID": configMe,
+                "pharosAccountID": configPh,
+                "meComToken": ["env": "LEADGEN_CF_TOKEN_MECOM"],
+                "pharosToken": ["env": "LEADGEN_CF_TOKEN_PHAROS"],
+                "meComReadToken": ["env": "LEADGEN_CF_TOKEN_MECOM_READ"],
+                "pharosReadToken": ["env": "LEADGEN_CF_TOKEN_PHAROS_READ"],
+                "gmailToken": ["env": "LEADGEN_GMAIL_TOKEN"],
+            ],
+        ]
+        let configURL = dir.appendingPathComponent("leadgen.local.json")
+        try JSONSerialization.data(withJSONObject: config).write(to: configURL)
+        let env = [
+            "LEADGEN_CONFIG": configURL.path,
+            "LEADGEN_TOKEN_POLICY": policyFile.path,
+            "LEADGEN_CF_TOKEN_MECOM_READ": "me-read",
+            "LEADGEN_CF_TOKEN_PHAROS_READ": "ph-read",
+            "LEADGEN_CF_TOKEN_MECOM": "me-write",
+            "LEADGEN_CF_TOKEN_PHAROS": "ph-write",
+            "LEADGEN_GMAIL_TOKEN": "gmail-token",
+        ]
+        let (code, lines) = await LeadgenCLI.run(
+            arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation],
+            environment: env,
+            dns: LeadgenMappedDNS(),
+            verifier: verifier,
+            launcher: launcher,
+            makeLive: probe.make
+        )
+        let gmail = await mailbox.calls
+        let inserts = await d1.inserts()
+        let rows = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+        let phRows = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+        let statements = await d1.statementCount()
+        let calls = verifier.calls
+        if let wrong = expectWrongAccount {
+            try check(code == 1 && gmail.isEmpty && inserts.isEmpty && rows.isEmpty && phRows.isEmpty && statements == 0 && probe.calls == 0 && launcher.calls == 0,
+                "wrong account still drafted: exit \(code) lines \(lines) gmail \(gmail.count) inserts \(inserts.count) rows \(rows.count + phRows.count) d1 \(statements) adapters \(probe.calls) launcher \(launcher.calls) calls \(calls)")
+            try check(calls.first?.bearer == "me-read" && calls.first?.accountID == wrong && calls.first?.url == accountTokenVerifyURL(wrong),
+                "me token was not checked against \(wrong): \(calls)")
+            try check(calls.allSatisfy { !$0.url.contains("/user/tokens/verify") }, "user endpoint was called: \(calls)")
+        } else {
+            let expected = [
+                LeadgenAccountVerifier.Call(bearer: "me-read", accountID: configMe, url: accountTokenVerifyURL(configMe)),
+                LeadgenAccountVerifier.Call(bearer: "ph-read", accountID: configPh, url: accountTokenVerifyURL(configPh)),
+            ]
+            try check(code == 0 && calls == expected && gmail == ["createDraft"] && rows.count == 1 && phRows.count == 1 && statements > 0 && launcher.calls == 0,
+                "account verify missed: exit \(code) lines \(lines) gmail \(gmail) calls \(calls) rows \(rows.count + phRows.count)")
+            try check(calls.allSatisfy { !$0.url.contains("/user/tokens/verify") }, "user endpoint was called: \(calls)")
+        }
+    }
+
+    static func assertNoUserTokenVerify() throws {
+        let root = LeadgenFixture.repoRoot
+        let paths = [
+            "native-crm/Sources/FollowUpOSNative/LeadgenLive.swift",
+            "native-crm/Sources/FollowUpOSNative/LeadgenSlice.swift",
+            "docs/leadgen-slice/SPEC.md",
+            "docs/leadgen-slice/d1-read-token-policy.md",
+        ]
+        var hits: [String] = []
+        for path in paths {
+            let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+            if text.contains("/user/tokens/verify") { hits.append(path) }
+        }
+        let live = try String(contentsOf: root.appendingPathComponent("native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"), encoding: .utf8)
+        let hasAccountURL = live.contains("/accounts/\\(accountID)/tokens/verify")
+        try check(hits.isEmpty && hasAccountURL, "user verify remains in \(hits); account verify URL present=\(hasAccountURL)")
     }
 
     /// The me.com token's account is right and its permission is D1 Write. PHAROS_READ stays D1 Read.
@@ -2340,6 +2483,19 @@ enum LeadgenSliceTests {
         }))
         cases.append(("Two valid 32-hex Cloudflare account ids are admitted", {
             try await LeadgenSliceTests.assertAccountIDShape(me: hexMe, ph: hexPh, refusal: nil)
+        }))
+        cases.append(("Each read token is verified with GET /accounts/{account id}/tokens/verify on its own account", {
+            let me = LeadgenSliceTests.hexAccountIDs[0]
+            let ph = LeadgenSliceTests.hexAccountIDs[1]
+            try await LeadgenSliceTests.assertAccountTokenVerify(configMe: me, configPh: ph, expectWrongAccount: nil)
+        }))
+        cases.append(("The right token checked against the wrong account fails closed", {
+            let me = LeadgenSliceTests.hexAccountIDs[0]
+            let ph = LeadgenSliceTests.hexAccountIDs[1]
+            try await LeadgenSliceTests.assertAccountTokenVerify(configMe: ph, configPh: me, expectWrongAccount: ph)
+        }))
+        cases.append(("/user/tokens/verify is never called", {
+            try LeadgenSliceTests.assertNoUserTokenVerify()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
