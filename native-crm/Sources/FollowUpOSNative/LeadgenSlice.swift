@@ -931,15 +931,14 @@ enum LeadgenDiscovery {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The whole allowlist. A published address is accepted only when its whole local-part,
-    /// trimmed and lowercased, is exactly one of these, and its domain is the clinic's own domain
-    /// or a subdomain of it. A prefix, a longer token, or a personal address is never used.
-    /// English: info, contact, reception, admin, office, hello, appointments.
-    /// French: accueil, administration, bureau, clinique, clinic, rendezvous, secretariat, secretaire, bonjour.
+    /// The whole allowlist, exactly nine names. A published address is accepted only when its whole
+    /// local-part, trimmed and lowercased, is exactly one of these, and its domain is the clinic's
+    /// own domain or a subdomain of it. A prefix, a longer token, or a personal address is never used.
+    /// English: info, contact, reception, admin.
+    /// French: accueil, administration, bureau, clinique, rendezvous.
     static let roleLocals: Set<String> = [
         "info", "contact", "reception", "admin",
         "accueil", "administration", "bureau", "clinique", "rendezvous",
-        "office", "hello", "bonjour", "clinic", "secretariat", "secretaire", "appointments",
     ]
     static let noSolicitPhrases = ["no solicitation", "pas de sollicitation", "aucune sollicitation"]
 
