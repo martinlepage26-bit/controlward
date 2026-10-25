@@ -179,6 +179,24 @@ enum LeadgenCredentials {
         if let name = ref.env, let v = environment[name], !v.isEmpty { return v }
         throw LeadgenError.credentialMissing(ref.env.map { "env \($0)" } ?? "none")
     }
+
+    /// Names the read-token env when a snapshot SELECT on that database would be sent with its write token.
+    static func selectOnWriteToken(_ config: LeadgenLocalConfig, environment: [String: String]) throws -> String? {
+        guard let credentials = config.credentials else { return nil }
+        guard let meReadRef = credentials.meComReadToken, let phReadRef = credentials.pharosReadToken else { return nil }
+        let checks: [(String, LeadgenLocalConfig.SecretRef, LeadgenLocalConfig.SecretRef)] = [
+            ("LEADGEN_CF_TOKEN_MECOM_READ", meReadRef, credentials.meComToken),
+            ("LEADGEN_CF_TOKEN_PHAROS_READ", phReadRef, credentials.pharosToken),
+        ]
+        for (name, readRef, writeRef) in checks {
+            let read = try resolve(readRef, environment: environment)
+            let write = try resolve(writeRef, environment: environment)
+            if LeadgenCloudflareD1.snapshotUsesWriteToken(read: read, write: write) {
+                return "snapshot SELECT would use the write token for \(name)"
+            }
+        }
+        return nil
+    }
 }
 
 // MARK: Run log file under the app's log directory
@@ -279,9 +297,28 @@ struct LeadgenCloudflareD1: LeadgenD1Port {
         sql.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("SELECT ") ? read : write
     }
 
+    /// SQL the snapshot and the recorded-domain read send. A bearer equal to the write token is refused.
+    static let snapshotSQL = [
+        LeadgenD1Writer.tablesSQL,
+        LeadgenD1Writer.countSQL,
+        LeadgenD1Writer.readBackSQL,
+        LeadgenD1Writer.allRowsSQL("projects"),
+        "SELECT domain FROM projects",
+        "SELECT site FROM leads",
+    ]
+
+    static func snapshotUsesWriteToken(read: String, write: String) -> Bool {
+        if read == write { return true }
+        return snapshotSQL.contains { credential(sql: $0, read: read, write: write) == write }
+    }
+
     func query(database: String, sql: String, params: [String]) async throws -> [[String: String]] {
         guard let b = bindings[database] else { throw LeadgenError.credentialMissing("D1 binding for \(database)") }
         let token = Self.credential(sql: sql, read: b.readToken, write: b.token)
+        if sql.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("SELECT "),
+           Self.snapshotUsesWriteToken(read: b.readToken, write: b.token) {
+            throw LeadgenError.tokenProof("snapshot SELECT would use a write token")
+        }
         var req = LeadgenLiveHTTP.request(URL(string: "https://api.cloudflare.com/client/v4/accounts/\(b.accountID)/d1/database/\(database)/query")!, method: "POST")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -422,6 +459,9 @@ enum LeadgenCLI {
             let missing = LeadgenCredentials.absent(local, environment: environment, launcher: launcher)
             if !missing.isEmpty {
                 return (1, missing.map { "live run stopped: \($0) is not in the environment" })
+            }
+            if let reason = try LeadgenCredentials.selectOnWriteToken(local, environment: environment) {
+                return (1, ["live run stopped: \(reason)"])
             }
             try await LeadgenTokenProof.enforce(environment: environment, verifier: verifier)
             let deps = try makeLive(local)

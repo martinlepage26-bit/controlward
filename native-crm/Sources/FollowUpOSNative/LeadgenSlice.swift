@@ -583,15 +583,18 @@ enum LeadgenTokenProof {
         return saved
     }
 
-    /// Fail closed unless verify's id matches the saved id, status is active, and the saved list is only D1 Read on the two account ids.
+    /// Fail closed unless each saved token is exactly D1 Read on its own account, verify's id matches that token, and status is active.
     static func admit(saved: LeadgenDeclaredPolicy?, verified: [LeadgenVerifiedToken?]) throws {
-        guard let saved, !saved.tokens.isEmpty else { throw LeadgenError.tokenProof("missing-declaration") }
+        guard let saved, saved.tokens.count == readTokenEnvs.count else { throw LeadgenError.tokenProof("missing-declaration") }
         guard Set(saved.tokens.map(\.env)) == Set(readTokenEnvs) else { throw LeadgenError.tokenProof("missing-declaration") }
-        let grants = saved.tokens.flatMap(\.permissions)
-        guard !grants.isEmpty else { throw LeadgenError.tokenProof("missing-declaration") }
-        let expected = Set(accountIDs.map { "\(d1ReadPermissionGroupID)|\(d1ReadPermissionGroupName)|\($0)" })
-        let actual = grants.map { "\($0.id)|\($0.name)|\($0.accountID)" }
-        guard Set(actual) == expected, actual.count == expected.count else { throw LeadgenError.tokenProof("not-d1-read") }
+        for (envName, accountID) in zip(readTokenEnvs, accountIDs) {
+            guard let token = saved.tokens.first(where: { $0.env == envName }) else {
+                throw LeadgenError.tokenProof("missing-declaration")
+            }
+            let expected = "\(d1ReadPermissionGroupID)|\(d1ReadPermissionGroupName)|\(accountID)"
+            let grants = token.permissions.map { "\($0.id)|\($0.name)|\($0.accountID)" }
+            guard grants == [expected] else { throw LeadgenError.tokenProof("not-d1-read") }
+        }
         guard verified.count == saved.tokens.count else { throw LeadgenError.tokenProof("unverifiable") }
         for (token, result) in zip(saved.tokens, verified) {
             guard let result else { throw LeadgenError.tokenProof("unverifiable") }
