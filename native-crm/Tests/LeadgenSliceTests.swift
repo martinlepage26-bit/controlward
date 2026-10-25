@@ -664,6 +664,22 @@ enum LeadgenSliceTests {
         try check(report.draft.consent.source == "https://www.cliniqueexemple.ca/contact", "consent source \(report.draft.consent.source)")
     }
 
+    /// The draft talks about the clinic's obligations, not about a person.
+    static func clinicDraft() throws {
+        let fit = try LeadgenFixture.fit()
+        let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: fit, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
+        let body = draft.body
+        try check(body.contains(LeadgenFixture.prospect.organization), "the draft does not name the clinic: \(body)")
+        try check(body.contains("Loi 25"), "the draft does not mention Loi 25")
+        try check(body.localizedCaseInsensitiveContains("gouvernance") && body.contains("renseignements de santé"), "the draft is not about the clinic's AI governance and health-data obligations: \(body)")
+        for banned in ["patients", "avec des patients", "uses AI with patients", "$", "prix", "avis juridique", "conforme", "Marie", "Bonjour Marie"] {
+            try check(!body.localizedCaseInsensitiveContains(banned), "draft contains \(banned)")
+        }
+        try check(!body.contains("@"), "the draft names a person or an address: \(body)")
+        try check(body.contains("désabonnement") && body.contains("unsubscribe") && body.contains("Martin Lepage, PhD"), "the existing footer was dropped")
+        try check(!body.contains("\u{2014}") && !body.contains("\u{2013}"), "dash in draft")
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1458,6 +1474,7 @@ enum LeadgenSliceTests {
         cases.append(("DPQ discovery keeps the clinic name, the dentist name, and the clinic's own site, and never follows a maps link", { try await LeadgenSliceTests.dpqOwnSiteOnly() }))
         cases.append(("Email is a published role address on the clinic site; no-solicitation or no address refuses the entry", { try await LeadgenSliceTests.roleEmailOnly() }))
         cases.append(("The lead row stores the DPQ entry URL and the clinic page URL, each with its fetch time", { try await LeadgenSliceTests.directoryEvidenceRow() }))
+        cases.append(("The draft is about the clinic's AI governance and Law 25 obligations, not a person", { try LeadgenSliceTests.clinicDraft() }))
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
