@@ -138,6 +138,13 @@ actor LeadgenFakeD1: LeadgenD1Port {
 
     func setTamper(rows: Bool, schema: Bool) { tamperRows = rows; tamperSchema = schema }
     func setFailInsert(_ db: String?) { failInsertDatabase = db }
+    func occupyProject(_ db: String, domain: String) {
+        tables[db]?["projects"]?.append(["id": "p-occupied", "title": "Occupied", "status": "Active", "domain": domain])
+    }
+    func occupyLead(_ db: String, site: String) {
+        installLeads(db)
+        tables[db]?["leads"]?.append(["id": "l-occupied", "site": site, "organization": "Already"])
+    }
     func installLeads(_ db: String) {
         tables[db]?["leads"] = []
         schemas[db]?["leads"] = LeadgenMigration.createLeads
@@ -269,6 +276,19 @@ enum LeadgenFixture {
     }
     /// Fictional DPQ fiche page. No live fetch, and no real member is in this file.
     /// Pages for the fake domain used by the trimmed DPQ fixture.
+    static func withOwnSite(_ fetcher: LeadgenFakeFetcher, host: String, contact: String) -> LeadgenFakeFetcher {
+        let origin = "https://\(host)"
+        fetcher.set("\(origin)/robots.txt", status: 200, body: "User-agent: *\nDisallow: /admin\n")
+        fetcher.set("\(origin)/", status: 200, body: home)
+        fetcher.set("\(origin)/services", status: 200, body: "<html><body><main><p>Médecine familiale et pédiatrie.</p></main></body></html>")
+        fetcher.set("\(origin)/contact", status: 200, body: contact)
+        return fetcher
+    }
+    static func loadDPQ(_ fetcher: LeadgenFakeFetcher) throws {
+        let html = try dpqHTML()
+        fetcher.set(directory.absoluteString, status: 200, body: html)
+        fetcher.set(directory.absoluteString + "/", status: 200, body: html)
+    }
     static func withDPQSite(_ fetcher: LeadgenFakeFetcher, contact: String = "<html><body><main><p>Écrivez à info@example-clinic-1.test pour nous joindre.</p></main></body></html>") -> LeadgenFakeFetcher {
         let origin = "https://example-clinic-1.test"
         fetcher.set("\(origin)/robots.txt", status: 200, body: "User-agent: *\nDisallow: /admin\n")
@@ -591,7 +611,7 @@ enum LeadgenSliceTests {
         let html = try LeadgenFixture.dpqHTML()
         let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
         let clinics = LeadgenDiscovery.clinics(in: html, directory: directory)
-        try check(clinics.count == 1, "DPQ fiches became \(clinics.count) clinics: \(clinics.map(\.name))")
+        try check(clinics.count == 6, "DPQ fiches became \(clinics.count) clinics: \(clinics.map(\.name))")
         try check(clinics.first?.name == "Example Clinic 1", "clinic name came from the link text, not the fiche: \(clinics.first?.name ?? "none")")
         try check(LeadgenSourcePolicy.normalize(clinics.first?.site.host ?? "") == "example-clinic-1.test", "own site \(String(describing: clinics.first?.site))")
         try check(clinics.allSatisfy { site in
@@ -618,7 +638,10 @@ enum LeadgenSliceTests {
         try check(ownHrefs >= 2, "fixture does not contain two entries on one domain: \(ownHrefs)")
         let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
         let clinics = LeadgenDiscovery.clinics(in: html, directory: directory)
-        try check(clinics.count == 1, "shared-domain fiches were not one prospect: \(clinics.map(\.name))")
+        try check(clinics.count == 6, "shared-domain fiches were not one prospect, or a domain was dropped: \(clinics.map(\.name))")
+        for n in 1...6 {
+            try check(clinics.contains { LeadgenSourcePolicy.normalize($0.site.host ?? "") == "example-clinic-\(n).test" }, "missing example-clinic-\(n).test: \(clinics.map(\.site.host))")
+        }
         try check(clinics.first?.name == "Example Clinic 1", "clinic \(clinics.first?.name ?? "none")")
         try check(LeadgenSourcePolicy.normalize(clinics.first?.site.host ?? "") == "example-clinic-1.test", "own site \(String(describing: clinics.first?.site))")
         try check(html.contains("google.com/maps"), "fixture has no Maps entry")
@@ -809,6 +832,92 @@ enum LeadgenSliceTests {
             _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: two, dns: LeadgenMappedDNS())
         }
         try check(!two.requested.contains { $0.contains("autreclinique") || $0.contains("example-clinic-1.test") }, "more than one prospect was fetched: \(two.requested)")
+    }
+
+    /// Fiche 1 is the first own-site card in page order. Later domains stay unfetched.
+    static func picksFirstFiche() async throws {
+        let fetcher = withDPQSite(fetcher())
+        try loadDPQ(fetcher)
+        let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
+        do {
+            let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+            try check(found.prospect.organization == "Example Clinic 1", "picked \(found.prospect.organization) not fiche 1")
+            try check(LeadgenSourcePolicy.normalize(found.prospect.site.host ?? "") == "example-clinic-1.test", "fiche 1 site \(found.prospect.site)")
+        } catch let error as PortableCheckFailure {
+            throw error
+        } catch {
+            throw PortableCheckFailure(description: "did not pick fiche 1: \(error)")
+        }
+        try check(!fetcher.requested.contains { $0.contains("example-clinic-2.test") }, "fiche 2 was fetched: \(fetcher.requested)")
+    }
+
+    /// The chosen site's failure stops the run. The next fiche is not fetched, and nothing is written.
+    static func firstFicheFailureStops() async throws {
+        let empty = "<html><body><main><p>Pas d'adresse publiée.</p></main></body></html>"
+        let fetcher = withDPQSite(fetcher(), contact: empty)
+        _ = withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
+        try loadDPQ(fetcher)
+        let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
+        do {
+            _ = try await runner(liveConfig, mailbox: mailbox, d1: d1, log: log, fetcher: fetcher).run(
+                candidates: [], paths: paths, consent: consent, postalAddress: postal, directory: directory)
+            throw PortableCheckFailure(description: "a failed fiche still drafted")
+        } catch is PortableCheckFailure {
+            throw PortableCheckFailure(description: "a failed fiche still drafted")
+        } catch {}
+        let hosts = Set(fetcher.requested.compactMap { URL(string: $0)?.host }.filter { $0.contains("example-clinic-") })
+        try check(hosts == Set(["example-clinic-1.test"]), "expected one clinic-site fetch, got \(hosts) from \(fetcher.requested)")
+        try check(!fetcher.requested.contains { $0.contains("example-clinic-2.test") }, "fiche 2's site was fetched: \(fetcher.requested)")
+        let calls = await mailbox.calls, inserts = await d1.inserts(), statements = await d1.statements, lines = await log.lines
+        try check(calls.isEmpty, "Gmail was called: \(calls)")
+        try check(inserts.isEmpty, "a row was written: \(inserts.map(\.db))")
+        try check(statements.allSatisfy { sql in
+            let upper = sql.sql.uppercased()
+            return !upper.contains("INSERT") && !upper.contains("UPDATE") && !upper.contains("DELETE")
+        }, "a database was written: \(statements.map(\.sql))")
+        try check(lines.contains { $0.contains("fiche 1") && $0.contains("refused") }, "the log did not name the refusal and the fiche position: \(lines)")
+    }
+
+    /// Success path: the log names fiche 1 and both source URLs.
+    static func logNamesFicheAndEvidence() async throws {
+        let fetcher = withDPQSite(fetcher())
+        try loadDPQ(fetcher)
+        let log = LeadgenMemoryLog()
+        do {
+            _ = try await runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: LeadgenFakeD1(), log: log, fetcher: fetcher).run(
+                candidates: [], paths: paths, consent: consent, postalAddress: postal, directory: directory)
+        } catch {
+            throw PortableCheckFailure(description: "did not record fiche 1: \(error)")
+        }
+        let lines = await log.lines
+        try check(lines.contains { $0.contains("fiche 1") }, "log has no fiche position: \(lines)")
+        try check(lines.contains { $0.contains("dpq.quebec/repertoire-des-membres") }, "log missed the directory evidence URL: \(lines)")
+        try check(lines.contains { $0.contains("example-clinic-1.test/contact") }, "log missed the clinic evidence URL: \(lines)")
+    }
+
+    /// A domain stored in projects on either database, or in leads, is skipped before its site is fetched.
+    static func recordedDomainSkipped() async throws {
+        func skipped(_ prepare: (LeadgenFakeD1) async -> Void) async throws {
+            let d1 = LeadgenFakeD1()
+            await prepare(d1)
+            let fetcher = withDPQSite(fetcher())
+            _ = withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
+            try loadDPQ(fetcher)
+            do {
+                let report = try await runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: d1, log: LeadgenMemoryLog(), fetcher: fetcher).run(
+                    candidates: [], paths: paths, consent: consent, postalAddress: postal, directory: directory)
+                try check(report.prospect.organization == "Example Clinic 2", "did not skip the recorded domain: picked \(report.prospect.organization)")
+            } catch let error as PortableCheckFailure {
+                throw error
+            } catch {
+                throw PortableCheckFailure(description: "did not skip a domain already recorded: \(error)")
+            }
+            try check(!fetcher.requested.contains { $0.contains("example-clinic-1.test") }, "fiche 1 was fetched before the skip: \(fetcher.requested)")
+            try check(fetcher.requested.contains { $0.contains("example-clinic-2.test") }, "fiche 2 was not fetched after the skip: \(fetcher.requested)")
+        }
+        try await skipped { await $0.occupyProject(LeadgenProjectTarget.meCom.databaseID, domain: "example-clinic-1.test") }
+        try await skipped { await $0.occupyProject(LeadgenProjectTarget.pharos.databaseID, domain: "example-clinic-1.test") }
+        try await skipped { await $0.occupyLead(LeadgenProjectTarget.meCom.databaseID, site: "https://www.example-clinic-1.test/") }
     }
 
     static func run() async -> Bool {
@@ -1612,6 +1721,10 @@ enum LeadgenSliceTests {
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
+        cases.append(("The first fiche in page order is the one clinic fetched", { try await LeadgenSliceTests.picksFirstFiche() }))
+        cases.append(("A failed first fiche stops the run with one site fetch and no draft", { try await LeadgenSliceTests.firstFicheFailureStops() }))
+        cases.append(("The log records the fiche position and both evidence URLs", { try await LeadgenSliceTests.logNamesFicheAndEvidence() }))
+        cases.append(("A domain already in projects on either database is skipped before fetch", { try await LeadgenSliceTests.recordedDomainSkipped() }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif
