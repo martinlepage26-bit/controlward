@@ -958,6 +958,32 @@ enum LeadgenSliceTests {
         try check(lines.contains { $0.contains("noRoleAddress") }, "the log did not name noRoleAddress: \(lines)")
     }
 
+    /// The role check is the whole local-part. A longer token on the clinic's own domain is not a role address.
+    static func longerLocalPartRefused() async throws {
+        for local in ["info.drtremblay", "info.jtremblay", "clinique-jean", "contactjean"] {
+            let address = "\(local)@cliniqueexemple.ca"
+            let fetcher = LeadgenFixture.fetcher()
+            fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: "<html><body><a href=\"https://www.cliniqueexemple.ca/\">Clinique Exemple</a></body></html>")
+            fetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: "<html><body><main><p>Écrivez à \(address).</p></main></body></html>")
+            let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
+            do {
+                _ = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: mailbox, d1: d1, log: log, fetcher: fetcher).run(
+                    candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                throw PortableCheckFailure(description: "a longer local-part was drafted: \(address)")
+            } catch is PortableCheckFailure {
+                throw PortableCheckFailure(description: "a longer local-part was drafted: \(address)")
+            } catch {}
+            let calls = await mailbox.calls, inserts = await d1.inserts(), statements = await d1.statements, lines = await log.lines
+            try check(calls.isEmpty, "Gmail was called for \(address): \(calls)")
+            try check(inserts.isEmpty, "a row was written for \(address): \(inserts.map(\.db))")
+            try check(statements.allSatisfy { sql in
+                let upper = sql.sql.uppercased()
+                return !upper.contains("INSERT") && !upper.contains("UPDATE") && !upper.contains("DELETE")
+            }, "a database was written for \(address): \(statements.map(\.sql))")
+            try check(lines.contains { $0.contains("noRoleAddress") }, "the log did not name noRoleAddress for \(address): \(lines)")
+        }
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1768,6 +1794,7 @@ enum LeadgenSliceTests {
         cases.append(("The log records the fiche position and both evidence URLs", { try await LeadgenSliceTests.logNamesFicheAndEvidence() }))
         cases.append(("A domain already in projects on either database is skipped before fetch", { try await LeadgenSliceTests.recordedDomainSkipped() }))
         cases.append(("A site that publishes only a personal address on its own domain is refused", { try await LeadgenSliceTests.personalAddressRefused() }))
+        cases.append(("info.drtremblay@, info.jtremblay@, clinique-jean@, and contactjean@ are refused", { try await LeadgenSliceTests.longerLocalPartRefused() }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif

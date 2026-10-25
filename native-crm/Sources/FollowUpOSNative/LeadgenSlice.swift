@@ -931,8 +931,9 @@ enum LeadgenDiscovery {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The whole allowlist. A published address is accepted only when its local-part is one of these
-    /// and its domain is the clinic's own domain or a subdomain of it. A personal address is never used.
+    /// The whole allowlist. A published address is accepted only when its whole local-part,
+    /// trimmed and lowercased, is exactly one of these, and its domain is the clinic's own domain
+    /// or a subdomain of it. A prefix, a longer token, or a personal address is never used.
     /// English: info, contact, reception, admin, office, hello, appointments.
     /// French: accueil, administration, bureau, clinique, clinic, rendezvous, secretariat, secretaire, bonjour.
     static let roleLocals: Set<String> = [
@@ -963,7 +964,8 @@ enum LeadgenDiscovery {
         for page in pages {
             for email in emails(in: page.bodyText) {
                 guard let emailDomain = MailAddress.domain(email), onClinicDomain(emailDomain, clinicDomain: domain) else { continue }
-                let local = email.split(separator: "@").first.map { String($0) } ?? ""
+                let local = email.split(separator: "@").first
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } ?? ""
                 guard roleLocals.contains(local) else { continue }
                 if role == nil { role = (email, page.url.absoluteString) }
             }
