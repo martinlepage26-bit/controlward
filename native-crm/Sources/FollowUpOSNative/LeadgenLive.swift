@@ -159,6 +159,22 @@ struct LeadgenSystemProcessLauncher: LeadgenProcessLaunching {
 }
 
 enum LeadgenCredentials {
+    /// Env names from the local config that have no value. Does not launch a process.
+    static func absent(_ config: LeadgenLocalConfig, environment: [String: String], launcher: any LeadgenProcessLaunching) -> [String] {
+        _ = launcher as Any
+        guard let credentials = config.credentials else { return [] }
+        let refs: [LeadgenLocalConfig.SecretRef?] = [
+            credentials.meComReadToken, credentials.pharosReadToken,
+            credentials.meComToken, credentials.pharosToken, credentials.gmailToken,
+        ]
+        var names: [String] = []
+        for ref in refs {
+            guard let name = ref?.env, !name.isEmpty else { continue }
+            if environment[name]?.isEmpty != false { names.append(name) }
+        }
+        return names
+    }
+
     static func resolve(_ ref: LeadgenLocalConfig.SecretRef, environment: [String: String]) throws -> String {
         if let name = ref.env, let v = environment[name], !v.isEmpty { return v }
         throw LeadgenError.credentialMissing(ref.env.map { "env \($0)" } ?? "none")
@@ -371,7 +387,6 @@ enum LeadgenCLI {
                     verifier: any LeadgenTokenVerifying = LeadgenCloudflareTokenVerifier(),
                     launcher: any LeadgenProcessLaunching = LeadgenSystemProcessLauncher(),
                     makeLive: (LeadgenLocalConfig) throws -> LeadgenLiveDeps) async -> (Int32, [String]) {
-        _ = launcher as Any
         let config = LeadgenRunConfig.from(arguments: arguments, environment: environment)
         let path = LeadgenLocalConfig.defaultPath(environment: environment)
         var local: LeadgenLocalConfig?
@@ -404,6 +419,10 @@ enum LeadgenCLI {
         guard let paths = local.paths, !paths.isEmpty else { return (2, ["refused: local config has no paths"]) }
         do {
             _ = try LeadgenDraftComposer.checkAddress(local.postalAddress)
+            let missing = LeadgenCredentials.absent(local, environment: environment, launcher: launcher)
+            if !missing.isEmpty {
+                return (1, missing.map { "live run stopped: \($0) is not in the environment" })
+            }
             try await LeadgenTokenProof.enforce(environment: environment, verifier: verifier)
             let deps = try makeLive(local)
             let stamp = ISO8601DateFormatter().string(from: Date())
