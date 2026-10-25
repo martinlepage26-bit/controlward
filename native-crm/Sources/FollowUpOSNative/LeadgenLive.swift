@@ -142,6 +142,22 @@ extension LeadgenTokenProof {
     }
 }
 
+/// The only process seam in the lead-gen live path. Credential resolution does not call it.
+protocol LeadgenProcessLaunching: Sendable {
+    func launch(executable: String, arguments: [String]) throws -> Int32
+}
+
+struct LeadgenSystemProcessLauncher: LeadgenProcessLaunching {
+    func launch(executable: String, arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+}
+
 enum LeadgenCredentials {
     static func resolve(_ ref: LeadgenLocalConfig.SecretRef, environment: [String: String]) throws -> String {
         if let name = ref.env, let v = environment[name], !v.isEmpty { return v }
@@ -353,7 +369,9 @@ enum LeadgenCLI {
                     makeFetcher: @escaping () -> LeadgenFetching = { LeadgenHTTPFetcher() },
                     dns: any LeadgenResolving = LeadgenSystemDNS(),
                     verifier: any LeadgenTokenVerifying = LeadgenCloudflareTokenVerifier(),
+                    launcher: any LeadgenProcessLaunching = LeadgenSystemProcessLauncher(),
                     makeLive: (LeadgenLocalConfig) throws -> LeadgenLiveDeps) async -> (Int32, [String]) {
+        _ = launcher as Any
         let config = LeadgenRunConfig.from(arguments: arguments, environment: environment)
         let path = LeadgenLocalConfig.defaultPath(environment: environment)
         var local: LeadgenLocalConfig?

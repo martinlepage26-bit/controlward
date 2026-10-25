@@ -651,8 +651,108 @@ enum LeadgenSliceTests {
         let live = try String(contentsOf: LeadgenFixture.repoRoot.appendingPathComponent("native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"), encoding: .utf8)
         let securityWired = live.contains("LeadgenSystemKeychain") || live.contains("/usr/bin/security") || live.contains("find-generic-password")
         let named = lines.contains { $0.contains(LeadgenTokenProof.readTokenEnvs[0]) && $0.contains("environment") }
-        try check(code != 0 && calls.isEmpty && inserts.isEmpty && me.isEmpty && ph.isEmpty && statements == 0 && probe.calls == 0 && !securityWired && named,
-            "missing token still ran: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(me.count + ph.count) d1 \(statements) adapters \(probe.calls) security \(securityWired)")
+        let violations = try Self.leadgenProcessViolations()
+        try check(code != 0 && calls.isEmpty && inserts.isEmpty && me.isEmpty && ph.isEmpty && statements == 0 && probe.calls == 0 && !securityWired && violations.isEmpty && named,
+            "missing token still ran: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(me.count + ph.count) d1 \(statements) adapters \(probe.calls) security \(securityWired) violations \(violations)")
+    }
+
+    static let credentialEnvs = [
+        "LEADGEN_CF_TOKEN_MECOM_READ",
+        "LEADGEN_CF_TOKEN_PHAROS_READ",
+        "LEADGEN_CF_TOKEN_MECOM",
+        "LEADGEN_CF_TOKEN_PHAROS",
+        "LEADGEN_GMAIL_TOKEN",
+    ]
+
+    /// Removes the injected launcher so `Process(` inside it is not a fallback.
+    static func withoutProcessLauncher(_ source: String) -> String {
+        guard let marker = source.range(of: "struct LeadgenSystemProcessLauncher") else { return source }
+        guard let open = source[marker.upperBound...].firstIndex(of: "{") else { return source }
+        var depth = 0
+        var index = open
+        while index < source.endIndex {
+            let character = source[index]
+            if character == "{" { depth += 1 }
+            if character == "}" {
+                depth -= 1
+                if depth == 0 {
+                    let end = source.index(after: index)
+                    return String(source[..<marker.lowerBound]) + String(source[end...])
+                }
+            }
+            index = source.index(after: index)
+        }
+        return source
+    }
+
+    static func leadgenProcessViolations() throws -> [String] {
+        let root = LeadgenFixture.repoRoot.appendingPathComponent("native-crm/Sources/FollowUpOSNative")
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path).filter {
+            $0.hasPrefix("Leadgen") || $0 == "LeadTransport.swift"
+        }.sorted()
+        let banned = ["LeadgenSystemKeychain", "/usr/bin/security", "find-generic-password", "SecItemCopyMatching", "posix_spawn"]
+        var hits: [String] = []
+        for name in names {
+            var text = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
+            text = withoutProcessLauncher(text)
+            for word in banned where text.contains(word) {
+                hits.append("\(name) contains \(word)")
+            }
+            if text.contains("Process(") { hits.append("\(name) contains Process(") }
+        }
+        return hits
+    }
+
+    final class LeadgenCountingLauncher: LeadgenProcessLaunching, @unchecked Sendable {
+        private let lock = NSLock()
+        private var launches = 0
+        func launch(executable: String, arguments: [String]) throws -> Int32 {
+            lock.lock(); launches += 1; lock.unlock()
+            return 0
+        }
+        var calls: Int { lock.withLock { launches } }
+    }
+
+    /// `omitted` env names are absent. Every other credential is present. The run must stop before a draft.
+    static func assertMissingCredentials(_ omitted: [String], launcher: LeadgenCountingLauncher = LeadgenCountingLauncher()) async throws {
+        let d1 = LeadgenFakeD1()
+        let mailbox = LeadgenRecordingMailbox()
+        let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "mem"))
+        let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-cred-\(UUID().uuidString).json")
+        try JSONEncoder().encode(readPolicy()).write(to: policyFile)
+        defer { try? FileManager.default.removeItem(at: policyFile) }
+        var env = [
+            "LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString, keychain: true),
+            "LEADGEN_TOKEN_POLICY": policyFile.path,
+        ]
+        let values = [
+            "LEADGEN_CF_TOKEN_MECOM_READ": "me-read",
+            "LEADGEN_CF_TOKEN_PHAROS_READ": "ph-read",
+            "LEADGEN_CF_TOKEN_MECOM": "me-write",
+            "LEADGEN_CF_TOKEN_PHAROS": "ph-write",
+            "LEADGEN_GMAIL_TOKEN": "gmail-token",
+        ]
+        for (name, value) in values where !omitted.contains(name) { env[name] = value }
+        let verifier = LeadgenFixedVerifier(byBearer: [
+            "me-read": LeadgenVerifiedToken(id: "id-me", status: "active"),
+            "ph-read": LeadgenVerifiedToken(id: "id-ph", status: "active"),
+        ])
+        let (code, lines) = await LeadgenCLI.run(
+            arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation],
+            environment: env,
+            dns: LeadgenMappedDNS(),
+            verifier: verifier,
+            launcher: launcher,
+            makeLive: probe.make
+        )
+        let calls = await mailbox.calls
+        let inserts = await d1.inserts()
+        let statements = await d1.statementCount()
+        let me = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+        let ph = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+        let named = omitted.allSatisfy { name in lines.contains { $0.contains(name) } }
+        try check(code == 1 && named && calls.isEmpty && inserts.isEmpty && me.isEmpty && ph.isEmpty && statements == 0 && probe.calls == 0 && launcher.calls == 0,
+            "missing \(omitted) still ran: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(me.count + ph.count) d1 \(statements) adapters \(probe.calls) launcher \(launcher.calls)")
     }
 
     /// A double with no response must fail the case. It must not hold the suite past the bound.
@@ -1937,6 +2037,19 @@ enum LeadgenSliceTests {
         cases.append(("office@, hello@, appointments@, clinic@, secretariat@, secretaire@, and bonjour@ are refused", { try await LeadgenSliceTests.extraRoleNamesRefused() }))
         cases.append(("An unconfigured test double fails inside its bound", { try await LeadgenSliceTests.unconfiguredDoubleTimesOut() }))
         cases.append(("A token missing from the environment stops the run with no draft, no rows, and no Keychain read", { try await LeadgenSliceTests.missingEnvTokenStops() }))
+        for name in LeadgenSliceTests.credentialEnvs {
+            cases.append(("\(name) missing from the environment stops the run", { try await LeadgenSliceTests.assertMissingCredentials([name]) }))
+        }
+        cases.append(("Every missing credential is named when none of them is in the environment", { try await LeadgenSliceTests.assertMissingCredentials(LeadgenSliceTests.credentialEnvs) }))
+        cases.append(("A missing credential does not launch a process", {
+            let launcher = LeadgenSliceTests.LeadgenCountingLauncher()
+            try await LeadgenSliceTests.assertMissingCredentials(LeadgenSliceTests.credentialEnvs, launcher: launcher)
+            try check(launcher.calls == 0, "the process launcher ran \(launcher.calls) time(s)")
+        }))
+        cases.append(("Lead-gen sources do not read the Keychain or start a process outside the launcher", {
+            let hits = try LeadgenSliceTests.leadgenProcessViolations()
+            try check(hits.isEmpty, "process fallback remains: \(hits)")
+        }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif
