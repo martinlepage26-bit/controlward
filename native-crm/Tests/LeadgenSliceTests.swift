@@ -836,11 +836,11 @@ enum LeadgenSliceTests {
 
     /// Fiche 1 is the first own-site card in page order. Later domains stay unfetched.
     static func picksFirstFiche() async throws {
-        let fetcher = withDPQSite(fetcher())
-        try loadDPQ(fetcher)
+        let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
+        try LeadgenFixture.loadDPQ(fetcher)
         let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
         do {
-            let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+            let found = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
             try check(found.prospect.organization == "Example Clinic 1", "picked \(found.prospect.organization) not fiche 1")
             try check(LeadgenSourcePolicy.normalize(found.prospect.site.host ?? "") == "example-clinic-1.test", "fiche 1 site \(found.prospect.site)")
         } catch let error as PortableCheckFailure {
@@ -854,13 +854,13 @@ enum LeadgenSliceTests {
     /// The chosen site's failure stops the run. The next fiche is not fetched, and nothing is written.
     static func firstFicheFailureStops() async throws {
         let empty = "<html><body><main><p>Pas d'adresse publiée.</p></main></body></html>"
-        let fetcher = withDPQSite(fetcher(), contact: empty)
-        _ = withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
-        try loadDPQ(fetcher)
+        let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher(), contact: empty)
+        _ = LeadgenFixture.withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
+        try LeadgenFixture.loadDPQ(fetcher)
         let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
         do {
-            _ = try await runner(liveConfig, mailbox: mailbox, d1: d1, log: log, fetcher: fetcher).run(
-                candidates: [], paths: paths, consent: consent, postalAddress: postal, directory: directory)
+            _ = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: mailbox, d1: d1, log: log, fetcher: fetcher).run(
+                candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
             throw PortableCheckFailure(description: "a failed fiche still drafted")
         } catch is PortableCheckFailure {
             throw PortableCheckFailure(description: "a failed fiche still drafted")
@@ -880,12 +880,12 @@ enum LeadgenSliceTests {
 
     /// Success path: the log names fiche 1 and both source URLs.
     static func logNamesFicheAndEvidence() async throws {
-        let fetcher = withDPQSite(fetcher())
-        try loadDPQ(fetcher)
+        let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
+        try LeadgenFixture.loadDPQ(fetcher)
         let log = LeadgenMemoryLog()
         do {
-            _ = try await runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: LeadgenFakeD1(), log: log, fetcher: fetcher).run(
-                candidates: [], paths: paths, consent: consent, postalAddress: postal, directory: directory)
+            _ = try await LeadgenFixture.runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: LeadgenFakeD1(), log: log, fetcher: fetcher).run(
+                candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
         } catch {
             throw PortableCheckFailure(description: "did not record fiche 1: \(error)")
         }
@@ -900,12 +900,12 @@ enum LeadgenSliceTests {
         func skipped(_ prepare: (LeadgenFakeD1) async -> Void) async throws {
             let d1 = LeadgenFakeD1()
             await prepare(d1)
-            let fetcher = withDPQSite(fetcher())
-            _ = withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
-            try loadDPQ(fetcher)
+            let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
+            _ = LeadgenFixture.withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
+            try LeadgenFixture.loadDPQ(fetcher)
             do {
-                let report = try await runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: d1, log: LeadgenMemoryLog(), fetcher: fetcher).run(
-                    candidates: [], paths: paths, consent: consent, postalAddress: postal, directory: directory)
+                let report = try await LeadgenFixture.runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: d1, log: LeadgenMemoryLog(), fetcher: fetcher).run(
+                    candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
                 try check(report.prospect.organization == "Example Clinic 2", "did not skip the recorded domain: picked \(report.prospect.organization)")
             } catch let error as PortableCheckFailure {
                 throw error
