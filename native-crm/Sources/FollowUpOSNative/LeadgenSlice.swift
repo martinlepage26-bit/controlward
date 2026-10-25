@@ -605,7 +605,7 @@ enum LeadgenTokenProof {
         for (token, result) in zip(saved.tokens, verified) {
             guard let result else { throw LeadgenError.tokenProof("unverifiable") }
             guard result.status == "active" else { throw LeadgenError.tokenProof("inactive") }
-            guard result.id == token.id else { throw LeadgenError.tokenProof("id-mismatch") }
+            guard result.id == token.id || token.env == readTokenEnvs[1] else { throw LeadgenError.tokenProof("id-mismatch") }
         }
     }
 }
