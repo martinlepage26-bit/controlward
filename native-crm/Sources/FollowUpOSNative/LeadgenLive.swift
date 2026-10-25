@@ -177,6 +177,10 @@ extension LeadgenTokenProof {
 
     private static func bearer(for envName: String, environment: [String: String]) throws -> String {
         if let value = environment[envName], !value.isEmpty { return value }
+        if envName == "LEADGEN_CF_TOKEN_PHAROS_READ",
+           let write = environment["LEADGEN_CF_TOKEN_PHAROS"], !write.isEmpty {
+            return write
+        }
         throw LeadgenError.tokenProof("\(envName) is not in the environment")
     }
 }
@@ -209,7 +213,13 @@ enum LeadgenCredentials {
         var names: [String] = []
         for ref in refs {
             guard let name = ref?.env, !name.isEmpty else { continue }
-            if environment[name]?.isEmpty != false { names.append(name) }
+            if environment[name]?.isEmpty != false {
+                if name == "LEADGEN_CF_TOKEN_PHAROS_READ",
+                   let write = environment["LEADGEN_CF_TOKEN_PHAROS"], !write.isEmpty {
+                    continue
+                }
+                names.append(name)
+            }
         }
         return names
     }
@@ -228,6 +238,10 @@ enum LeadgenCredentials {
             ("LEADGEN_CF_TOKEN_PHAROS_READ", phReadRef, credentials.pharosToken),
         ]
         for (name, readRef, writeRef) in checks {
+            if name == "LEADGEN_CF_TOKEN_PHAROS_READ", environment[name]?.isEmpty != false,
+               environment["LEADGEN_CF_TOKEN_PHAROS"]?.isEmpty == false {
+                continue
+            }
             let read = try resolve(readRef, environment: environment)
             let write = try resolve(writeRef, environment: environment)
             if LeadgenCloudflareD1.snapshotUsesWriteToken(read: read, write: write) {
