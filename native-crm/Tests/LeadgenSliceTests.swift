@@ -296,7 +296,7 @@ enum LeadgenFixture {
     static func live(_ d1: LeadgenFakeD1, _ mailbox: LeadgenRecordingMailbox = LeadgenRecordingMailbox(), log: LeadgenMemoryLog = LeadgenMemoryLog()) async throws -> LeadgenRunReport {
         try await runner(liveConfig, mailbox: mailbox, d1: d1, log: log).run(candidates: [prospect], paths: paths, consent: consent, postalAddress: postal)
     }
-    static func tempConfig(postal: String? = postal, directory: String? = nil) throws -> String {
+    static func tempConfig(postal: String? = postal, directory: String? = nil, keychain: Bool = false) throws -> String {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-cfg-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var obj: [String: Any] = [
@@ -306,6 +306,17 @@ enum LeadgenFixture {
         ]
         if let postal { obj["postalAddress"] = postal }
         if let directory { obj["directoryURL"] = directory }
+        if keychain {
+            obj["credentials"] = [
+                "meComAccountID": LeadgenTokenProof.accountIDs[0],
+                "pharosAccountID": LeadgenTokenProof.accountIDs[1],
+                "meComToken": ["env": "LEADGEN_CF_TOKEN_MECOM", "keychainService": "controlward.leadgen.cf.mecom"],
+                "pharosToken": ["env": "LEADGEN_CF_TOKEN_PHAROS", "keychainService": "controlward.leadgen.cf.pharos"],
+                "meComReadToken": ["env": "LEADGEN_CF_TOKEN_MECOM_READ", "keychainService": "controlward.leadgen.cf.mecom.read"],
+                "pharosReadToken": ["env": "LEADGEN_CF_TOKEN_PHAROS_READ", "keychainService": "controlward.leadgen.cf.pharos.read"],
+                "gmailToken": ["env": "LEADGEN_GMAIL_TOKEN", "keychainService": "controlward.leadgen.gmail"],
+            ]
+        }
         let url = dir.appendingPathComponent("leadgen.local.json")
         try JSONSerialization.data(withJSONObject: obj).write(to: url)
         return url.path
@@ -598,6 +609,50 @@ enum LeadgenSliceTests {
             let calls = await mailbox.calls, inserts = await d1.inserts()
             try check(refused && calls.isEmpty && inserts.isEmpty, "fetch time \(clock.debugDescription) still drafted: calls \(calls) inserts \(inserts.count)")
         }
+    }
+
+    /// The read tokens are not in the environment. The run must stop before any draft, row, Gmail call, D1 call, or Keychain read.
+    static func missingEnvTokenStops() async throws {
+        let d1 = LeadgenFakeD1()
+        let mailbox = LeadgenRecordingMailbox()
+        let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "mem"))
+        let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-notoken-\(UUID().uuidString).json")
+        try JSONEncoder().encode(readPolicy()).write(to: policyFile)
+        defer { try? FileManager.default.removeItem(at: policyFile) }
+        let env = [
+            "LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString, keychain: true),
+            "LEADGEN_TOKEN_POLICY": policyFile.path,
+        ]
+        let started = ContinuousClock.now
+        let outcome: (Int32, [String])
+        do {
+            outcome = try await LeadgenTestClock.within(1) {
+                await LeadgenCLI.run(
+                    arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation],
+                    environment: env,
+                    dns: LeadgenMappedDNS(),
+                    verifier: LeadgenFixedVerifier(byBearer: [:]),
+                    makeLive: probe.make
+                )
+            }
+        } catch let error as PortableCheckFailure where error.description == "test double timed out" {
+            let elapsed = ContinuousClock.now - started
+            try check(elapsed < .seconds(15), "the suite waited on keychain: \(elapsed)")
+            throw PortableCheckFailure(description: "a missing token started a keychain read that did not finish")
+        }
+        let (code, lines) = outcome
+        let elapsed = ContinuousClock.now - started
+        try check(elapsed < .seconds(15), "a missing token held the run: \(elapsed)")
+        let calls = await mailbox.calls
+        let inserts = await d1.inserts()
+        let statements = await d1.statementCount()
+        let me = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+        let ph = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+        let live = try String(contentsOf: LeadgenFixture.repoRoot.appendingPathComponent("native-crm/Sources/FollowUpOSNative/LeadgenLive.swift"), encoding: .utf8)
+        let securityWired = live.contains("LeadgenSystemKeychain") || live.contains("/usr/bin/security") || live.contains("find-generic-password")
+        let named = lines.contains { $0.contains(LeadgenTokenProof.readTokenEnvs[0]) && $0.contains("environment") }
+        try check(code != 0 && calls.isEmpty && inserts.isEmpty && me.isEmpty && ph.isEmpty && statements == 0 && probe.calls == 0 && !securityWired && named,
+            "missing token still ran: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(me.count + ph.count) d1 \(statements) adapters \(probe.calls) security \(securityWired)")
     }
 
     /// A double with no response must fail the case. It must not hold the suite past the bound.
@@ -1881,6 +1936,7 @@ enum LeadgenSliceTests {
         cases.append(("info.drtremblay@, info.jtremblay@, clinique-jean@, and contactjean@ are refused", { try await LeadgenSliceTests.longerLocalPartRefused() }))
         cases.append(("office@, hello@, appointments@, clinic@, secretariat@, secretaire@, and bonjour@ are refused", { try await LeadgenSliceTests.extraRoleNamesRefused() }))
         cases.append(("An unconfigured test double fails inside its bound", { try await LeadgenSliceTests.unconfiguredDoubleTimesOut() }))
+        cases.append(("A token missing from the environment stops the run with no draft, no rows, and no Keychain read", { try await LeadgenSliceTests.missingEnvTokenStops() }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif
