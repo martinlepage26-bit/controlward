@@ -744,6 +744,46 @@ enum LeadgenSliceTests {
         try check(spec.contains("TODO: Martin purges") || source.contains("TODO: Martin purges"), "purging the lead is not left as a TODO for Martin")
     }
 
+    /// One fetch of the chosen DPQ page, robots first, the named User-Agent, and exactly one own-site prospect.
+    static func dpqFetchOnce() async throws {
+        let root = LeadgenFixture.repoRoot
+        let example = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/leadgen.local.example.json"), encoding: .utf8)
+        let parsed = try JSONDecoder().decode(LeadgenLocalConfig.self, from: Data(example.utf8))
+        let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
+        try check(parsed.directoryURL == directory.absoluteString, "directoryURL is \(parsed.directoryURL ?? "nil")")
+        final class Box: @unchecked Sendable { var agent: String? }
+        let box = Box()
+        let http = LeadgenHTTPFetcher(
+            lookup: { _ in ["1.1.1.1"] },
+            transport: { req in
+                box.agent = req.value(forHTTPHeaderField: "User-Agent")
+                return (200, [:], "ok")
+            })
+        _ = try await http.get(URL(string: "https://dpq.quebec/robots.txt")!)
+        try check(box.agent == "PHAROS AI ControlWard (+https://pharos-ai.ca; ml@pharos-ai.ca)", "User-Agent \(box.agent ?? "missing")")
+        let html = try LeadgenFixture.dpqHTML()
+        let fetcher = LeadgenFixture.fetcher()
+        fetcher.set(directory.absoluteString, status: 200, body: html)
+        fetcher.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: html)
+        _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+        let hits = fetcher.requested.filter { $0 == directory.absoluteString }
+        try check(hits.count == 1, "the DPQ page was fetched \(hits.count) times: \(fetcher.requested)")
+        try check(fetcher.requested.first == "https://dpq.quebec/robots.txt", "robots.txt was not first: \(fetcher.requested)")
+        try check(!fetcher.requested.dropFirst().contains("https://dpq.quebec/robots.txt"), "robots.txt was fetched again: \(fetcher.requested)")
+        try check(!fetcher.requested.contains { $0.contains("google") || $0.contains("maps") || $0.contains("pagesjaunes") }, "a blocked URL was fetched: \(fetcher.requested)")
+        let second = html.replacingOccurrences(of: "</body>", with: """
+        <article class="dpqr-fiche"><h3 class="dpqr-nom">Jean Fictif</h3><p class="dpqr-clinique">Autre Clinique</p><a class="dpqr-bouton" href="https://www.autreclinique.ca/">Visiter le site Web</a></article>
+        </body>
+        """)
+        let two = LeadgenFixture.fetcher()
+        two.set(directory.absoluteString, status: 200, body: second)
+        two.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: second)
+        try await expectError(.notExactlyOneProspect(2)) {
+            _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: two, dns: LeadgenMappedDNS())
+        }
+        try check(!two.requested.contains { $0.contains("autreclinique") || $0.contains("cliniqueexemple") }, "more than one prospect was fetched: \(two.requested)")
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1540,6 +1580,7 @@ enum LeadgenSliceTests {
         cases.append(("The lead row stores the DPQ entry URL and the clinic page URL, each with its fetch time", { try await LeadgenSliceTests.directoryEvidenceRow() }))
         cases.append(("The draft is about the clinic's AI governance and Law 25 obligations, not a person", { try LeadgenSliceTests.clinicDraft() }))
         cases.append(("A directory lead keeps only the clinic, the dentist, the role email, and the two source records; rejection is logged, not purged", { try await LeadgenSliceTests.minimizedLead() }))
+        cases.append(("The DPQ page is fetched once, after robots.txt, with the ControlWard User-Agent, for exactly one prospect", { try await LeadgenSliceTests.dpqFetchOnce() }))
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
