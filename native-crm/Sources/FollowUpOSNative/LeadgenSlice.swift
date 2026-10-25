@@ -782,6 +782,12 @@ struct LeadgenDiscoveryResult: Sendable, Equatable {
     let pages: [LeadgenPage]
     let consent: LeadgenConsentBasis?
     let fetchedURLs: [String]
+    /// The directory page that named the clinic, and when that page was fetched.
+    var directoryURL: String = ""
+    var directoryFetchedAt: String = ""
+    /// The own-site page the address was read from, and when that page was fetched.
+    var emailPageURL: String = ""
+    var emailFetchedAt: String = ""
 }
 
 enum LeadgenDiscovery {
@@ -978,7 +984,11 @@ enum LeadgenDiscovery {
             proven = nil
         }
         let fetched = await directoryReader.fetchedURLs + siteReader.fetchedURLs
-        return LeadgenDiscoveryResult(prospect: prospect, pages: pages, consent: proven, fetchedURLs: fetched)
+        let emailFetchedAt = own.first { $0.url.absoluteString == chosen.url }?.fetchedAt ?? ""
+        return LeadgenDiscoveryResult(
+            prospect: prospect, pages: pages, consent: proven, fetchedURLs: fetched,
+            directoryURL: page.url.absoluteString, directoryFetchedAt: page.fetchedAt,
+            emailPageURL: chosen.url, emailFetchedAt: emailFetchedAt)
     }
 }
 
@@ -1024,6 +1034,7 @@ struct LeadgenSliceRunner: Sendable {
         let pages: [LeadgenPage]
         let resolvedConsent: LeadgenConsentBasis?
         let fetched: [String]
+        let discovery: LeadgenDiscoveryResult?
         if let directory {
             await log.write("directory \(directory.absoluteString)")
             await log.write("discovery source: \(directory.absoluteString)")
@@ -1032,7 +1043,9 @@ struct LeadgenSliceRunner: Sendable {
             pages = found.pages
             resolvedConsent = found.consent
             fetched = found.fetchedURLs
+            discovery = found
         } else {
+            discovery = nil
             prospect = try LeadgenProspectPicker.pickOne(candidates)
             let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
             pages = try await reader.read(site: prospect.site, paths: paths)
@@ -1089,7 +1102,14 @@ struct LeadgenSliceRunner: Sendable {
             organization: prospect.organization,
             site: prospect.site.absoluteString,
             fitReason: fit.reason,
-            fitEvidence: fit.evidence.map { e in "\(e.url) | \(e.fetchedAt) | \(e.quote)" }.joined(separator: "\n"),
+            fitEvidence: {
+                var lines = fit.evidence.map { e in "\(e.url) | \(e.fetchedAt) | \(e.quote)" }
+                if let discovery {
+                    lines.append("\(discovery.directoryURL) | \(discovery.directoryFetchedAt)")
+                    lines.append("\(discovery.emailPageURL) | \(discovery.emailFetchedAt)")
+                }
+                return lines.joined(separator: "\n")
+            }(),
             draftRef: draftID,
             consentBasis: "\(draft.consent.basis) | \(draft.consent.source) | \(draft.consent.recordedAt)",
             createdAt: stamp
