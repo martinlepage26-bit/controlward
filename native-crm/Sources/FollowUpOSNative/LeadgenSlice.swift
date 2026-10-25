@@ -599,8 +599,6 @@ enum LeadgenTokenProof {
             }
             let expected = "\(d1ReadPermissionGroupID)|\(d1ReadPermissionGroupName)|\(accountID)"
             let grants = token.permissions.map { "\($0.id)|\($0.name)|\($0.accountID)" }
-            let writeGrant = "\(d1WritePermissionGroupID)|\(d1WritePermissionGroupName)|\(accountID)"
-            if envName == readTokenEnvs[0], grants == [writeGrant] { continue }
             guard grants == [expected] else { throw LeadgenError.tokenProof("not-d1-read") }
         }
         guard verified.count == saved.tokens.count else { throw LeadgenError.tokenProof("unverifiable") }
