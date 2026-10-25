@@ -13,6 +13,8 @@ The gitignored file `leadgen.token-policy.json` (template: `leadgen.token-policy
 
 Those account ids come from the gitignored local config credentials block, and they are the same values the D1 bindings use. They are Cloudflare account ids, not the D1 database ids. If either account id is missing or blank, or the two are identical, the run fails closed.
 
+On startup, before any Gmail, D1, or token-verify call, a configured `meComAccountID` or `pharosAccountID` is refused when it equals either D1 database id below (compared case-insensitively, with or without dashes) or it is not 32 lowercase hex characters. The log line is `live run stopped: <field> is a D1 database id, not an account id` or `live run stopped: <field> is not a Cloudflare account id`, and the process exits 1.
+
 Anything else (a grant on a D1 database id, the two accounts swapped, one token covering both accounts while the other has no grants, a write-scoped declaration, a missing declaration, an inactive or unverifiable token, or an id mismatch) refuses the run before a draft or a row. A snapshot SELECT that would be sent with that database's write token, or a read token equal to that database's write token, also stops the run before a draft or a row.
 
 ## Permission groups

@@ -320,8 +320,8 @@ enum LeadgenFixture {
         if let directory { obj["directoryURL"] = directory }
         if keychain {
             obj["credentials"] = [
-                "meComAccountID": LeadgenTokenProof.accountIDs[0],
-                "pharosAccountID": LeadgenTokenProof.accountIDs[1],
+                "meComAccountID": LeadgenSliceTests.hexAccountIDs[0],
+                "pharosAccountID": LeadgenSliceTests.hexAccountIDs[1],
                 "meComToken": ["env": "LEADGEN_CF_TOKEN_MECOM", "keychainService": "controlward.leadgen.cf.mecom"],
                 "pharosToken": ["env": "LEADGEN_CF_TOKEN_PHAROS", "keychainService": "controlward.leadgen.cf.pharos"],
                 "meComReadToken": ["env": "LEADGEN_CF_TOKEN_MECOM_READ", "keychainService": "controlward.leadgen.cf.mecom.read"],
@@ -1683,7 +1683,7 @@ enum LeadgenSliceTests {
                 let mailbox = LeadgenOrderMailbox(d1: d1)
                 let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, logPath: "mem"))
                 let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-policy-\(UUID().uuidString).json")
-                try JSONEncoder().encode(LeadgenSliceTests.readPolicy()).write(to: policyFile)
+                try JSONEncoder().encode(LeadgenSliceTests.scopedReadPolicy(meAccount: LeadgenSliceTests.hexAccountIDs[0], phAccount: LeadgenSliceTests.hexAccountIDs[1])).write(to: policyFile)
                 var env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString, keychain: true)]
                 env["LEADGEN_TOKEN_POLICY"] = policyFile.path
                 env[LeadgenTokenProof.readTokenEnvs[0]] = "me-read"

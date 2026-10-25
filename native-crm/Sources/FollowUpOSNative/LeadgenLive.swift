@@ -146,6 +146,35 @@ extension LeadgenTokenProof {
         return [credentials.meComAccountID, credentials.pharosAccountID]
     }
 
+    /// Nil when the trimmed value is 32 lowercase hex and is not either D1 database id.
+    /// Database ids match case-insensitively, with or without dashes. Dashes stay in the hex-length check.
+    static func accountIDRefusal(field: String, value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let compact = String(trimmed.lowercased().filter { $0 != "-" })
+        let databases = accountIDs.map { String($0.lowercased().filter { $0 != "-" }) }
+        if databases.contains(compact) {
+            return "\(field) is a D1 database id, not an account id"
+        }
+        let lowercaseHex = trimmed.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) }
+        if trimmed.utf8.count != 32 || !lowercaseHex {
+            return "\(field) is not a Cloudflare account id"
+        }
+        return nil
+    }
+
+    /// First configured account id that is a database id or not a Cloudflare account id. Me.com, then PHAROS.
+    static func configuredAccountShapeRefusal(_ config: LeadgenLocalConfig) -> String? {
+        guard let credentials = config.credentials else { return nil }
+        let fields = [
+            ("meComAccountID", credentials.meComAccountID),
+            ("pharosAccountID", credentials.pharosAccountID),
+        ]
+        for (field, value) in fields {
+            if let reason = accountIDRefusal(field: field, value: value) { return reason }
+        }
+        return nil
+    }
+
     private static func bearer(for envName: String, environment: [String: String]) throws -> String {
         if let value = environment[envName], !value.isEmpty { return value }
         throw LeadgenError.tokenProof("\(envName) is not in the environment")
@@ -469,6 +498,9 @@ enum LeadgenCLI {
             let missing = LeadgenCredentials.absent(local, environment: environment, launcher: launcher)
             if !missing.isEmpty {
                 return (1, missing.map { "live run stopped: \($0) is not in the environment" })
+            }
+            if let reason = LeadgenTokenProof.configuredAccountShapeRefusal(local) {
+                return (1, ["live run stopped: \(reason)"])
             }
             if let reason = try LeadgenCredentials.selectOnWriteToken(local, environment: environment) {
                 return (1, ["live run stopped: \(reason)"])
