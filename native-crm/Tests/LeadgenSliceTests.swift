@@ -927,6 +927,29 @@ enum LeadgenSliceTests {
         try await skipped { await $0.occupyLead(LeadgenProjectTarget.meCom.databaseID, site: "https://www.example-clinic-1.test/") }
     }
 
+    /// A site that publishes only a personal address on its own domain is not a prospect.
+    static func personalAddressRefused() async throws {
+        let fetcher = LeadgenFixture.fetcher()
+        fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: "<html><body><a href=\"https://www.cliniqueexemple.ca/\">Clinique Exemple</a></body></html>")
+        fetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: "<html><body><main><p>Écrivez à marie.tremblay@cliniqueexemple.ca.</p></main></body></html>")
+        let mailbox = LeadgenRecordingMailbox(), d1 = LeadgenFakeD1(), log = LeadgenMemoryLog()
+        do {
+            _ = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: mailbox, d1: d1, log: log, fetcher: fetcher).run(
+                candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+            throw PortableCheckFailure(description: "a personal-only address was drafted")
+        } catch is PortableCheckFailure {
+            throw PortableCheckFailure(description: "a personal-only address was drafted")
+        } catch {}
+        let calls = await mailbox.calls, inserts = await d1.inserts(), statements = await d1.statements, lines = await log.lines
+        try check(calls.isEmpty, "Gmail was called: \(calls)")
+        try check(inserts.isEmpty, "a row was written: \(inserts.map(\.db))")
+        try check(statements.allSatisfy { sql in
+            let upper = sql.sql.uppercased()
+            return !upper.contains("INSERT") && !upper.contains("UPDATE") && !upper.contains("DELETE")
+        }, "a database was written: \(statements.map(\.sql))")
+        try check(lines.contains { $0.contains("noRoleAddress") }, "the log did not name noRoleAddress: \(lines)")
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1736,6 +1759,7 @@ enum LeadgenSliceTests {
         cases.append(("A failed first fiche stops the run with one site fetch and no draft", { try await LeadgenSliceTests.firstFicheFailureStops() }))
         cases.append(("The log records the fiche position and both evidence URLs", { try await LeadgenSliceTests.logNamesFicheAndEvidence() }))
         cases.append(("A domain already in projects on either database is skipped before fetch", { try await LeadgenSliceTests.recordedDomainSkipped() }))
+        cases.append(("A site that publishes only a personal address on its own domain is refused", { try await LeadgenSliceTests.personalAddressRefused() }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
         #endif
