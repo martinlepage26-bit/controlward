@@ -576,15 +576,15 @@ enum LeadgenSliceTests {
 
     static func readPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
-            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
-            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[0])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[1])]),
         ])
     }
 
     static func writeScopedPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
-            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
-            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[0])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[1])]),
         ])
     }
 
@@ -594,7 +594,7 @@ enum LeadgenSliceTests {
 
     static func refuseToken(_ saved: LeadgenDeclaredPolicy?, _ verified: [LeadgenVerifiedToken?]) throws {
         do {
-            try LeadgenTokenProof.admit(saved: saved, verified: verified, accountIDs: LeadgenTokenProof.accountIDs)
+            try LeadgenTokenProof.admit(saved: saved, verified: verified, accountIDs: LeadgenTokenProof.d1DatabaseIDs)
             throw PortableCheckFailure(description: "token proof admitted a token it must refuse")
         } catch LeadgenError.tokenProof {
             return
@@ -608,8 +608,8 @@ enum LeadgenSliceTests {
     /// Each token's account is the other token's account. The pooled grant set is still the two D1 Read grants.
     static func swappedAccountPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
-            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
-            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[1])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[0])]),
         ])
     }
 
@@ -617,8 +617,8 @@ enum LeadgenSliceTests {
     static func pooledReadPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
             LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [
-                LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0]),
-                LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1]),
+                LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[0]),
+                LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[1]),
             ]),
             LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: []),
         ])
@@ -782,8 +782,8 @@ enum LeadgenSliceTests {
     /// The me.com token's account is right and its permission is D1 Write. PHAROS_READ stays D1 Read.
     static func writeOnMeAccountPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
-            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
-            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[0])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.d1DatabaseIDs[1])]),
         ])
     }
 
@@ -2252,7 +2252,7 @@ enum LeadgenSliceTests {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [nil, LeadgenVerifiedToken(id: "id-ph", status: "active")])
         }))
         cases.append(("A saved D1-read policy is admitted when verify returns that id and active", {
-            try LeadgenTokenProof.admit(saved: LeadgenSliceTests.readPolicy(), verified: LeadgenSliceTests.activeVerification(), accountIDs: LeadgenTokenProof.accountIDs)
+            try LeadgenTokenProof.admit(saved: LeadgenSliceTests.readPolicy(), verified: LeadgenSliceTests.activeVerification(), accountIDs: LeadgenTokenProof.d1DatabaseIDs)
             let root = LeadgenFixture.repoRoot
             let example = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/leadgen.token-policy.example.json"), encoding: .utf8)
             try check(example.contains(LeadgenTokenProof.d1ReadPermissionGroupID), "example policy has no D1 Read group id")

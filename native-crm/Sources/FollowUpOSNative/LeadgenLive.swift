@@ -151,7 +151,7 @@ extension LeadgenTokenProof {
     static func accountIDRefusal(field: String, value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let compact = String(trimmed.lowercased().filter { $0 != "-" })
-        let databases = accountIDs.map { String($0.lowercased().filter { $0 != "-" }) }
+        let databases = d1DatabaseIDs.map { String($0.lowercased().filter { $0 != "-" }) }
         if databases.contains(compact) {
             return "\(field) is a D1 database id, not an account id"
         }

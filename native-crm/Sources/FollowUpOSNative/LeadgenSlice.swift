@@ -562,7 +562,7 @@ enum LeadgenTokenProof {
     static let d1WritePermissionGroupName = "D1 Write"
     static let readTokenEnvs = ["LEADGEN_CF_TOKEN_MECOM_READ", "LEADGEN_CF_TOKEN_PHAROS_READ"]
     /// D1 database ids. Token permissions are scoped to the Cloudflare account ids in the local config, not to these.
-    static let accountIDs = [
+    static let d1DatabaseIDs = [
         "e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1",
         "959e5bdb-4213-496a-9557-10ec410440d7",
     ]
