@@ -612,6 +612,87 @@ enum LeadgenSliceTests {
         ])
     }
 
+    /// Cloudflare account ids. These are not the D1 database ids.
+    static let cloudflareAccountIDs = [
+        "a4c0e1d2-7b3f-4c91-8e56-0d9a2b4c6e81",
+        "b7d91e04-2a6c-4f38-9c15-6e8d0a1b3f72",
+    ]
+
+    static func scopedReadPolicy(meAccount: String, phAccount: String) -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: meAccount)]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: phAccount)]),
+        ])
+    }
+
+    /// The saved grants have to name the account ids from the local config, not the D1 database ids.
+    static func proveAccountScope() async throws {
+        let me = cloudflareAccountIDs[0]
+        let ph = cloudflareAccountIDs[1]
+        let dbMe = LeadgenProjectTarget.meCom.databaseID
+        let dbPh = LeadgenProjectTarget.pharos.databaseID
+        try check(me != dbMe && ph != dbPh && me != ph, "fixture account ids are not distinct from the database ids")
+        func prove(policy: LeadgenDeclaredPolicy, accounts: (String, String)?) async throws {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-acct-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let policyFile = dir.appendingPathComponent("policy.json")
+            try JSONEncoder().encode(policy).write(to: policyFile)
+            var obj: [String: Any] = [
+                "postalAddress": LeadgenFixture.postal,
+                "directoryURL": LeadgenFixture.directory.absoluteString,
+                "paths": LeadgenFixture.paths,
+            ]
+            if let accounts {
+                obj["credentials"] = [
+                    "meComAccountID": accounts.0,
+                    "pharosAccountID": accounts.1,
+                    "meComToken": ["env": "LEADGEN_CF_TOKEN_MECOM"],
+                    "pharosToken": ["env": "LEADGEN_CF_TOKEN_PHAROS"],
+                    "meComReadToken": ["env": "LEADGEN_CF_TOKEN_MECOM_READ"],
+                    "pharosReadToken": ["env": "LEADGEN_CF_TOKEN_PHAROS_READ"],
+                    "gmailToken": ["env": "LEADGEN_GMAIL_TOKEN"],
+                ]
+            }
+            let configURL = dir.appendingPathComponent("leadgen.local.json")
+            try JSONSerialization.data(withJSONObject: obj).write(to: configURL)
+            let env = [
+                "LEADGEN_CONFIG": configURL.path,
+                "LEADGEN_TOKEN_POLICY": policyFile.path,
+                LeadgenTokenProof.readTokenEnvs[0]: "me-read",
+                LeadgenTokenProof.readTokenEnvs[1]: "ph-read",
+            ]
+            let verifier = LeadgenFixedVerifier(byBearer: [
+                "me-read": LeadgenVerifiedToken(id: "id-me", status: "active"),
+                "ph-read": LeadgenVerifiedToken(id: "id-ph", status: "active"),
+            ])
+            try await LeadgenTokenProof.enforce(environment: env, verifier: verifier)
+        }
+        var accountAdmitted = false
+        do {
+            try await prove(policy: scopedReadPolicy(meAccount: me, phAccount: ph), accounts: (me, ph))
+            accountAdmitted = true
+        } catch {}
+        var databaseRefused = false
+        do {
+            try await prove(policy: scopedReadPolicy(meAccount: dbMe, phAccount: dbPh), accounts: (me, ph))
+        } catch { databaseRefused = true }
+        var missingRefused = false
+        do {
+            try await prove(policy: scopedReadPolicy(meAccount: me, phAccount: ph), accounts: nil)
+        } catch { missingRefused = true }
+        var blankRefused = false
+        do {
+            try await prove(policy: scopedReadPolicy(meAccount: me, phAccount: ph), accounts: ("  ", ph))
+        } catch { blankRefused = true }
+        var identicalRefused = false
+        do {
+            try await prove(policy: scopedReadPolicy(meAccount: me, phAccount: me), accounts: (me, me))
+        } catch { identicalRefused = true }
+        try check(accountAdmitted && databaseRefused && missingRefused && blankRefused && identicalRefused,
+            "account scope: admitted=\(accountAdmitted) database-id policy refused=\(databaseRefused) missing refused=\(missingRefused) blank refused=\(blankRefused) identical refused=\(identicalRefused)")
+    }
+
     /// The me.com token's account is right and its permission is D1 Write. PHAROS_READ stays D1 Read.
     static func writeOnMeAccountPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
@@ -2144,6 +2225,9 @@ enum LeadgenSliceTests {
         }))
         cases.append(("A snapshot SELECT on PHAROS sent with that database's write token stops with no draft", {
             try await LeadgenSliceTests.assertSelectNotOnWriteToken(database: "PHAROS", meRead: "me-read", meWrite: "me-write", phRead: "ph-same", phWrite: "ph-same")
+        }))
+        cases.append(("A policy scoped to the configured account ids is admitted, and one scoped to the database ids is refused", {
+            try await LeadgenSliceTests.proveAccountScope()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
