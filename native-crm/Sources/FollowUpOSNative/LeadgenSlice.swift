@@ -561,6 +561,7 @@ enum LeadgenTokenProof {
     static let d1WritePermissionGroupID = "09b2857d1c31407795e75e3fed8617a1"
     static let d1WritePermissionGroupName = "D1 Write"
     static let readTokenEnvs = ["LEADGEN_CF_TOKEN_MECOM_READ", "LEADGEN_CF_TOKEN_PHAROS_READ"]
+    /// D1 database ids. Token permissions are scoped to the Cloudflare account ids in the local config, not to these.
     static let accountIDs = [
         "e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1",
         "959e5bdb-4213-496a-9557-10ec410440d7",
@@ -583,11 +584,16 @@ enum LeadgenTokenProof {
         return saved
     }
 
-    /// Fail closed unless each saved token is exactly D1 Read on its own account, verify's id matches that token, and status is active.
-    static func admit(saved: LeadgenDeclaredPolicy?, verified: [LeadgenVerifiedToken?]) throws {
+    /// Fail closed unless each saved token is exactly D1 Read on the configured account that holds its database, verify's id matches that token, and status is active.
+    static func admit(saved: LeadgenDeclaredPolicy?, verified: [LeadgenVerifiedToken?], accountIDs: [String]) throws {
+        let meAccount = accountIDs.count > 0 ? accountIDs[0].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let phAccount = accountIDs.count > 1 ? accountIDs[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        guard accountIDs.count == 2, !meAccount.isEmpty, !phAccount.isEmpty, meAccount != phAccount else {
+            throw LeadgenError.tokenProof("missing-account")
+        }
         guard let saved, saved.tokens.count == readTokenEnvs.count else { throw LeadgenError.tokenProof("missing-declaration") }
         guard Set(saved.tokens.map(\.env)) == Set(readTokenEnvs) else { throw LeadgenError.tokenProof("missing-declaration") }
-        for (envName, accountID) in zip(readTokenEnvs, accountIDs) {
+        for (envName, accountID) in zip(readTokenEnvs, [meAccount, phAccount]) {
             guard let token = saved.tokens.first(where: { $0.env == envName }) else {
                 throw LeadgenError.tokenProof("missing-declaration")
             }

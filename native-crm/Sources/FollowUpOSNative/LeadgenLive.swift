@@ -126,6 +126,7 @@ struct LeadgenCloudflareTokenVerifier: LeadgenTokenVerifying {
 extension LeadgenTokenProof {
     static func enforce(environment: [String: String], verifier: any LeadgenTokenVerifying) async throws {
         let saved = try load(environment: environment)
+        let accounts = try configuredAccountIDs(environment: environment)
         var verified: [LeadgenVerifiedToken?] = []
         for token in saved.tokens {
             let secret = try bearer(for: token.env, environment: environment)
@@ -133,7 +134,16 @@ extension LeadgenTokenProof {
             catch let error as LeadgenError { throw error }
             catch { throw LeadgenError.tokenProof("unverifiable") }
         }
-        try admit(saved: saved, verified: verified)
+        try admit(saved: saved, verified: verified, accountIDs: accounts)
+    }
+
+    /// Cloudflare account ids from the local config credentials block. The same values the D1 bindings use.
+    static func configuredAccountIDs(environment: [String: String]) throws -> [String] {
+        let path = LeadgenLocalConfig.defaultPath(environment: environment)
+        let config: LeadgenLocalConfig
+        do { config = try LeadgenLocalConfig.load(path: path) } catch { throw LeadgenError.tokenProof("missing-account") }
+        guard let credentials = config.credentials else { throw LeadgenError.tokenProof("missing-account") }
+        return [credentials.meComAccountID, credentials.pharosAccountID]
     }
 
     private static func bearer(for envName: String, environment: [String: String]) throws -> String {

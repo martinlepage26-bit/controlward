@@ -6,12 +6,14 @@ Martin creates the token himself. Nothing in this repo creates or requests a tok
 
 The gitignored file `leadgen.token-policy.json` (template: `leadgen.token-policy.example.json`) holds the token id and its permission list. At startup the live run calls verify and fails closed unless all of these hold, with each saved token checked on its own:
 
-- `LEADGEN_CF_TOKEN_MECOM_READ` grants exactly D1 Read on `e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1` and nothing else
-- `LEADGEN_CF_TOKEN_PHAROS_READ` grants exactly D1 Read on `959e5bdb-4213-496a-9557-10ec410440d7` and nothing else
+- `LEADGEN_CF_TOKEN_MECOM_READ` grants exactly D1 Read on the configured `meComAccountID` and nothing else
+- `LEADGEN_CF_TOKEN_PHAROS_READ` grants exactly D1 Read on the configured `pharosAccountID` and nothing else
 - the id verify returns for that token equals the saved id
 - the status is `active`
 
-Anything else (the two accounts swapped, one token covering both accounts while the other has no grants, a write-scoped declaration, a missing declaration, an inactive or unverifiable token, or an id mismatch) refuses the run before a draft or a row. A snapshot SELECT that would be sent with that database's write token, or a read token equal to that database's write token, also stops the run before a draft or a row.
+Those account ids come from the gitignored local config credentials block, and they are the same values the D1 bindings use. They are Cloudflare account ids, not the D1 database ids. If either account id is missing or blank, or the two are identical, the run fails closed.
+
+Anything else (a grant on a D1 database id, the two accounts swapped, one token covering both accounts while the other has no grants, a write-scoped declaration, a missing declaration, an inactive or unverifiable token, or an id mismatch) refuses the run before a draft or a row. A snapshot SELECT that would be sent with that database's write token, or a read token equal to that database's write token, also stops the run before a draft or a row.
 
 ## Permission groups
 
@@ -24,7 +26,11 @@ Account scope `com.cloudflare.api.account`. Names are the Cloudflare token permi
 
 ## Account ids
 
-| Account | Id |
+`credentials.meComAccountID` and `credentials.pharosAccountID` in the local config. The example file leaves both as placeholders. A saved grant uses the account id, not the database id below.
+
+## Database ids
+
+| Database | Id |
 | --- | --- |
 | me.com | `e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1` |
 | PHAROS | `959e5bdb-4213-496a-9557-10ec410440d7` |

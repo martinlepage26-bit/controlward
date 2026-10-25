@@ -7,7 +7,7 @@
         {
           "id": "192192df92ee43ac90f2aeeffce67e35",
           "name": "D1 Read",
-          "accountID": "e1e9fa25-4c6e-476e-bf16-979c0fd9e5b1"
+          "accountID": "PLACEHOLDER Cloudflare account id, same as credentials.meComAccountID"
         }
       ]
     },
@@ -18,7 +18,7 @@
         {
           "id": "192192df92ee43ac90f2aeeffce67e35",
           "name": "D1 Read",
-          "accountID": "959e5bdb-4213-496a-9557-10ec410440d7"
+          "accountID": "PLACEHOLDER Cloudflare account id, same as credentials.pharosAccountID"
         }
       ]
     }

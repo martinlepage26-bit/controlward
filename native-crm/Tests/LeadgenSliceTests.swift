@@ -582,7 +582,7 @@ enum LeadgenSliceTests {
 
     static func refuseToken(_ saved: LeadgenDeclaredPolicy?, _ verified: [LeadgenVerifiedToken?]) throws {
         do {
-            try LeadgenTokenProof.admit(saved: saved, verified: verified)
+            try LeadgenTokenProof.admit(saved: saved, verified: verified, accountIDs: LeadgenTokenProof.accountIDs)
             throw PortableCheckFailure(description: "token proof admitted a token it must refuse")
         } catch LeadgenError.tokenProof {
             return
@@ -1598,10 +1598,13 @@ enum LeadgenSliceTests {
                 let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, logPath: "mem"))
                 let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-policy-\(UUID().uuidString).json")
                 try JSONEncoder().encode(LeadgenSliceTests.readPolicy()).write(to: policyFile)
-                var env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString)]
+                var env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString, keychain: true)]
                 env["LEADGEN_TOKEN_POLICY"] = policyFile.path
                 env[LeadgenTokenProof.readTokenEnvs[0]] = "me-read"
                 env[LeadgenTokenProof.readTokenEnvs[1]] = "ph-read"
+                env["LEADGEN_CF_TOKEN_MECOM"] = "me-write"
+                env["LEADGEN_CF_TOKEN_PHAROS"] = "ph-write"
+                env["LEADGEN_GMAIL_TOKEN"] = "gmail-token"
                 let verifier = LeadgenFixedVerifier(byBearer: [
                     "me-read": LeadgenVerifiedToken(id: "id-me", status: "active"),
                     "ph-read": LeadgenVerifiedToken(id: "id-ph", status: "active"),
@@ -2163,7 +2166,7 @@ enum LeadgenSliceTests {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [nil, LeadgenVerifiedToken(id: "id-ph", status: "active")])
         }))
         cases.append(("A saved D1-read policy is admitted when verify returns that id and active", {
-            try LeadgenTokenProof.admit(saved: LeadgenSliceTests.readPolicy(), verified: LeadgenSliceTests.activeVerification())
+            try LeadgenTokenProof.admit(saved: LeadgenSliceTests.readPolicy(), verified: LeadgenSliceTests.activeVerification(), accountIDs: LeadgenTokenProof.accountIDs)
             let root = LeadgenFixture.repoRoot
             let example = try String(contentsOf: root.appendingPathComponent("docs/leadgen-slice/leadgen.token-policy.example.json"), encoding: .utf8)
             try check(example.contains(LeadgenTokenProof.d1ReadPermissionGroupID), "example policy has no D1 Read group id")
