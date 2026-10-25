@@ -593,6 +593,33 @@ enum LeadgenSliceTests {
         }
     }
 
+    /// Each token's account is the other token's account. The pooled grant set is still the two D1 Read grants.
+    static func swappedAccountPolicy() -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
+        ])
+    }
+
+    /// One token holds D1 Read on both accounts. The other token has no grants.
+    static func pooledReadPolicy() -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [
+                LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0]),
+                LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1]),
+            ]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: []),
+        ])
+    }
+
+    /// The me.com token's account is right and its permission is D1 Write. PHAROS_READ stays D1 Read.
+    static func writeOnMeAccountPolicy() -> LeadgenDeclaredPolicy {
+        LeadgenDeclaredPolicy(tokens: [
+            LeadgenDeclaredToken(id: "id-me", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1WritePermissionGroupID, name: LeadgenTokenProof.d1WritePermissionGroupName, accountID: LeadgenTokenProof.accountIDs[0])]),
+            LeadgenDeclaredToken(id: "id-ph", env: LeadgenTokenProof.readTokenEnvs[1], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenTokenProof.accountIDs[1])]),
+        ])
+    }
+
     static func emptyFetchedAtRefuses() async throws {
         LeadgenFixture.allowEmptySuppression()
         for clock in ["", "   "] {
@@ -753,6 +780,56 @@ enum LeadgenSliceTests {
         let named = omitted.allSatisfy { name in lines.contains { $0.contains(name) } }
         try check(code == 1 && named && calls.isEmpty && inserts.isEmpty && me.isEmpty && ph.isEmpty && statements == 0 && probe.calls == 0 && launcher.calls == 0,
             "missing \(omitted) still ran: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(me.count + ph.count) d1 \(statements) adapters \(probe.calls) launcher \(launcher.calls)")
+    }
+
+    /// A snapshot SELECT whose bearer is that database's write token, including a read token equal to the write token, must stop before a draft.
+    static func assertSelectNotOnWriteToken(database: String, meRead: String, meWrite: String, phRead: String, phWrite: String) async throws {
+        let sqls = [
+            LeadgenD1Writer.tablesSQL,
+            LeadgenD1Writer.countSQL,
+            LeadgenD1Writer.readBackSQL,
+            LeadgenD1Writer.allRowsSQL("projects"),
+            "SELECT domain FROM projects",
+            "SELECT site FROM leads",
+        ]
+        let pairs = [(meRead, meWrite), (phRead, phWrite)]
+        let sentWithWrite = pairs.contains { pair in
+            let (read, write) = pair
+            return read == write || sqls.contains { LeadgenCloudflareD1.credential(sql: $0, read: read, write: write) == write }
+        }
+        try check(sentWithWrite, "\(database): snapshot SELECT was not the write token")
+        let d1 = LeadgenFakeD1()
+        let mailbox = LeadgenRecordingMailbox()
+        let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "mem"))
+        let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-select-\(UUID().uuidString).json")
+        try JSONEncoder().encode(readPolicy()).write(to: policyFile)
+        defer { try? FileManager.default.removeItem(at: policyFile) }
+        let env = [
+            "LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString, keychain: true),
+            "LEADGEN_TOKEN_POLICY": policyFile.path,
+            "LEADGEN_CF_TOKEN_MECOM_READ": meRead,
+            "LEADGEN_CF_TOKEN_PHAROS_READ": phRead,
+            "LEADGEN_CF_TOKEN_MECOM": meWrite,
+            "LEADGEN_CF_TOKEN_PHAROS": phWrite,
+            "LEADGEN_GMAIL_TOKEN": "gmail-token",
+        ]
+        let verifier = LeadgenFixedVerifier(byBearer: [
+            meRead: LeadgenVerifiedToken(id: "id-me", status: "active"),
+            phRead: LeadgenVerifiedToken(id: "id-ph", status: "active"),
+        ])
+        let (code, lines) = await LeadgenCLI.run(
+            arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation],
+            environment: env,
+            dns: LeadgenMappedDNS(),
+            verifier: verifier,
+            makeLive: probe.make
+        )
+        let calls = await mailbox.calls
+        let inserts = await d1.inserts()
+        let me = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+        let ph = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+        try check(code == 1 && calls.isEmpty && inserts.isEmpty && me.isEmpty && ph.isEmpty,
+            "\(database) write token still drafted: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(me.count + ph.count) adapters \(probe.calls)")
     }
 
     /// A double with no response must fail the case. It must not hold the suite past the bound.
@@ -2049,6 +2126,24 @@ enum LeadgenSliceTests {
         cases.append(("Lead-gen sources do not read the Keychain or start a process outside the launcher", {
             let hits = try LeadgenSliceTests.leadgenProcessViolations()
             try check(hits.isEmpty, "process fallback remains: \(hits)")
+        }))
+        cases.append(("LEADGEN_CF_TOKEN_MECOM_READ and LEADGEN_CF_TOKEN_PHAROS_READ with their accounts swapped are refused", {
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.swappedAccountPolicy(), LeadgenSliceTests.activeVerification())
+        }))
+        cases.append(("One token covering both accounts, with the other token holding no grants, is refused", {
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.pooledReadPolicy(), LeadgenSliceTests.activeVerification())
+        }))
+        cases.append(("A token whose account is right but whose permission is D1 Write is refused", {
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.writeOnMeAccountPolicy(), LeadgenSliceTests.activeVerification())
+        }))
+        cases.append(("A verify id mismatch on PHAROS_READ alone is refused, with the me.com token valid", {
+            try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "id-me", status: "active"), LeadgenVerifiedToken(id: "someone-else", status: "active")])
+        }))
+        cases.append(("A snapshot SELECT on me.com sent with that database's write token stops with no draft", {
+            try await LeadgenSliceTests.assertSelectNotOnWriteToken(database: "me.com", meRead: "me-same", meWrite: "me-same", phRead: "ph-read", phWrite: "ph-write")
+        }))
+        cases.append(("A snapshot SELECT on PHAROS sent with that database's write token stops with no draft", {
+            try await LeadgenSliceTests.assertSelectNotOnWriteToken(database: "PHAROS", meRead: "me-read", meWrite: "me-write", phRead: "ph-same", phWrite: "ph-same")
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
