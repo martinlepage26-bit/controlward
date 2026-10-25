@@ -1038,7 +1038,14 @@ struct LeadgenSliceRunner: Sendable {
         if let directory {
             await log.write("directory \(directory.absoluteString)")
             await log.write("discovery source: \(directory.absoluteString)")
-            let found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now)
+            // TODO: Martin purges a rejected or unsubscribed lead. This slice must not send a Project Control DELETE.
+            let found: LeadgenDiscoveryResult
+            do {
+                found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now)
+            } catch let error as LeadgenError {
+                if case .suppressed(let why) = error { await log.write("suppressed: \(why)") }
+                throw error
+            }
             prospect = found.prospect
             pages = found.pages
             resolvedConsent = found.consent
@@ -1105,6 +1112,8 @@ struct LeadgenSliceRunner: Sendable {
             fitEvidence: {
                 var lines = fit.evidence.map { e in "\(e.url) | \(e.fetchedAt) | \(e.quote)" }
                 if let discovery {
+                    if !prospect.contactName.isEmpty { lines.append("dentist: \(prospect.contactName)") }
+                    lines.append("email: \(prospect.publicContactEmail)")
                     lines.append("\(discovery.directoryURL) | \(discovery.directoryFetchedAt)")
                     lines.append("\(discovery.emailPageURL) | \(discovery.emailFetchedAt)")
                 }
