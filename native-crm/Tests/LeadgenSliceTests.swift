@@ -173,6 +173,12 @@ actor LeadgenFakeD1: LeadgenD1Port {
             let name = sql.dropFirst("SELECT * FROM ".count).replacingOccurrences(of: "\"", with: "")
             return tables[db]?[name] ?? []
         }
+        if sql == "SELECT domain FROM projects" {
+            return (tables[db]?["projects"] ?? []).map { ["domain": $0["domain"] ?? ""] }
+        }
+        if sql == "SELECT site FROM leads" {
+            return (tables[db]?["leads"] ?? []).map { ["site": $0["site"] ?? ""] }
+        }
         if sql.hasPrefix("INSERT INTO leads (") {
             let open = sql.firstIndex(of: "(")!, close = sql.firstIndex(of: ")")!
             let cols = sql[sql.index(after: open)..<close].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -828,10 +834,11 @@ enum LeadgenSliceTests {
         let two = LeadgenFixture.fetcher()
         two.set(directory.absoluteString, status: 200, body: second)
         two.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: second)
-        try await expectError(.notExactlyOneProspect(2)) {
+        try await expectError(.contactNotOnPage("Example Clinic 1")) {
             _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: two, dns: LeadgenMappedDNS())
         }
-        try check(!two.requested.contains { $0.contains("autreclinique") || $0.contains("example-clinic-1.test") }, "more than one prospect was fetched: \(two.requested)")
+        let clinicHosts = Set(two.requested.compactMap { URL(string: $0)?.host }.filter { $0.contains("example-clinic-") || $0.contains("autreclinique") })
+        try check(clinicHosts == Set(["example-clinic-1.test"]), "more than one prospect was fetched: \(two.requested)")
     }
 
     /// Fiche 1 is the first own-site card in page order. Later domains stay unfetched.
@@ -1404,7 +1411,7 @@ enum LeadgenSliceTests {
                 ]
                 try check(fetcher.requested == expectedOrder, "fetch order \(fetcher.requested)")
             }),
-            ("Discovery refuses zero clinics, two clinics, a disallowed directory, and an address that is not on the clinic domain", {
+            ("Discovery picks the first clinic, and refuses maps-only, a disallowed directory, and an address that is not on the clinic domain", {
                 func discover(_ html: String, robots: String = "User-agent: *\nAllow: /\n", robotsStatus: Int = 200, contact: String = "<html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>") async throws -> LeadgenDiscoveryResult {
                     let fetcher = LeadgenFixture.fetcher()
                     fetcher.set("https://dpq.quebec/robots.txt", status: robotsStatus, body: robots)
@@ -1419,7 +1426,11 @@ enum LeadgenSliceTests {
                 <a href="https://www.autreclinique.ca/">Autre Clinique</a>
                 </body></html>
                 """
-                try await expectError(.notExactlyOneProspect(2)) { _ = try await discover(two) }
+                let twoFetcher = LeadgenFixture.fetcher()
+                twoFetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: two)
+                let first = try await LeadgenDiscovery.find(directory: LeadgenFixture.directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: twoFetcher, dns: LeadgenMappedDNS())
+                try check(first.prospect.organization == "Clinique Exemple", "did not pick the first clinic: \(first.prospect.organization)")
+                try check(!twoFetcher.requested.contains { $0.contains("autreclinique") }, "the second clinic was fetched: \(twoFetcher.requested)")
                 let mapsOnly = "<html><body><a href=\"https://maps.google.com/maps?q=clinique\">carte</a></body></html>"
                 try await expectError(.notExactlyOneProspect(0)) { _ = try await discover(mapsOnly) }
                 try await expectError(.robotsDisallowed("/repertoire-des-membres")) {

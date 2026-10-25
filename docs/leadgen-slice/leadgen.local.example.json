@@ -1,6 +1,6 @@
 {
   "directoryURL": "https://dpq.quebec/repertoire-des-membres/",
-  "directoryTODO": "Argus chose this one static HTML page and Water confirmed it. robots.txt allows it. A live run still refuses unless exactly one fiche links the clinic's own website. The installations file was not approved as a source because it has no website or email column.",
+  "directoryTODO": "Argus chose this one static HTML page and Water confirmed it. robots.txt allows it. A live run fetches only the first fiche that passes the directory checks (own site, not on the do-not-contact list, not already in leads or projects). A site-level failure stops the run and does not try the next fiche. The installations file was not approved as a source because it has no website or email column.",
   "postalAddress": "PLACEHOLDER street, city, province, postal code",
   "prospect": {
     "organization": "PLACEHOLDER clinic name",

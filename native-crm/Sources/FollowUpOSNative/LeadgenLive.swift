@@ -313,6 +313,8 @@ struct LeadgenUnusedMailbox: LeadgenDraftMailbox {
 
 struct LeadgenUnusedD1: LeadgenD1Port {
     func query(database: String, sql: String, params: [String]) async throws -> [[String: String]] {
+        let upper = sql.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if upper.hasPrefix("SELECT ") { return [] }
         throw LeadgenError.liveNotAuthorized("dry-run has no database")
     }
 }

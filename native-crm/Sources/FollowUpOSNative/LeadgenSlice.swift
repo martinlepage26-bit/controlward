@@ -735,6 +735,26 @@ struct LeadgenD1Writer: Sendable {
         return (out, hasLeads)
     }
 
+    /// Domains already stored in `projects.domain` or `leads.site` on either database. Read-only.
+    func recordedDomains() async throws -> Set<String> {
+        var stored: Set<String> = []
+        for target in [LeadgenProjectTarget.meCom, .pharos] {
+            let db = target.databaseID
+            let names = Set(try await run(db, Self.tablesSQL).compactMap { $0["name"] })
+            if names.contains("projects") {
+                for row in try await run(db, "SELECT domain FROM projects") {
+                    if let value = row["domain"], !value.isEmpty { stored.insert(value) }
+                }
+            }
+            if names.contains("leads") {
+                for row in try await run(db, "SELECT site FROM leads") {
+                    if let value = row["site"], !value.isEmpty { stored.insert(value) }
+                }
+            }
+        }
+        return stored
+    }
+
     /// Reads the leads count. Callers send an INSERT only after this returns.
     func precheckCount(_ db: String) async throws -> Int {
         guard let n = Int(try await run(db, Self.countSQL).first?["n"] ?? "") else {
@@ -806,7 +826,7 @@ enum LeadgenDiscovery {
         return components.url
     }
 
-    /// Picks external clinics linked from a directory page. Two clinics, or none, is a refusal.
+    /// Picks external clinics linked from a directory page, in page order. The caller fetches the first that passes.
     /// A DPQ fiche page yields the clinic name, the dentist name, and that clinic's own site.
     /// Maps, search, and aggregator links are ignored. A fiche with no own-site link is skipped.
     /// Any other HTML keeps the anchor-text scraper.
@@ -953,12 +973,36 @@ enum LeadgenDiscovery {
         }
     }
 
-    /// Reads the directory page (robots first), picks the one clinic, then reads that clinic's own site.
+    /// Reads the directory page (robots first), picks the first fiche that passes the directory-only checks, then reads that one clinic site.
+    /// A site-level refusal stops the run. The next fiche is not fetched.
     /// The consent source becomes the own-domain page the recipient address was read from.
     /// The only directory host. Any other host, including a redirect target, is refused.
     static let directoryHost = "dpq.quebec"
 
+    static func recordedHost(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        if let host = URL(string: trimmed)?.host, !host.isEmpty { return LeadgenSourcePolicy.normalize(host) }
+        let bare = trimmed.split(separator: "/").first.map(String.init) ?? trimmed
+        return LeadgenSourcePolicy.normalize(bare)
+    }
+
+    static func domainIsRecorded(_ domain: String, in stored: Set<String>) -> Bool {
+        let domain = LeadgenSourcePolicy.normalize(domain)
+        guard !domain.isEmpty else { return false }
+        for raw in stored {
+            let host = recordedHost(raw)
+            if host.isEmpty { continue }
+            if host == domain || HostMatch.belongs(domain, to: host) || HostMatch.belongs(host, to: domain) { return true }
+        }
+        return false
+    }
+
     static func find(directory: URL, paths: [String], consent: LeadgenConsentBasis?, fetcher: LeadgenFetching, dns: any LeadgenResolving, now: @escaping @Sendable () -> String = { ISO8601DateFormatter().string(from: Date()) }) async throws -> LeadgenDiscoveryResult {
+        try await find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now, log: LeadgenDiscardLog(), suppression: SuppressionList(), occupiedDomains: [])
+    }
+
+    static func find(directory: URL, paths: [String], consent: LeadgenConsentBasis?, fetcher: LeadgenFetching, dns: any LeadgenResolving, now: @escaping @Sendable () -> String, log: any LeadgenRunLog, suppression: SuppressionList, occupiedDomains: Set<String>) async throws -> LeadgenDiscoveryResult {
         let host = LeadgenSourcePolicy.normalize(directory.host ?? "")
         guard host == directoryHost else { throw LeadgenError.hostNotAllowed(host) }
         guard let origin = origin(of: directory) else { throw LeadgenError.unsafeURL("directory has no host") }
@@ -971,26 +1015,50 @@ enum LeadgenDiscovery {
             throw LeadgenError.fetchFailed(directory.absoluteString)
         }
         let found = clinics(in: page.html, directory: directory)
-        guard found.count == 1, let clinic = found.first else { throw LeadgenError.notExactlyOneProspect(found.count) }
-        let siteReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [clinic.site.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
-        let pages = try await siteReader.read(site: clinic.site, paths: paths)
-        let domain = LeadgenSourcePolicy.normalize(clinic.site.host ?? "")
-        let own = pages.filter { LeadgenSourcePolicy.normalize($0.url.host ?? "") == domain }
-        let chosen = try publishedEmail(on: own, domain: domain, clinic: clinic.name)
-        let prospect = LeadgenProspect(organization: clinic.name, segment: LeadgenProspectPicker.segment, site: clinic.site, publicContactEmail: chosen.email, contactName: clinic.dentist)
-        let proven: LeadgenConsentBasis?
-        if let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty, !consent.recordedAt.isEmpty {
-            proven = LeadgenConsentBasis(basis: consent.basis, source: chosen.url, recordedAt: consent.recordedAt)
-        } else {
-            proven = nil
+        for (index, clinic) in found.enumerated() {
+            let position = index + 1
+            let domain = LeadgenSourcePolicy.normalize(clinic.site.host ?? "")
+            if clinic.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || domain.isEmpty { continue }
+            if LeadgenSuppression.reason(address: "", siteHost: domain, list: suppression) != nil {
+                await log.write("fiche \(position) skipped: do-not-contact \(domain)")
+                continue
+            }
+            if domainIsRecorded(domain, in: occupiedDomains) {
+                await log.write("fiche \(position) skipped: already recorded \(domain)")
+                continue
+            }
+            await log.write("fiche \(position) \(clinic.name)")
+            let siteReader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [clinic.site.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
+            do {
+                let pages = try await siteReader.read(site: clinic.site, paths: paths)
+                let own = pages.filter { LeadgenSourcePolicy.normalize($0.url.host ?? "") == domain }
+                let chosen = try publishedEmail(on: own, domain: domain, clinic: clinic.name)
+                let prospect = LeadgenProspect(organization: clinic.name, segment: LeadgenProspectPicker.segment, site: clinic.site, publicContactEmail: chosen.email, contactName: clinic.dentist)
+                let proven: LeadgenConsentBasis?
+                if let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty, !consent.recordedAt.isEmpty {
+                    proven = LeadgenConsentBasis(basis: consent.basis, source: chosen.url, recordedAt: consent.recordedAt)
+                } else {
+                    proven = nil
+                }
+                await log.write("evidence \(page.url.absoluteString)")
+                await log.write("evidence \(chosen.url)")
+                let fetched = await directoryReader.fetchedURLs + siteReader.fetchedURLs
+                let emailFetchedAt = own.first { $0.url.absoluteString == chosen.url }?.fetchedAt ?? ""
+                return LeadgenDiscoveryResult(
+                    prospect: prospect, pages: pages, consent: proven, fetchedURLs: fetched,
+                    directoryURL: page.url.absoluteString, directoryFetchedAt: page.fetchedAt,
+                    emailPageURL: chosen.url, emailFetchedAt: emailFetchedAt)
+            } catch {
+                await log.write("fiche \(position) refused: \(error)")
+                throw error
+            }
         }
-        let fetched = await directoryReader.fetchedURLs + siteReader.fetchedURLs
-        let emailFetchedAt = own.first { $0.url.absoluteString == chosen.url }?.fetchedAt ?? ""
-        return LeadgenDiscoveryResult(
-            prospect: prospect, pages: pages, consent: proven, fetchedURLs: fetched,
-            directoryURL: page.url.absoluteString, directoryFetchedAt: page.fetchedAt,
-            emailPageURL: chosen.url, emailFetchedAt: emailFetchedAt)
+        throw LeadgenError.notExactlyOneProspect(0)
     }
+}
+
+struct LeadgenDiscardLog: LeadgenRunLog {
+    func write(_ line: String) async {}
 }
 
 // MARK: Runner
@@ -1036,13 +1104,22 @@ struct LeadgenSliceRunner: Sendable {
         let resolvedConsent: LeadgenConsentBasis?
         let fetched: [String]
         let discovery: LeadgenDiscoveryResult?
+        let directorySuppression: SuppressionList?
         if let directory {
             await log.write("directory \(directory.absoluteString)")
             await log.write("discovery source: \(directory.absoluteString)")
             // TODO: Martin purges a rejected or unsubscribed lead. This slice must not send a Project Control DELETE.
+            let suppression: SuppressionList
+            do { suppression = try activeSuppression() }
+            catch {
+                await log.write("suppression refused: \(error)")
+                throw error
+            }
+            directorySuppression = suppression
+            let occupied = try await LeadgenD1Writer(port: d1, log: log).recordedDomains()
             let found: LeadgenDiscoveryResult
             do {
-                found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now)
+                found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now, log: log, suppression: suppression, occupiedDomains: occupied)
             } catch let error as LeadgenError {
                 if case .suppressed(let why) = error { await log.write("suppressed: \(why)") }
                 throw error
@@ -1053,6 +1130,7 @@ struct LeadgenSliceRunner: Sendable {
             fetched = found.fetchedURLs
             discovery = found
         } else {
+            directorySuppression = nil
             discovery = nil
             prospect = try LeadgenProspectPicker.pickOne(candidates)
             let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: [prospect.site.host ?? ""]), fetcher: fetcher, dns: dns, now: now)
@@ -1061,10 +1139,14 @@ struct LeadgenSliceRunner: Sendable {
             fetched = await reader.fetchedURLs
         }
         let suppression: SuppressionList
-        do { suppression = try activeSuppression() }
-        catch {
-            await log.write("suppression refused: \(error)")
-            throw error
+        if let directorySuppression {
+            suppression = directorySuppression
+        } else {
+            do { suppression = try activeSuppression() }
+            catch {
+                await log.write("suppression refused: \(error)")
+                throw error
+            }
         }
         if let why = LeadgenSuppression.reason(address: prospect.publicContactEmail, siteHost: prospect.site.host ?? "", list: suppression) {
             await log.write("suppressed: \(why)")
