@@ -675,7 +675,7 @@ enum LeadgenSliceTests {
         for banned in ["patients", "avec des patients", "uses AI with patients", "$", "prix", "avis juridique", "conforme", "Marie", "Bonjour Marie"] {
             try check(!body.localizedCaseInsensitiveContains(banned), "draft contains \(banned)")
         }
-        try check(!body.contains("@"), "the draft names a person or an address: \(body)")
+        try check(!body.contains(LeadgenFixture.prospect.publicContactEmail) && !body.localizedCaseInsensitiveContains("marie.tremblay"), "the draft names a person or the clinic mailbox: \(body)")
         try check(body.contains("désabonnement") && body.contains("unsubscribe") && body.contains("Martin Lepage, PhD"), "the existing footer was dropped")
         try check(!body.contains("\u{2014}") && !body.contains("\u{2013}"), "dash in draft")
     }

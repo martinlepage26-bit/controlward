@@ -502,9 +502,9 @@ enum LeadgenDraftComposer {
         let body = """
         Bonjour,
 
-        J'ai lu sur votre site : « \(quote) »
+        \(prospect.organization) indique sur son site : « \(quote) »
 
-        Quand une clinique utilise l'IA avec des renseignements de santé, la Loi 25 demande une évaluation des facteurs relatifs à la vie privée et un avis lorsqu'une décision est automatisée. J'aide les cliniques à mettre cela en place simplement, sans freiner l'outil.
+        La gouvernance de l'IA et les obligations de la Loi 25 pour les renseignements de santé concernent la clinique. Quand une clinique utilise l'IA avec des renseignements de santé, la Loi 25 demande une évaluation des facteurs relatifs à la vie privée et un avis lorsqu'une décision est automatisée. J'aide la clinique à mettre cela en place simplement, sans freiner l'outil.
 
         Seriez-vous ouverts à un appel de 20 minutes dans les prochaines semaines?
 
