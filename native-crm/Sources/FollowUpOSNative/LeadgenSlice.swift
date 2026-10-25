@@ -294,6 +294,8 @@ struct LeadgenProspect: Sendable, Equatable {
     let segment: String
     let site: URL
     let publicContactEmail: String
+    /// Dentist name taken from a directory fiche. Empty when the page is not a fiche.
+    var contactName: String = ""
 }
 
 enum LeadgenProspectPicker {
@@ -798,8 +800,74 @@ enum LeadgenDiscovery {
         return components.url
     }
 
-    /// Picks the one external clinic linked from a directory page. Two clinics, or none, is a refusal.
-    static func clinics(in html: String, directory: URL) -> [(name: String, site: URL)] {
+    /// Picks external clinics linked from a directory page. Two clinics, or none, is a refusal.
+    /// A DPQ fiche page yields the clinic name, the dentist name, and that clinic's own site.
+    /// Maps, search, and aggregator links are ignored. A fiche with no own-site link is skipped.
+    /// Any other HTML keeps the anchor-text scraper.
+    static func clinics(in html: String, directory: URL) -> [(name: String, site: URL, dentist: String)] {
+        if html.contains("dpqr-fiche") { return fiches(in: html, directory: directory) }
+        return anchorClinics(in: html, directory: directory).map { (name: $0.name, site: $0.site, dentist: "") }
+    }
+
+    static func fiches(in html: String, directory: URL) -> [(name: String, site: URL, dentist: String)] {
+        let pattern = "<article\\b[^>]*\\bdpqr-fiche\\b[^>]*>[\\s\\S]*?</article>"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        var byDomain: [String: (name: String, site: URL, dentist: String)] = [:]
+        var order: [String] = []
+        for match in expression.matches(in: html, range: range) {
+            guard let articleRange = Range(match.range, in: html) else { continue }
+            let article = String(html[articleRange])
+            guard let site = ownSite(in: article, directory: directory) else { continue }
+            let domain = LeadgenSourcePolicy.normalize(site.host ?? "")
+            let clinic = elementText(article, tag: "p", className: "dpqr-clinique")
+            let dentist = elementText(article, tag: "h3", className: "dpqr-nom")
+            let label = clinic.isEmpty ? domain : clinic
+            if byDomain[domain] == nil {
+                byDomain[domain] = (label, site, dentist)
+                order.append(domain)
+            }
+        }
+        return order.compactMap { byDomain[$0] }
+    }
+
+    /// First https link in a fiche that is the clinic's own site. Maps, search, aggregators, and the directory host are not it.
+    static func ownSite(in html: String, directory: URL) -> URL? {
+        let directoryHost = LeadgenSourcePolicy.normalize(directory.host ?? "")
+        let pattern = "<a\\b[^>]*?href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(html.startIndex..., in: html)
+        for match in expression.matches(in: html, range: range) {
+            guard let hrefRange = Range(match.range(at: 1), in: html) else { continue }
+            let href = decodeHref(String(html[hrefRange])).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let url = URL(string: href, relativeTo: directory)?.absoluteURL, let host = url.host, !host.isEmpty else { continue }
+            let domain = LeadgenSourcePolicy.normalize(host)
+            if domain == directoryHost || domain.isEmpty { continue }
+            if HostSafety.refusal(url: url, resolvedAddresses: nil) != nil { continue }
+            if LeadgenSourcePolicy.blockedHostFragments.contains(where: { domain.contains($0) }) { continue }
+            if skipHostFragments.contains(where: { domain.contains($0) }) { continue }
+            let path = url.path.lowercased()
+            if path.contains("/maps") || path.contains("/search") { continue }
+            return origin(of: url)
+        }
+        return nil
+    }
+
+    static func decodeHref(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "&#038;", with: "&")
+            .replacingOccurrences(of: "&#38;", with: "&")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    static func elementText(_ html: String, tag: String, className: String) -> String {
+        let pattern = "<\(tag)\\b[^>]*class\\s*=\\s*[\"'][^\"']*\\b\(className)\\b[^\"']*[\"'][^>]*>([\\s\\S]*?)</\(tag)>"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let textRange = Range(match.range(at: 1), in: html) else { return "" }
+        return visibleText(String(html[textRange]))
+    }
+
+    static func anchorClinics(in html: String, directory: URL) -> [(name: String, site: URL)] {
         let directoryHost = LeadgenSourcePolicy.normalize(directory.host ?? "")
         let pattern = "<a\\b[^>]*?href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)</a>"
         guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
@@ -810,7 +878,7 @@ enum LeadgenDiscovery {
             guard match.numberOfRanges == 3,
                   let hrefRange = Range(match.range(at: 1), in: html),
                   let textRange = Range(match.range(at: 2), in: html) else { continue }
-            let href = String(html[hrefRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let href = decodeHref(String(html[hrefRange])).trimmingCharacters(in: .whitespacesAndNewlines)
             guard let url = URL(string: href, relativeTo: directory)?.absoluteURL,
                   let host = url.host, !host.isEmpty else { continue }
             let domain = LeadgenSourcePolicy.normalize(host)
@@ -875,7 +943,7 @@ enum LeadgenDiscovery {
             if chosen != nil { break }
         }
         guard let chosen else { throw LeadgenError.contactNotOnPage(clinic.name) }
-        let prospect = LeadgenProspect(organization: clinic.name, segment: LeadgenProspectPicker.segment, site: clinic.site, publicContactEmail: chosen.email)
+        let prospect = LeadgenProspect(organization: clinic.name, segment: LeadgenProspectPicker.segment, site: clinic.site, publicContactEmail: chosen.email, contactName: clinic.dentist)
         let proven: LeadgenConsentBasis?
         if let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty, !consent.recordedAt.isEmpty {
             proven = LeadgenConsentBasis(basis: consent.basis, source: chosen.url, recordedAt: consent.recordedAt)
