@@ -46,6 +46,18 @@ private struct LeadgenFixedVerifier: LeadgenTokenVerifying {
     }
 }
 
+private final class LeadgenCountingVerifier: LeadgenTokenVerifying, @unchecked Sendable {
+    let inner: LeadgenFixedVerifier
+    private let lock = NSLock()
+    private var n = 0
+    init(inner: LeadgenFixedVerifier) { self.inner = inner }
+    var calls: Int { lock.withLock { n } }
+    func verify(bearer: String) async throws -> LeadgenVerifiedToken {
+        lock.withLock { n += 1 }
+        return try await inner.verify(bearer: bearer)
+    }
+}
+
 private func check(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
     try PortableCheck.expect(try condition(), message)
 }
@@ -308,8 +320,8 @@ enum LeadgenFixture {
         if let directory { obj["directoryURL"] = directory }
         if keychain {
             obj["credentials"] = [
-                "meComAccountID": LeadgenTokenProof.accountIDs[0],
-                "pharosAccountID": LeadgenTokenProof.accountIDs[1],
+                "meComAccountID": LeadgenSliceTests.hexAccountIDs[0],
+                "pharosAccountID": LeadgenSliceTests.hexAccountIDs[1],
                 "meComToken": ["env": "LEADGEN_CF_TOKEN_MECOM", "keychainService": "controlward.leadgen.cf.mecom"],
                 "pharosToken": ["env": "LEADGEN_CF_TOKEN_PHAROS", "keychainService": "controlward.leadgen.cf.pharos"],
                 "meComReadToken": ["env": "LEADGEN_CF_TOKEN_MECOM_READ", "keychainService": "controlward.leadgen.cf.mecom.read"],
@@ -691,6 +703,80 @@ enum LeadgenSliceTests {
         } catch { identicalRefused = true }
         try check(accountAdmitted && databaseRefused && missingRefused && blankRefused && identicalRefused,
             "account scope: admitted=\(accountAdmitted) database-id policy refused=\(databaseRefused) missing refused=\(missingRefused) blank refused=\(blankRefused) identical refused=\(identicalRefused)")
+    }
+
+    /// 32 lowercase hex. Not Martin's account ids, and not the D1 database ids.
+    static let hexAccountIDs = [
+        "a4c0e1d27b3f4c918e560d9a2b4c6e81",
+        "b7d91e042a6c4f389c156e8d0a1b3f72",
+    ]
+
+    /// Startup must refuse a configured account id that is a D1 database id or not 32 lowercase hex, before verify.
+    static func assertAccountIDShape(me: String, ph: String, refusal: String?) async throws {
+        let d1 = LeadgenFakeD1()
+        let mailbox = LeadgenRecordingMailbox()
+        let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "mem"))
+        let launcher = LeadgenCountingLauncher()
+        let verifier = LeadgenCountingVerifier(inner: LeadgenFixedVerifier(byBearer: [
+            "me-read": LeadgenVerifiedToken(id: "id-me", status: "active"),
+            "ph-read": LeadgenVerifiedToken(id: "id-ph", status: "active"),
+        ]))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-shape-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let policyFile = dir.appendingPathComponent("policy.json")
+        try JSONEncoder().encode(scopedReadPolicy(meAccount: me, phAccount: ph)).write(to: policyFile)
+        let config: [String: Any] = [
+            "postalAddress": LeadgenFixture.postal,
+            "directoryURL": LeadgenFixture.directory.absoluteString,
+            "paths": LeadgenFixture.paths,
+            "consent": [
+                "basis": LeadgenFixture.consent.basis,
+                "source": LeadgenFixture.consent.source,
+                "recordedAt": LeadgenFixture.consent.recordedAt,
+            ],
+            "credentials": [
+                "meComAccountID": me,
+                "pharosAccountID": ph,
+                "meComToken": ["env": "LEADGEN_CF_TOKEN_MECOM"],
+                "pharosToken": ["env": "LEADGEN_CF_TOKEN_PHAROS"],
+                "meComReadToken": ["env": "LEADGEN_CF_TOKEN_MECOM_READ"],
+                "pharosReadToken": ["env": "LEADGEN_CF_TOKEN_PHAROS_READ"],
+                "gmailToken": ["env": "LEADGEN_GMAIL_TOKEN"],
+            ],
+        ]
+        let configURL = dir.appendingPathComponent("leadgen.local.json")
+        try JSONSerialization.data(withJSONObject: config).write(to: configURL)
+        let env = [
+            "LEADGEN_CONFIG": configURL.path,
+            "LEADGEN_TOKEN_POLICY": policyFile.path,
+            "LEADGEN_CF_TOKEN_MECOM_READ": "me-read",
+            "LEADGEN_CF_TOKEN_PHAROS_READ": "ph-read",
+            "LEADGEN_CF_TOKEN_MECOM": "me-write",
+            "LEADGEN_CF_TOKEN_PHAROS": "ph-write",
+            "LEADGEN_GMAIL_TOKEN": "gmail-token",
+        ]
+        let (code, lines) = await LeadgenCLI.run(
+            arguments: ["--live", "--confirm", LeadgenRunConfig.confirmation],
+            environment: env,
+            dns: LeadgenMappedDNS(),
+            verifier: verifier,
+            launcher: launcher,
+            makeLive: probe.make
+        )
+        let calls = await mailbox.calls
+        let inserts = await d1.inserts()
+        let rows = await d1.rows(LeadgenProjectTarget.meCom.databaseID, "leads")
+        let phRows = await d1.rows(LeadgenProjectTarget.pharos.databaseID, "leads")
+        let statements = await d1.statementCount()
+        if let refusal {
+            let line = "live run stopped: \(refusal)"
+            try check(code == 1 && lines == [line] && calls.isEmpty && inserts.isEmpty && rows.isEmpty && phRows.isEmpty && statements == 0 && probe.calls == 0 && launcher.calls == 0 && verifier.calls == 0,
+                "\(refusal) still ran: exit \(code) lines \(lines) gmail \(calls.count) inserts \(inserts.count) rows \(rows.count + phRows.count) d1 \(statements) adapters \(probe.calls) launcher \(launcher.calls) verify \(verifier.calls)")
+        } else {
+            try check(code == 0 && calls == ["createDraft"] && rows.count == 1 && phRows.count == 1 && verifier.calls == 2,
+                "valid account ids were not admitted: exit \(code) lines \(lines) gmail \(calls.count) rows \(rows.count + phRows.count) verify \(verifier.calls)")
+        }
     }
 
     /// The me.com token's account is right and its permission is D1 Write. PHAROS_READ stays D1 Read.
@@ -1597,7 +1683,7 @@ enum LeadgenSliceTests {
                 let mailbox = LeadgenOrderMailbox(d1: d1)
                 let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: LeadgenFixture.fetcher(), mailbox: mailbox, d1: d1, log: log, logPath: "mem"))
                 let policyFile = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-policy-\(UUID().uuidString).json")
-                try JSONEncoder().encode(LeadgenSliceTests.readPolicy()).write(to: policyFile)
+                try JSONEncoder().encode(LeadgenSliceTests.scopedReadPolicy(meAccount: LeadgenSliceTests.hexAccountIDs[0], phAccount: LeadgenSliceTests.hexAccountIDs[1])).write(to: policyFile)
                 var env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString, keychain: true)]
                 env["LEADGEN_TOKEN_POLICY"] = policyFile.path
                 env[LeadgenTokenProof.readTokenEnvs[0]] = "me-read"
@@ -2231,6 +2317,29 @@ enum LeadgenSliceTests {
         }))
         cases.append(("A policy scoped to the configured account ids is admitted, and one scoped to the database ids is refused", {
             try await LeadgenSliceTests.proveAccountScope()
+        }))
+        let dbMe = LeadgenProjectTarget.meCom.databaseID
+        let dbPh = LeadgenProjectTarget.pharos.databaseID
+        let hexMe = LeadgenSliceTests.hexAccountIDs[0]
+        let hexPh = LeadgenSliceTests.hexAccountIDs[1]
+        for (field, me, ph, value) in [
+            ("meComAccountID", dbMe, hexPh, dbMe),
+            ("meComAccountID", dbPh, hexPh, dbPh),
+            ("pharosAccountID", hexMe, dbMe, dbMe),
+            ("pharosAccountID", hexMe, dbPh, dbPh),
+            ("meComAccountID", dbMe.replacingOccurrences(of: "-", with: ""), hexPh, "undashed \(dbMe)"),
+            ("pharosAccountID", hexMe, dbPh.uppercased(), "uppercased \(dbPh)"),
+        ] {
+            let refusal = "\(field) is a D1 database id, not an account id"
+            cases.append(("\(field) set to \(value) is refused before verify", {
+                try await LeadgenSliceTests.assertAccountIDShape(me: me, ph: ph, refusal: refusal)
+            }))
+        }
+        cases.append(("A dashed UUID in meComAccountID is refused before verify", {
+            try await LeadgenSliceTests.assertAccountIDShape(me: "a4c0e1d2-7b3f-4c91-8e56-0d9a2b4c6e81", ph: hexPh, refusal: "meComAccountID is not a Cloudflare account id")
+        }))
+        cases.append(("Two valid 32-hex Cloudflare account ids are admitted", {
+            try await LeadgenSliceTests.assertAccountIDShape(me: hexMe, ph: hexPh, refusal: nil)
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
