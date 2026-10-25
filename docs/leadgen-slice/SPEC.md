@@ -8,8 +8,8 @@ Nothing merges, deploys, or runs live without Martin's first-hand OK.
 ControlWard itself (Swift, `native-crm`, not an agent) finds ONE prospect from public
 websites only, in ONE segment (Montréal clinics), records why it fits AI governance,
 saves ONE first-email DRAFT in ml@pharos-ai.ca's Gmail, and adds ONE lead row marked
-as waiting on Martin to BOTH Project Control D1 databases: `e1e9fa25` (me.com account)
-and `959e5bdb` (PHAROS account).
+as waiting on Martin to BOTH Project Control D1 databases: `e1e9fa25` (me.com database)
+and `959e5bdb` (PHAROS database).
 
 ## Water's seven points
 
