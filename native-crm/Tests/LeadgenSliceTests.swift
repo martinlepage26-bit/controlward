@@ -674,8 +674,16 @@ enum LeadgenSliceTests {
         let picked = try await discover(contact: both)
         try check(picked.prospect.publicContactEmail == "info@cliniqueexemple.ca", "a personal address was chosen: \(picked.prospect.publicContactEmail)")
         let personal = "<html><body><main><p>Écrivez à marie.tremblay@cliniqueexemple.ca.</p></main></body></html>"
-        let solo = try await discover(contact: personal)
-        try check(solo.prospect.publicContactEmail == "marie.tremblay@cliniqueexemple.ca", "the only published address was dropped: \(solo.prospect.publicContactEmail)")
+        try await expectError(.noRoleAddress("Clinique Exemple")) { _ = try await discover(contact: personal) }
+        let subdomain = "<html><body><main><p>Écrivez à info@mail.cliniqueexemple.ca.</p></main></body></html>"
+        let sub = try await discover(contact: subdomain)
+        try check(sub.prospect.publicContactEmail == "info@mail.cliniqueexemple.ca", "a role address on a subdomain was dropped: \(sub.prospect.publicContactEmail)")
+        let french = "<html><body><main><p>Écrivez à administration@cliniqueexemple.ca.</p></main></body></html>"
+        let admin = try await discover(contact: french)
+        try check(admin.prospect.publicContactEmail == "administration@cliniqueexemple.ca", "administration@ was dropped: \(admin.prospect.publicContactEmail)")
+        try await expectError(.noRoleAddress("Clinique Exemple")) {
+            _ = try await discover(contact: "<html><body><main><p>Écrivez à info@exemple.ca.</p></main></body></html>")
+        }
         for phrase in ["pas de sollicitation", "aucune sollicitation", "No Solicitation"] {
             let page = "<html><body><main><p>Écrivez à info@cliniqueexemple.ca.</p><p>\(phrase).</p></main></body></html>"
             do {
@@ -688,7 +696,7 @@ enum LeadgenSliceTests {
                 throw PortableCheckFailure(description: "accepted a page that says \(phrase)")
             }
         }
-        try await expectError(.contactNotOnPage("Clinique Exemple")) {
+        try await expectError(.noRoleAddress("Clinique Exemple")) {
             _ = try await discover(contact: "<html><body><main><p>Écrivez-nous par le formulaire. info chez cliniqueexemple.ca</p></main></body></html>")
         }
     }
@@ -834,7 +842,7 @@ enum LeadgenSliceTests {
         let two = LeadgenFixture.fetcher()
         two.set(directory.absoluteString, status: 200, body: second)
         two.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: second)
-        try await expectError(.contactNotOnPage("Example Clinic 1")) {
+        try await expectError(.noRoleAddress("Example Clinic 1")) {
             _ = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: two, dns: LeadgenMappedDNS())
         }
         let clinicHosts = Set(two.requested.compactMap { URL(string: $0)?.host }.filter { $0.contains("example-clinic-") || $0.contains("autreclinique") })
@@ -1462,7 +1470,7 @@ enum LeadgenSliceTests {
                 try await expectError(.robotsDisallowed("/")) {
                     _ = try await discover("<html></html>", robots: "", robotsStatus: 503)
                 }
-                try await expectError(.contactNotOnPage("Clinique Exemple")) {
+                try await expectError(.noRoleAddress("Clinique Exemple")) {
                     _ = try await discover(
                         "<html><body><a href=\"https://www.cliniqueexemple.ca/\">Clinique Exemple</a></body></html>",
                         contact: "<html><body><main><p>Écrivez à bureau@gmail.com.</p></main></body></html>")

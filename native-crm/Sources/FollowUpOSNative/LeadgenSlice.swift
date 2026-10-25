@@ -34,6 +34,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
     case credentialMissing(String)
     case unsafeURL(String)
     case contactNotOnPage(String)
+    case noRoleAddress(String)
     case consentSourceNotFetched(String)
     case suppressed(String)
     case suppressionUnavailable(String)
@@ -69,6 +70,7 @@ enum LeadgenError: Error, Equatable, CustomStringConvertible {
         case .credentialMissing(let ref): "credential not found: \(ref) (env or Keychain reference only)"
         case .unsafeURL(let why): "url refused: \(why)"
         case .contactNotOnPage(let email): "recipient \(email) was not found on a page fetched from the clinic's own domain"
+        case .noRoleAddress(let clinic): "noRoleAddress: \(clinic)"
         case .consentSourceNotFetched(let url): "consent source was not a page fetched from the clinic's own domain: \(url)"
         case .suppressed(let why): "suppressed: \(why)"
         case .suppressionUnavailable(let why): "do-not-contact list unavailable: \(why)"
@@ -929,15 +931,27 @@ enum LeadgenDiscovery {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Role and clinic mailboxes. A personal address is used only when no role address is published.
+    /// The whole allowlist. A published address is accepted only when its local-part is one of these
+    /// and its domain is the clinic's own domain or a subdomain of it. A personal address is never used.
+    /// English: info, contact, reception, admin, office, hello, appointments.
+    /// French: accueil, administration, bureau, clinique, clinic, rendezvous, secretariat, secretaire, bonjour.
     static let roleLocals: Set<String> = [
-        "info", "contact", "reception", "accueil", "bureau", "admin", "office", "hello", "bonjour",
-        "clinique", "clinic", "secretariat", "secretaire", "rendezvous", "appointments",
+        "info", "contact", "reception", "admin",
+        "accueil", "administration", "bureau", "clinique", "rendezvous",
+        "office", "hello", "bonjour", "clinic", "secretariat", "secretaire", "appointments",
     ]
     static let noSolicitPhrases = ["no solicitation", "pas de sollicitation", "aucune sollicitation"]
 
-    /// Own-domain address published in the page body. Never constructs an address.
-    /// No-solicitation wording on the fetched page refuses the entry.
+    /// Role address published in the page body, on the clinic's domain or a subdomain of it.
+    /// Never constructs an address. No-solicitation wording refuses the entry.
+    /// A personal address, or no role address, refuses with `noRoleAddress`.
+    static func onClinicDomain(_ emailDomain: String, clinicDomain: String) -> Bool {
+        let emailDomain = LeadgenSourcePolicy.normalize(emailDomain)
+        let clinicDomain = LeadgenSourcePolicy.normalize(clinicDomain)
+        guard !emailDomain.isEmpty, !clinicDomain.isEmpty else { return false }
+        return HostMatch.belongs(emailDomain, to: clinicDomain)
+    }
+
     static func publishedEmail(on pages: [LeadgenPage], domain: String, clinic: String) throws -> (email: String, url: String) {
         for page in pages {
             let visible = (page.bodyText + "\n" + page.html).lowercased()
@@ -946,22 +960,16 @@ enum LeadgenDiscovery {
             }
         }
         var role: (email: String, url: String)?
-        var personal: (email: String, url: String)?
         for page in pages {
             for email in emails(in: page.bodyText) {
-                guard MailAddress.domain(email).map({ LeadgenSourcePolicy.normalize($0) == domain }) == true else { continue }
+                guard let emailDomain = MailAddress.domain(email), onClinicDomain(emailDomain, clinicDomain: domain) else { continue }
                 let local = email.split(separator: "@").first.map { String($0) } ?? ""
-                let hit = (email, page.url.absoluteString)
-                if roleLocals.contains(local) {
-                    if role == nil { role = hit }
-                } else if personal == nil {
-                    personal = hit
-                }
+                guard roleLocals.contains(local) else { continue }
+                if role == nil { role = (email, page.url.absoluteString) }
             }
         }
         if let role { return role }
-        if let personal { return personal }
-        throw LeadgenError.contactNotOnPage(clinic)
+        throw LeadgenError.noRoleAddress(clinic)
     }
 
     static func emails(in text: String) -> [String] {
