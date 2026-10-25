@@ -599,6 +599,43 @@ enum LeadgenSliceTests {
         try check(!fetcher.requested.contains { $0.contains("google") || $0.contains("maps") || $0.contains("pagesjaunes") }, "a maps or aggregator URL was fetched: \(fetcher.requested)")
     }
 
+    /// The address is one published on the clinic's own site. A role mailbox wins. No-solicitation wording, or no address, refuses the entry.
+    static func roleEmailOnly() async throws {
+        func discover(contact: String) async throws -> LeadgenDiscoveryResult {
+            let fetcher = LeadgenFixture.fetcher()
+            let html = "<html><body><a href=\"https://www.cliniqueexemple.ca/\">Clinique Exemple</a></body></html>"
+            fetcher.set(LeadgenFixture.directory.absoluteString, status: 200, body: html)
+            fetcher.set("https://www.cliniqueexemple.ca/contact", status: 200, body: contact)
+            return try await LeadgenDiscovery.find(directory: LeadgenFixture.directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+        }
+        let both = """
+        <html><body><main>
+        <p>Marie Tremblay marie.tremblay@cliniqueexemple.ca</p>
+        <p>Réception info@cliniqueexemple.ca</p>
+        </main></body></html>
+        """
+        let picked = try await discover(contact: both)
+        try check(picked.prospect.publicContactEmail == "info@cliniqueexemple.ca", "a personal address was chosen: \(picked.prospect.publicContactEmail)")
+        let personal = "<html><body><main><p>Écrivez à marie.tremblay@cliniqueexemple.ca.</p></main></body></html>"
+        let solo = try await discover(contact: personal)
+        try check(solo.prospect.publicContactEmail == "marie.tremblay@cliniqueexemple.ca", "the only published address was dropped: \(solo.prospect.publicContactEmail)")
+        for phrase in ["pas de sollicitation", "aucune sollicitation", "No Solicitation"] {
+            let page = "<html><body><main><p>Écrivez à info@cliniqueexemple.ca.</p><p>\(phrase).</p></main></body></html>"
+            do {
+                _ = try await discover(contact: page)
+                throw PortableCheckFailure(description: "accepted a page that says \(phrase)")
+            } catch let error as LeadgenError {
+                guard case .suppressed(let why) = error else { throw PortableCheckFailure(description: "\(phrase) threw \(error)") }
+                try check(why.lowercased().contains("sollicit") || why.lowercased().contains("solicit"), "reason did not name the wording: \(why)")
+            } catch is PortableCheckFailure {
+                throw PortableCheckFailure(description: "accepted a page that says \(phrase)")
+            }
+        }
+        try await expectError(.contactNotOnPage("Clinique Exemple")) {
+            _ = try await discover(contact: "<html><body><main><p>Écrivez-nous par le formulaire. info chez cliniqueexemple.ca</p></main></body></html>")
+        }
+    }
+
     static func run() async -> Bool {
         LeadgenFixture.allowEmptySuppression()
         let head = await PortableCheck.suite("Lead-gen slice 1", headCases())
@@ -1391,6 +1428,7 @@ enum LeadgenSliceTests {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "someone-else", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
         }))
         cases.append(("DPQ discovery keeps the clinic name, the dentist name, and the clinic's own site, and never follows a maps link", { try await LeadgenSliceTests.dpqOwnSiteOnly() }))
+        cases.append(("Email is a published role address on the clinic site; no-solicitation or no address refuses the entry", { try await LeadgenSliceTests.roleEmailOnly() }))
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
