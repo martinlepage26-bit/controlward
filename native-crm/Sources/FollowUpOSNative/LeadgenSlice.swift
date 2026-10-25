@@ -903,6 +903,41 @@ enum LeadgenDiscovery {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Role and clinic mailboxes. A personal address is used only when no role address is published.
+    static let roleLocals: Set<String> = [
+        "info", "contact", "reception", "accueil", "bureau", "admin", "office", "hello", "bonjour",
+        "clinique", "clinic", "secretariat", "secretaire", "rendezvous", "appointments",
+    ]
+    static let noSolicitPhrases = ["no solicitation", "pas de sollicitation", "aucune sollicitation"]
+
+    /// Own-domain address published in the page body. Never constructs an address.
+    /// No-solicitation wording on the fetched page refuses the entry.
+    static func publishedEmail(on pages: [LeadgenPage], domain: String, clinic: String) throws -> (email: String, url: String) {
+        for page in pages {
+            let visible = (page.bodyText + "\n" + page.html).lowercased()
+            if noSolicitPhrases.contains(where: { visible.contains($0) }) {
+                throw LeadgenError.suppressed("no-solicitation")
+            }
+        }
+        var role: (email: String, url: String)?
+        var personal: (email: String, url: String)?
+        for page in pages {
+            for email in emails(in: page.bodyText) {
+                guard MailAddress.domain(email).map({ LeadgenSourcePolicy.normalize($0) == domain }) == true else { continue }
+                let local = email.split(separator: "@").first.map { String($0) } ?? ""
+                let hit = (email, page.url.absoluteString)
+                if roleLocals.contains(local) {
+                    if role == nil { role = hit }
+                } else if personal == nil {
+                    personal = hit
+                }
+            }
+        }
+        if let role { return role }
+        if let personal { return personal }
+        throw LeadgenError.contactNotOnPage(clinic)
+    }
+
     static func emails(in text: String) -> [String] {
         let pattern = "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -934,15 +969,7 @@ enum LeadgenDiscovery {
         let pages = try await siteReader.read(site: clinic.site, paths: paths)
         let domain = LeadgenSourcePolicy.normalize(clinic.site.host ?? "")
         let own = pages.filter { LeadgenSourcePolicy.normalize($0.url.host ?? "") == domain }
-        var chosen: (email: String, url: String)?
-        for page in own {
-            for email in emails(in: page.bodyText) where MailAddress.domain(email).map({ LeadgenSourcePolicy.normalize($0) == domain }) == true {
-                chosen = (email, page.url.absoluteString)
-                break
-            }
-            if chosen != nil { break }
-        }
-        guard let chosen else { throw LeadgenError.contactNotOnPage(clinic.name) }
+        let chosen = try publishedEmail(on: own, domain: domain, clinic: clinic.name)
         let prospect = LeadgenProspect(organization: clinic.name, segment: LeadgenProspectPicker.segment, site: clinic.site, publicContactEmail: chosen.email, contactName: clinic.dentist)
         let proven: LeadgenConsentBasis?
         if let consent, !consent.basis.trimmingCharacters(in: .whitespaces).isEmpty, !consent.recordedAt.isEmpty {
