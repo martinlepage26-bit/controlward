@@ -267,6 +267,11 @@ enum LeadgenFixture {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("docs/leadgen-slice/migrations")
     }
+    /// Fictional DPQ fiche page. No live fetch, and no real member is in this file.
+    static func dpqHTML() throws -> String {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/dpq-repertoire.html")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 }
 
 #if os(macOS)
@@ -570,6 +575,28 @@ enum LeadgenSliceTests {
         defer { try? FileManager.default.removeItem(at: parentFile) }
         let parent = try SuppressionList.requireFile(at: parentFile)
         try check(LeadgenSuppression.reason(address: "info@cliniqueexemple.ca", siteHost: "www.cliniqueexemple.ca", list: parent) == nil, "a suffix without a dot boundary matched")
+    }
+
+    /// Directory cards are discovery only. Maps, search, and aggregator links are not a clinic site.
+    static func dpqOwnSiteOnly() async throws {
+        let html = try LeadgenFixture.dpqHTML()
+        let directory = URL(string: "https://dpq.quebec/repertoire-des-membres/")!
+        let clinics = LeadgenDiscovery.clinics(in: html, directory: directory)
+        try check(clinics.count == 1, "DPQ fiches became \(clinics.count) clinics: \(clinics.map(\.name))")
+        try check(clinics.first?.name == "Clinique Exemple", "clinic name came from the link text, not the fiche: \(clinics.first?.name ?? "none")")
+        try check(LeadgenSourcePolicy.normalize(clinics.first?.site.host ?? "") == "cliniqueexemple.ca", "own site \(String(describing: clinics.first?.site))")
+        try check(clinics.allSatisfy { site in
+            let host = (site.site.host ?? "").lowercased()
+            return !host.contains("google") && !host.contains("pagesjaunes") && !host.contains("maps")
+        }, "a maps or aggregator link was kept: \(clinics)")
+        let fetcher = LeadgenFixture.fetcher()
+        fetcher.set(directory.absoluteString, status: 200, body: html)
+        fetcher.set("https://dpq.quebec/repertoire-des-membres", status: 200, body: html)
+        let found = try await LeadgenDiscovery.find(directory: directory, paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, fetcher: fetcher, dns: LeadgenMappedDNS())
+        let reflected = String(reflecting: found.prospect)
+        try check(reflected.contains("Marie Tremblay"), "dentist name was not kept: \(reflected)")
+        try check(!reflected.contains("Paul Martin") && !reflected.contains("Clinique Sans Site") && !reflected.contains("Alex Aggregateur"), "a maps-only or aggregator entry was kept: \(reflected)")
+        try check(!fetcher.requested.contains { $0.contains("google") || $0.contains("maps") || $0.contains("pagesjaunes") }, "a maps or aggregator URL was fetched: \(fetcher.requested)")
     }
 
     static func run() async -> Bool {
@@ -1363,6 +1390,7 @@ enum LeadgenSliceTests {
         cases.append(("A verify id that does not match the saved token id is refused", {
             try LeadgenSliceTests.refuseToken(LeadgenSliceTests.readPolicy(), [LeadgenVerifiedToken(id: "someone-else", status: "active"), LeadgenVerifiedToken(id: "id-ph", status: "active")])
         }))
+        cases.append(("DPQ discovery keeps the clinic name, the dentist name, and the clinic's own site, and never follows a maps link", { try await LeadgenSliceTests.dpqOwnSiteOnly() }))
         cases.append(("An empty fetchedAt is refused and is not replaced with the quote or the config time", { try await LeadgenSliceTests.emptyFetchedAtRefuses() }))
         cases.append(("A missing, unreadable, or unparseable do-not-contact list means no draft", { try await LeadgenSliceTests.suppressionFailsClosed() }))
         cases.append(("A stored address is matched trimmed and lowercased, and a domain covers subdomains", { try await LeadgenSliceTests.suppressionMatchesNormalized() }))
