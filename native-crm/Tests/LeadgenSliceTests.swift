@@ -129,6 +129,76 @@ final class LeadgenFakeFetcher: LeadgenFetching, @unchecked Sendable {
     }
 }
 
+/// Raw HTTP bytes, parsed by `LeadgenPinnedHTTPS.parse`, served through `LeadgenHTTPFetcher`'s transport seam.
+final class LeadgenPinnedScript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pages: [String: Data] = [:]
+    private var seen: [String] = []
+    var requested: [String] { lock.withLock { seen } }
+
+    func respond(url: String, status: Int, headers: [String] = [], body: String = "") {
+        guard let parts = URL(string: url), let host = parts.host else { return }
+        let path = parts.path.isEmpty ? "/" : parts.path
+        lock.withLock { pages["\(host.lowercased())\(path)"] = LeadgenHTTPBytes.message(status: status, headers: headers, body: body) }
+    }
+
+    func answer(_ request: URLRequest) throws -> (Int, [String: String], String) {
+        let host = (request.value(forHTTPHeaderField: "Host") ?? request.url?.host ?? "").lowercased()
+        let path = request.url?.path.isEmpty == false ? request.url!.path : "/"
+        lock.withLock { seen.append("https://\(host)\(path)") }
+        let raw = lock.withLock { pages["\(host)\(path)"] } ?? LeadgenHTTPBytes.message(status: 404, body: "")
+        guard let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: true) else {
+            throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "truncated HTTP response")
+        }
+        return (parsed.0, parsed.1, String(decoding: parsed.2, as: UTF8.self))
+    }
+
+    func fetcher() -> LeadgenHTTPFetcher {
+        LeadgenHTTPFetcher(lookup: { _ in ["1.1.1.1"] }, transport: { request in try self.answer(request) })
+    }
+}
+
+/// The same parser seam behind `LeadTransport.send`, so a 429 or 503 is a status rather than a socket.
+final class LeadgenParsedBytesTransport: LeadTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var queued: [String: [Data]] = [:]
+    private var script: [String: Data] = [:]
+    private var seen: [String] = []
+    var urls: [String] { lock.withLock { seen } }
+
+    func enqueue(url: String, status: Int, body: String, headers: [String] = []) {
+        lock.withLock { queued[url, default: []].append(LeadgenHTTPBytes.message(status: status, headers: headers, body: body)) }
+    }
+
+    func respond(url: String, status: Int, body: String, headers: [String] = []) {
+        lock.withLock { script[url] = LeadgenHTTPBytes.message(status: status, headers: headers, body: body) }
+    }
+
+    func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
+        let key = request.url?.absoluteString ?? ""
+        lock.withLock { seen.append(key) }
+        let raw = lock.withLock { () -> Data in
+            if var list = queued[key], !list.isEmpty {
+                let first = list.removeFirst()
+                queued[key] = list
+                return first
+            }
+            return script[key] ?? LeadgenHTTPBytes.message(status: 404, body: "")
+        }
+        guard let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: true) else {
+            throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "truncated HTTP response")
+        }
+        return LeadHTTPResponse(status: parsed.0, headers: parsed.1, body: parsed.2, url: request.url)
+    }
+}
+
+enum LeadgenHTTPBytes {
+    static func message(status: Int, headers: [String] = [], body: String = "") -> Data {
+        let head = (["HTTP/1.1 \(status) X"] + headers).joined(separator: "\r\n")
+        return Data((head + "\r\n\r\n" + body).utf8)
+    }
+}
+
 struct LeadgenMappedDNS: LeadgenResolving {
     var overrides: [String: [String]] = [:]
     func addresses(for host: String) async -> [String] {
@@ -808,8 +878,11 @@ enum LeadgenSliceTests {
         }
     }
 
-    static func non2xxStatusRefused() throws {
-        for status in [404, 301, 500, 100] {
+    /// 1xx is still refused. 3xx, 4xx and 5xx are returned, including a framed body, and the caller decides.
+    static func non2xxStatusReturned() throws {
+        let mixed = Data("HTTP/1.1 404 NO\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\nhello".utf8)
+        try assertPinnedHTTPRefused("404 with transfer-encoding and content-length", mixed, detail: "transfer-encoding and content-length", absent: "hello")
+        for status in [100, 199] {
             let raw = Data("HTTP/1.1 \(status) NO\r\nContent-Length: 5\r\n\r\nhello".utf8)
             try assertPinnedHTTPRefused("status \(status)", raw, complete: false, detail: "http status", absent: "hello")
             try assertPinnedHTTPRefused("status \(status) at EOF", raw, detail: "http status", absent: "hello")
@@ -817,6 +890,384 @@ enum LeadgenSliceTests {
         let continueThenOK = Data("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".utf8)
         try assertPinnedHTTPRefused("100 Continue before the next response", continueThenOK, complete: false, detail: "http status", absent: "hello")
         try assertPinnedHTTPRefused("100 Continue", continueThenOK, detail: "http status", absent: "hello")
+        var problems: [String] = []
+        for status in [301, 404, 500] {
+            let raw = Data("HTTP/1.1 \(status) NO\r\nContent-Length: 5\r\nLocation: https://www.cliniqueexemple.ca/\r\n\r\nhello".utf8)
+            for complete in [true, false] {
+                do {
+                    guard let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: complete) else {
+                        problems.append("\(status) complete=\(complete) returned nil")
+                        continue
+                    }
+                    let text = String(decoding: parsed.2, as: UTF8.self)
+                    if parsed.0 != status || text != "hello" {
+                        problems.append("\(status) complete=\(complete) returned \(parsed.0) \(text)")
+                    }
+                } catch {
+                    problems.append("\(status) complete=\(complete) threw \(error)")
+                }
+            }
+        }
+        let short = Data("HTTP/1.1 404 NO\r\nContent-Length: 11\r\n\r\nhello".utf8)
+        do {
+            try assertPinnedHTTPRefused("short 404 at EOF", short, detail: "truncated HTTP response", absent: "hello")
+        } catch {
+            problems.append("short 404 at EOF: \(error)")
+        }
+        try check(problems.isEmpty, problems.joined(separator: "; "))
+    }
+
+    static func emptyStatusBodies() throws {
+        var problems: [String] = []
+        for status in [204, 304] {
+            let raw = Data("HTTP/1.1 \(status) X\r\nContent-Length: 5\r\n\r\nhello".utf8)
+            do {
+                guard let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: true) else {
+                    problems.append("\(status) returned nil")
+                    continue
+                }
+                let text = String(decoding: parsed.2, as: UTF8.self)
+                if parsed.0 != status || !text.isEmpty {
+                    problems.append("\(status) returned \(parsed.0) \(text.debugDescription)")
+                }
+            } catch {
+                problems.append("\(status) threw \(error)")
+            }
+        }
+        try check(problems.isEmpty, problems.joined(separator: "; "))
+    }
+
+    static func statusCodeIsThreeDigits() throws {
+        var problems: [String] = []
+        for token in ["+200", "0200", "20", "2000"] {
+            let raw = Data("HTTP/1.1 \(token) OK\r\nContent-Length: 5\r\n\r\nhello".utf8)
+            do {
+                let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: true)
+                let text = parsed.map { String(decoding: $0.2, as: UTF8.self) } ?? "nil"
+                problems.append("\(token) returned \(parsed?.0 ?? -1) \(text)")
+            } catch let error as LeadPipelineRefusal {
+                if error.code != "refused:own-site-host" || error.detail != "malformed status" || error.description.contains("hello") {
+                    problems.append("\(token) failed as \(error)")
+                }
+            } catch {
+                problems.append("\(token) threw \(error)")
+            }
+        }
+        try check(problems.isEmpty, problems.joined(separator: "; "))
+    }
+
+    static func directoryListing(linking site: String) -> String {
+        """
+        <html><body>
+        <p><a href="https://maps.google.com/maps?q=clinique">carte</a></p>
+        <ul><li><a href="\(site)">Clinique Exemple</a></li></ul>
+        </body></html>
+        """
+    }
+
+    static let temptingPage = """
+    <html><body><main><p>SECRET-SKIPPED intelligence artificielle should not be quoted from a page that was not served.</p>
+    <p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>
+    """
+
+    static func installDirectory(_ script: LeadgenPinnedScript, linking site: String, pageStatus: Int = 200, pageBody: String? = nil) {
+        script.respond(url: "https://dpq.quebec/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+        script.respond(url: LeadgenFixture.directory.absoluteString, status: pageStatus, body: pageBody ?? directoryListing(linking: site))
+    }
+
+    static func pinnedRunner(_ script: LeadgenPinnedScript, log: LeadgenMemoryLog = LeadgenMemoryLog(), d1: LeadgenFakeD1 = LeadgenFakeD1(), mailbox: LeadgenRecordingMailbox = LeadgenRecordingMailbox()) -> LeadgenSliceRunner {
+        LeadgenSliceRunner(config: .dryRun, fetcher: script.fetcher(), mailbox: mailbox, d1: d1, log: log, now: { "2026-10-24T20:30:00Z" }, dns: LeadgenMappedDNS())
+    }
+
+    static func withEmptySuppression(_ body: () async throws -> Void) async throws {
+        let previous = getenv("LEADGEN_SUPPRESSION").map { String(cString: $0) }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-pin-\(UUID().uuidString).json")
+        try Data("[]".utf8).write(to: url)
+        setenv("LEADGEN_SUPPRESSION", url.path, 1)
+        defer {
+            if let previous { setenv("LEADGEN_SUPPRESSION", previous, 1) }
+            else { unsetenv("LEADGEN_SUPPRESSION") }
+            try? FileManager.default.removeItem(at: url)
+        }
+        try await body()
+    }
+
+    /// A 301 to another host, or to an IP, is refused before that hop is fetched. A 301 to the same site is followed.
+    static func redirectsStayOnTheDirectoryHost() async throws {
+        var problems: [String] = []
+        let off = LeadgenPinnedScript()
+        installDirectory(off, linking: "https://www.cliniqueexemple.ca/", pageStatus: 301, pageBody: "")
+        off.respond(url: LeadgenFixture.directory.absoluteString, status: 301, headers: ["Location: https://dentistesproprietaires.quebec/repertoire-des-membres/"], body: "")
+        off.respond(url: "https://dentistesproprietaires.quebec/repertoire-des-membres/", status: 200, body: "<html>off-site</html>")
+        do {
+            _ = try await LeadgenDiscovery.find(directory: LeadgenFixture.directory, paths: LeadgenFixture.paths, consent: nil, fetcher: off.fetcher(), dns: LeadgenMappedDNS())
+            problems.append("off-site 301 completed")
+        } catch let error as LeadgenError {
+            if error != .hostNotAllowed("dentistesproprietaires.quebec") { problems.append("off-site 301 failed as \(error)") }
+        } catch {
+            problems.append("off-site 301 threw \(error)")
+        }
+        if off.requested.contains(where: { $0.contains("dentistesproprietaires.quebec") }) {
+            problems.append("off-site target was fetched: \(off.requested)")
+        }
+
+        let ip = LeadgenPinnedScript()
+        installDirectory(ip, linking: "https://www.cliniqueexemple.ca/", pageStatus: 301, pageBody: "")
+        ip.respond(url: LeadgenFixture.directory.absoluteString, status: 301, headers: ["Location: https://10.0.0.5/secret"], body: "")
+        ip.respond(url: "https://10.0.0.5/secret", status: 200, body: "secret")
+        do {
+            _ = try await LeadgenDiscovery.find(directory: LeadgenFixture.directory, paths: LeadgenFixture.paths, consent: nil, fetcher: ip.fetcher(), dns: LeadgenMappedDNS())
+            problems.append("IP 301 completed")
+        } catch let error as LeadgenError {
+            if error != .unsafeURL("IP literal") { problems.append("IP 301 failed as \(error)") }
+        } catch {
+            problems.append("IP 301 threw \(error)")
+        }
+        if ip.requested.contains(where: { $0.contains("10.0.0.5") }) { problems.append("IP target was fetched: \(ip.requested)") }
+
+        let same = LeadgenPinnedScript()
+        let bare = "https://cliniqueexemple.ca"
+        same.respond(url: "\(bare)/robots.txt", status: 301, headers: ["Location: https://www.cliniqueexemple.ca/robots.txt"])
+        same.respond(url: "https://www.cliniqueexemple.ca/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+        same.respond(url: "\(bare)/", status: 301, headers: ["Location: https://www.cliniqueexemple.ca/"])
+        same.respond(url: "https://www.cliniqueexemple.ca/", status: 200, body: "<html><body><main><p>followed-home</p></main></body></html>")
+        let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: ["cliniqueexemple.ca"]), fetcher: same.fetcher(), dns: LeadgenMappedDNS(), now: { "2026-10-24T20:30:00Z" })
+        do {
+            let pages = try await reader.read(site: URL(string: "\(bare)/")!, paths: ["/"])
+            let final = pages.first?.url.absoluteString ?? ""
+            let text = pages.first?.html ?? ""
+            if pages.count != 1 || !final.hasPrefix("https://www.cliniqueexemple.ca/") || !text.contains("followed-home") {
+                problems.append("same-site 301 landed on \(final) \(text)")
+            }
+            if !same.requested.contains("https://www.cliniqueexemple.ca/") { problems.append("same-site target was not fetched: \(same.requested)") }
+        } catch {
+            problems.append("same-site 301 threw \(error)")
+        }
+        try check(problems.isEmpty, problems.joined(separator: "; "))
+    }
+
+    static func missingRobotsFileIsAllowed() async throws {
+        let script = LeadgenPinnedScript()
+        script.respond(url: "https://www.cliniqueexemple.ca/robots.txt", status: 404, body: "User-agent: *\nDisallow: /\n")
+        script.respond(url: "https://www.cliniqueexemple.ca/", status: 200, body: "<html><body><main><p>robots-missing-ok</p></main></body></html>")
+        let reader = LeadgenSiteReader(policy: LeadgenSourcePolicy(allowedHosts: ["cliniqueexemple.ca"]), fetcher: script.fetcher(), dns: LeadgenMappedDNS(), now: { "2026-10-24T20:30:00Z" })
+        do {
+            let pages = try await reader.read(site: URL(string: "https://www.cliniqueexemple.ca/")!, paths: ["/"])
+            try check(pages.count == 1 && pages[0].html.contains("robots-missing-ok"), "robots 404 blocked the page: \(pages.map(\.url))")
+        } catch {
+            throw PortableCheckFailure(description: "robots 404 threw \(error)")
+        }
+    }
+
+    static func directoryFailureStopsBeforeClinicFetches() async throws {
+        try await withEmptySuppression {
+            var problems: [String] = []
+            for status in [404, 503] {
+                let script = LeadgenPinnedScript()
+                installDirectory(script, linking: "https://www.cliniqueexemple.ca/", pageStatus: status, pageBody: "down")
+                script.respond(url: "https://www.cliniqueexemple.ca/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+                script.respond(url: "https://www.cliniqueexemple.ca/", status: 200, body: LeadgenFixture.home)
+                let d1 = LeadgenFakeD1()
+                let mailbox = LeadgenRecordingMailbox()
+                let runner = pinnedRunner(script, d1: d1, mailbox: mailbox)
+                do {
+                    _ = try await runner.run(candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                    problems.append("directory \(status) completed")
+                } catch let error as LeadgenError {
+                    if error != .fetchFailed(LeadgenFixture.directory.absoluteString) { problems.append("directory \(status) failed as \(error)") }
+                } catch {
+                    problems.append("directory \(status) threw \(error)")
+                }
+                let clinics = script.requested.filter { URL(string: $0)?.host != "dpq.quebec" }
+                if !clinics.isEmpty { problems.append("directory \(status) fetched \(clinics)") }
+                let inserts = await d1.inserts()
+                let calls = await mailbox.calls
+                if !inserts.isEmpty || !calls.isEmpty { problems.append("directory \(status) wrote \(calls) \(inserts)") }
+            }
+            try check(problems.isEmpty, problems.joined(separator: "; "))
+        }
+    }
+
+    /// The only statement of the clinic-page 404 rule: skip that page, do not throw, and do not keep it as evidence.
+    static func clinicMissingPageIsSkipped() async throws {
+        try await withEmptySuppression {
+            let script = LeadgenPinnedScript()
+            let site = "https://www.cliniqueexemple.ca"
+            installDirectory(script, linking: "\(site)/")
+            script.respond(url: "\(site)/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+            script.respond(url: "\(site)/", status: 200, body: LeadgenFixture.home)
+            script.respond(url: "\(site)/services", status: 404, body: temptingPage)
+            script.respond(url: "\(site)/contact", status: 200, body: "<html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>")
+            let d1 = LeadgenFakeD1()
+            let mailbox = LeadgenRecordingMailbox()
+            let log = LeadgenMemoryLog()
+            var problems: [String] = []
+            do {
+                let report = try await pinnedRunner(script, log: log, d1: d1, mailbox: mailbox).run(
+                    candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                if report.fit.evidence.contains(where: { $0.url.contains("/services") || $0.quote.contains("SECRET-SKIPPED") }) || report.draft.body.contains("SECRET-SKIPPED") {
+                    problems.append("404 page became evidence: \(report.fit.evidence.map(\.url))")
+                }
+                if script.requested.filter({ $0 == "\(site)/services" }).count != 1 { problems.append("services fetches \(script.requested)") }
+            } catch {
+                problems.append("clinic 404 threw \(error); requested \(script.requested)")
+            }
+            let inserts = await d1.inserts()
+            let calls = await mailbox.calls
+            if !calls.isEmpty || !inserts.isEmpty { problems.append("dry run wrote a row or called Gmail") }
+            try check(problems.isEmpty, problems.joined(separator: "; "))
+        }
+    }
+
+    static func clinicAllMissingPagesWriteNothing() async throws {
+        try await withEmptySuppression {
+            let script = LeadgenPinnedScript()
+            let site = "https://www.cliniqueexemple.ca"
+            installDirectory(script, linking: "\(site)/")
+            script.respond(url: "\(site)/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+            for path in ["/", "/services", "/contact"] {
+                script.respond(url: "\(site)\(path)", status: 404, body: temptingPage)
+            }
+            let d1 = LeadgenFakeD1()
+            let mailbox = LeadgenRecordingMailbox()
+            let log = LeadgenMemoryLog()
+            var problems: [String] = []
+            do {
+                _ = try await pinnedRunner(script, log: log, d1: d1, mailbox: mailbox).run(
+                    candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                problems.append("all-404 clinic still drafted")
+            } catch let error as LeadgenError {
+                if error != .noRoleAddress("Clinique Exemple") { problems.append("all-404 clinic failed as \(error)") }
+            } catch {
+                problems.append("all-404 clinic threw \(error)")
+            }
+            let missing = ["\(site)/", "\(site)/services", "\(site)/contact"].filter { !script.requested.contains($0) }
+            if !missing.isEmpty { problems.append("skipped pages were not fetched: \(missing) from \(script.requested)") }
+            let lines = await log.lines
+            if lines.contains(where: { $0.contains("SECRET-SKIPPED") || $0.hasPrefix("evidence ") }) { problems.append("a skipped page was logged as evidence: \(lines)") }
+            let inserts = await d1.inserts()
+            let calls = await mailbox.calls
+            if !inserts.isEmpty || !calls.isEmpty { problems.append("all-404 clinic wrote \(calls) \(inserts)") }
+            try check(problems.isEmpty, problems.joined(separator: "; "))
+        }
+    }
+
+    /// 429 and 5xx on a clinic page are skipped once. This is not the LeadTransport retry path.
+    static func clinicThrottleOrServerErrorIsSkipped() async throws {
+        try await withEmptySuppression {
+            let script = LeadgenPinnedScript()
+            let site = "https://www.cliniqueexemple.ca"
+            installDirectory(script, linking: "\(site)/")
+            script.respond(url: "\(site)/robots.txt", status: 200, body: "User-agent: *\nAllow: /\n")
+            script.respond(url: "\(site)/", status: 429, headers: ["Retry-After: 30"], body: temptingPage.replacingOccurrences(of: "SECRET-SKIPPED", with: "SECRET-429"))
+            script.respond(url: "\(site)/services", status: 500, body: temptingPage.replacingOccurrences(of: "SECRET-SKIPPED", with: "SECRET-500"))
+            script.respond(url: "\(site)/contact", status: 200, body: """
+            <html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p>
+            <p>Depuis 2025, nous utilisons un outil d'intelligence artificielle pour trier les demandes de rendez-vous.</p></main></body></html>
+            """)
+            let d1 = LeadgenFakeD1()
+            let mailbox = LeadgenRecordingMailbox()
+            var problems: [String] = []
+            do {
+                let report = try await pinnedRunner(script, d1: d1, mailbox: mailbox).run(
+                    candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                let quotes = report.fit.evidence.map(\.quote).joined(separator: " ")
+                let urls = report.fit.evidence.map(\.url)
+                if urls.contains(where: { $0 == "\(site)/" || $0.contains("/services") }) || quotes.contains("SECRET-429") || quotes.contains("SECRET-500") || report.draft.body.contains("SECRET-429") {
+                    problems.append("429 or 5xx page became evidence: \(urls)")
+                }
+            } catch {
+                problems.append("clinic 429/5xx threw \(error)")
+            }
+            if script.requested.filter({ $0 == "\(site)/" }).count != 1 { problems.append("home was retried: \(script.requested)") }
+            if script.requested.filter({ $0 == "\(site)/services" }).count != 1 { problems.append("services was retried or skipped unfetched: \(script.requested)") }
+            let inserts = await d1.inserts()
+            let calls = await mailbox.calls
+            if !calls.isEmpty || !inserts.isEmpty { problems.append("dry run wrote a row or called Gmail") }
+            try check(problems.isEmpty, problems.joined(separator: "; "))
+        }
+    }
+
+    static func bareRedirectMissingRobotsAndServicesStillDrafts() async throws {
+        try await withEmptySuppression {
+            let script = LeadgenPinnedScript()
+            let bare = "https://cliniqueexemple.ca"
+            let www = "https://www.cliniqueexemple.ca"
+            installDirectory(script, linking: "\(bare)/")
+            script.respond(url: "\(bare)/robots.txt", status: 301, headers: ["Location: \(www)/robots.txt"])
+            script.respond(url: "\(www)/robots.txt", status: 404, body: "User-agent: *\nDisallow: /\n")
+            script.respond(url: "\(bare)/", status: 301, headers: ["Location: \(www)/"])
+            script.respond(url: "\(www)/", status: 200, body: LeadgenFixture.home)
+            script.respond(url: "\(bare)/services", status: 301, headers: ["Location: \(www)/services"])
+            script.respond(url: "\(www)/services", status: 404, body: temptingPage)
+            script.respond(url: "\(bare)/contact", status: 301, headers: ["Location: \(www)/contact"])
+            script.respond(url: "\(www)/contact", status: 200, body: "<html><body><main><p>Écrivez à info@cliniqueexemple.ca pour nous joindre.</p></main></body></html>")
+            let d1 = LeadgenFakeD1()
+            let mailbox = LeadgenRecordingMailbox()
+            do {
+                let report = try await pinnedRunner(script, d1: d1, mailbox: mailbox).run(
+                    candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+                try check(report.draft.body.contains("info@cliniqueexemple.ca"), "draft was empty of the role address")
+                try check(!report.fit.evidence.contains { $0.url.contains("/services") || $0.quote.contains("SECRET-SKIPPED") }, "skipped /services became evidence: \(report.fit.evidence.map(\.url))")
+                try check(script.requested.contains("\(www)/"), "www target was not fetched: \(script.requested)")
+                try check(!script.requested.contains(where: { $0.contains("dentistesproprietaires") }), "left the clinic site: \(script.requested)")
+            } catch {
+                throw PortableCheckFailure(description: "bare-to-www run threw \(error); requested \(script.requested)")
+            }
+            let inserts = await d1.inserts()
+            let calls = await mailbox.calls
+            try check(calls.isEmpty && inserts.isEmpty, "dry run wrote a row or called Gmail")
+        }
+    }
+
+    static func parsedTransportBacksOffOn429And503() async throws {
+        let config = try LeadKit.config()
+        let overpass = LeadDiscovery.overpass.absoluteString
+        var problems: [String] = []
+        let limited = LeadgenParsedBytesTransport()
+        limited.enqueue(url: overpass, status: 429, body: "rate limited", headers: ["Retry-After: 30"])
+        limited.respond(url: overpass, status: 200, body: LeadKit.overpassOneClinic, headers: ["Content-Type: application/json"])
+        let clock = FakeLeadClock()
+        let guarded = GuardedLeadTransport(config: config, inner: limited, audit: MemoryAuditSink(), clock: clock)
+        let found = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
+        if found.count != 1 || clock.sleeps != [30] { problems.append("429 backoff \(clock.sleeps) found \(found.count) urls \(limited.urls)") }
+
+        let failed = LeadgenParsedBytesTransport()
+        failed.enqueue(url: overpass, status: 503, body: "unavailable")
+        failed.respond(url: overpass, status: 200, body: LeadKit.overpassOneClinic, headers: ["Content-Type: application/json"])
+        let clock5 = FakeLeadClock()
+        let guarded5 = GuardedLeadTransport(config: config, inner: failed, audit: MemoryAuditSink(), clock: clock5)
+        let found5 = await LeadDiscovery(transport: guarded5, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
+        if found5.count != 1 || clock5.sleeps.first != 5 { problems.append("503 backoff \(clock5.sleeps) found \(found5.count) urls \(failed.urls)") }
+        try check(problems.isEmpty, problems.joined(separator: "; "))
+    }
+
+    static func placeholderAddressBlocksRealSend() async throws {
+        let config = try LeadKit.config()
+        let prospect = LeadKit.readyClinic()
+        let draft = try LeadgenDraftComposer.compose(prospect: LeadgenFixture.prospect, fit: try LeadgenFixture.fit(), consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, pages: LeadgenFixture.pages())
+        try check(draft.body.contains(LeadgenFixture.postal), "dry-run footer compose dropped the pinned address")
+        var problems: [String] = []
+        let martin = config.loi25Gate.martinAddresses.first ?? "ml@pharos-ai.ca"
+        var sendDraft = LeadKit.draft(for: prospect, config: config)
+        sendDraft.to = martin
+        let send = OutreachSendGate.check(sendDraft, approval: LeadKit.approval(sendDraft), config: config, suppression: SuppressionList())
+        if send?.code != "refused:anti-spam:placeholder-address" || send?.detail != "sender mailing address is empty or a placeholder" {
+            problems.append("placeholder send \(String(describing: send))")
+        }
+        let drafted = OutreachDraftGate.check(LeadKit.draft(for: prospect, config: config), prospect: prospect, config: config, suppression: SuppressionList(), now: LeadKit.now)
+        if drafted?.code != "refused:anti-spam:placeholder-address" || drafted?.detail != "sender mailing address is empty or a placeholder" {
+            problems.append("placeholder draft-for-send \(String(describing: drafted))")
+        }
+        var emptyConfig = config
+        emptyConfig.sender.mailingAddress = "   "
+        var emptyDraft = LeadKit.draft(for: prospect, config: emptyConfig)
+        emptyDraft.to = martin
+        let emptySend = OutreachSendGate.check(emptyDraft, approval: LeadKit.approval(emptyDraft), config: emptyConfig, suppression: SuppressionList())
+        if emptySend?.code != "refused:anti-spam:placeholder-address" { problems.append("empty send \(String(describing: emptySend))") }
+        let emptyDrafted = OutreachDraftGate.check(LeadKit.draft(for: prospect, config: emptyConfig), prospect: prospect, config: emptyConfig, suppression: SuppressionList(), now: LeadKit.now)
+        if emptyDrafted?.code != "refused:anti-spam:placeholder-address" { problems.append("empty draft-for-send \(String(describing: emptyDrafted))") }
+        try check(problems.isEmpty, problems.joined(separator: "; "))
     }
 
     /// Dry run with a directory URL must not read leads or projects. Live still must.
@@ -2812,8 +3263,41 @@ enum LeadgenSliceTests {
         cases.append(("Content-Length together with Transfer-Encoding is refused", {
             try LeadgenSliceTests.contentLengthAndTransferEncodingRefused()
         }))
-        cases.append(("A status outside 2xx, including 100 Continue, is refused", {
-            try LeadgenSliceTests.non2xxStatusRefused()
+        cases.append(("A 301, 404, or 500 is returned, and a 1xx status is still refused", {
+            try LeadgenSliceTests.non2xxStatusReturned()
+        }))
+        cases.append(("A 204 or 304 returns an empty body", {
+            try LeadgenSliceTests.emptyStatusBodies()
+        }))
+        cases.append(("A status code that is not three ASCII digits is refused", {
+            try LeadgenSliceTests.statusCodeIsThreeDigits()
+        }))
+        cases.append(("A 301 off dpq.quebec is refused, and a 301 to the same site is followed", {
+            try await LeadgenSliceTests.redirectsStayOnTheDirectoryHost()
+        }))
+        cases.append(("A missing robots.txt is allowed", {
+            try await LeadgenSliceTests.missingRobotsFileIsAllowed()
+        }))
+        cases.append(("A DPQ directory 404 or 5xx stops the run with zero clinic fetches", {
+            try await LeadgenSliceTests.directoryFailureStopsBeforeClinicFetches()
+        }))
+        cases.append(("A clinic page 404 is skipped and adds no evidence", {
+            try await LeadgenSliceTests.clinicMissingPageIsSkipped()
+        }))
+        cases.append(("A clinic whose every page is 404 writes no lead row and no draft", {
+            try await LeadgenSliceTests.clinicAllMissingPagesWriteNothing()
+        }))
+        cases.append(("A clinic page 429 or 5xx is skipped once and adds no evidence", {
+            try await LeadgenSliceTests.clinicThrottleOrServerErrorIsSkipped()
+        }))
+        cases.append(("A clinic with no robots.txt, no services page, and a bare-to-www redirect still completes", {
+            try await LeadgenSliceTests.bareRedirectMissingRobotsAndServicesStillDrafts()
+        }))
+        cases.append(("A parsed 429 or 503 makes LeadTransport back off", {
+            try await LeadgenSliceTests.parsedTransportBacksOffOn429And503()
+        }))
+        cases.append(("An empty or PLACEHOLDER mailing address blocks a real send and a draft for send", {
+            try await LeadgenSliceTests.placeholderAddressBlocksRealSend()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
