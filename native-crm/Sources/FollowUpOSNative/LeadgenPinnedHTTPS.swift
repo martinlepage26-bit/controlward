@@ -153,6 +153,8 @@ enum LeadgenPinnedHTTPS {
             }
             headers[key] = value
         }
+        if sawContentLength && sawTransferEncoding { throw refusal("transfer-encoding and content-length") }
+        guard (200..<300).contains(status) else { throw refusal("http status") }
         if body.count > maxBodyBytes { throw refusal("body exceeds 5 MB") }
         if let encoding = headers["transfer-encoding"] {
             guard encoding == "chunked" else { throw refusal("transfer-encoding") }
