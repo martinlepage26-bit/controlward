@@ -1612,9 +1612,13 @@ enum LeadgenSliceTests {
             _ = LeadgenFixture.withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
             try LeadgenFixture.loadDPQ(fetcher)
             do {
-                let report = try await LeadgenFixture.runner(.dryRun, mailbox: LeadgenRecordingMailbox(), d1: d1, log: LeadgenMemoryLog(), fetcher: fetcher).run(
+                let report = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: LeadgenRecordingMailbox(), d1: d1, log: LeadgenMemoryLog(), fetcher: fetcher).run(
                     candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
                 try check(report.prospect.organization == "Example Clinic 2", "did not skip the recorded domain: picked \(report.prospect.organization)")
+            } catch let error as LeadgenError {
+                guard case .leadsTableExists = error else {
+                    throw PortableCheckFailure(description: "did not skip a domain already recorded: \(error)")
+                }
             } catch let error as PortableCheckFailure {
                 throw error
             } catch {

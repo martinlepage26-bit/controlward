@@ -1134,7 +1134,13 @@ struct LeadgenSliceRunner: Sendable {
                 throw error
             }
             directorySuppression = suppression
-            let occupied = try await LeadgenD1Writer(port: d1, log: log).recordedDomains()
+            let occupied: Set<String>
+            if config.liveFlag {
+                occupied = try await LeadgenD1Writer(port: d1, log: log).recordedDomains()
+            } else {
+                await log.write("duplicate check not run (dry run): leads/projects not read")
+                occupied = []
+            }
             let found: LeadgenDiscoveryResult
             do {
                 found = try await LeadgenDiscovery.find(directory: directory, paths: paths, consent: consent, fetcher: fetcher, dns: dns, now: now, log: log, suppression: suppression, occupiedDomains: occupied)
