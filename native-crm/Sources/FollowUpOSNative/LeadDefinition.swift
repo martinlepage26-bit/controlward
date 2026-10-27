@@ -113,9 +113,13 @@ enum LeadDefinition {
         // firm's town can't be read (fail closed). Outside the area none of them holds.
         let town = firmTown(prospect)
         return config.conflictAreas.first { area in
-            guard rbqAreaMatch(town, area: area) != .outside else { return false }
+            // A G7/G8 code in the street, the map town, or the licence municipality is unknown, even when another field names a city outside the region.
+            let postalUnknown = addressFieldsContainHeldPostal(prospect, area: area)
+            let match: RBQAreaMatch = postalUnknown ? .unknown : rbqAreaMatch(town, area: area)
+            guard match != .outside else { return false }
+            let codeTown: String? = postalUnknown ? nil : town
             return tradeSignalsMatch(prospect, area: area)
-                || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: town).isEmpty
+                || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: codeTown).isEmpty
         }
     }
 
@@ -141,9 +145,12 @@ enum LeadDefinition {
     }
 
     /// Normalised whole-value match, then the rest of Québec, then containment. An exact key on `municipalities` is
-    /// inside (the configured spelling). A G7/G8 postal code anywhere in the address is unknown. An exact key on the
-    /// MAMH province list, or a comma-separated locality that is another Québec municipality or not a Québec
-    /// municipality at all, is outside. A town that only contains a listed name, and is none of those, is unknown.
+    /// inside (the configured spelling). A name that is also an MAMH municipality outside region 02 stays inside when
+    /// the whole value matches the region-02 list, so the exact MAMH check never marks that shared name outside.
+    /// A G7/G8 postal code anywhere in the address is unknown. An exact key on the MAMH province list that is not a
+    /// region-02 municipality is outside. A comma-separated locality is outside only when that part is an exact MAMH
+    /// municipality outside region 02 and not a shared region-02 name. Any other comma address falls through to
+    /// containment and the unknown-name checks on the whole address, and is unknown when those do not match.
     /// Blank is unknown. An area without `municipalities` applies everywhere (the region alone).
     static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
         guard let places = area.municipalities else { return .inside(area.region) }
@@ -156,10 +163,15 @@ enum LeadDefinition {
         let regionKeys = Set(places.map(placeKey))
         let provinceKeys = Set((area.provinceMunicipalities ?? []).map(placeKey))
         if provinceKeys.contains(key), !regionKeys.contains(key) { return .outside }
+        // The last comma part is outside only when it is an exact MAMH municipality outside region 02.
+        // A shared name is on the region-02 list, so the exact-region check above keeps it inside. Anything else
+        // falls through and the whole address is scanned for a listed or unresolved name.
+        var commaDefersOutside = false
         if let text = municipality, let locality = commaLocality(text) {
             let loc = placeKey(locality)
             if let exact = places.first(where: { placeKey($0) == loc }) { return .inside(exact) }
-            if !loc.isEmpty { return .outside }
+            if !loc.isEmpty, provinceKeys.contains(loc), !regionKeys.contains(loc) { return .outside }
+            commaDefersOutside = true
         }
         if outsideByOfficialSuffix(key, provinceKeys: provinceKeys, regionKeys: regionKeys) { return .outside }
         let padded = " \(key) "
@@ -170,7 +182,17 @@ enum LeadDefinition {
             }
         }
         if containsListed(places) || containsListed(unresolved) { return .unknown }
+        if commaDefersOutside { return .unknown }
         return .outside
+    }
+
+    /// True when the street, the map town, or the licence municipality contains a held FSA. The town source alone is not enough.
+    private static func addressFieldsContainHeldPostal(_ prospect: ProspectRecord, area: ICPConfig.ConflictArea) -> Bool {
+        let prefixes = area.postalFsaPrefixes ?? []
+        for text in [prospect.address, prospect.town, prospect.rbqMunicipality] {
+            if let text, containsHeldPostal(text, prefixes: prefixes) { return true }
+        }
+        return false
     }
 
     /// True when the address contains a Canadian postal code or FSA whose FSA starts with a configured prefix.
