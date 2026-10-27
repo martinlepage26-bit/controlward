@@ -114,10 +114,19 @@ enum LeadgenPinnedHTTPS {
 
     #endif
 
+    private static let maxHeaderBytes = 64 * 1024
+    private static let maxBodyBytes = 5 * 1024 * 1024
+
     /// nil while the headers, or a declared body length, are still incomplete.
-    /// A chunked body is returned without its framing. A malformed chunk size throws.
+    /// A finished message that is still short throws. Digits, caps, and a single exact `chunked` are required.
     static func parse(_ data: Data, complete: Bool) throws -> (Int, [String: String], Data)? {
-        guard let split = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let separator = Data("\r\n\r\n".utf8)
+        guard let split = data.range(of: separator) else {
+            if data.count > maxHeaderBytes { throw refusal("headers exceed 64 KB") }
+            return nil
+        }
+        let headerCount = data.distance(from: data.startIndex, to: split.lowerBound)
+        if headerCount > maxHeaderBytes { throw refusal("headers exceed 64 KB") }
         let head = String(decoding: data[..<split.lowerBound], as: UTF8.self)
         let body = data[split.upperBound...]
         var lines = head.components(separatedBy: "\r\n")
@@ -126,29 +135,61 @@ enum LeadgenPinnedHTTPS {
         guard parts.count >= 2, let status = Int(parts[1]) else { return nil }
         lines.removeFirst()
         var headers: [String: String] = [:]
+        var sawContentLength = false
+        var sawTransferEncoding = false
         for line in lines {
+            if let first = line.utf8.first, first == 32 || first == 9 { throw refusal("folded header") }
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
             let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if key == "content-length" {
+                if sawContentLength { throw refusal("duplicate content-length") }
+                sawContentLength = true
+            } else if key == "transfer-encoding" {
+                if sawTransferEncoding { throw refusal("duplicate transfer-encoding") }
+                sawTransferEncoding = true
+            } else if key == "content-encoding" {
+                throw refusal("content-encoding")
+            }
             headers[key] = value
         }
-        if isChunked(headers) {
-            guard let decoded = try decodeChunked(Data(body)) else { return nil }
+        if body.count > maxBodyBytes { throw refusal("body exceeds 5 MB") }
+        if let encoding = headers["transfer-encoding"] {
+            guard encoding == "chunked" else { throw refusal("transfer-encoding") }
+            guard let decoded = try decodeChunked(Data(body)) else {
+                if complete { throw refusal("truncated HTTP response") }
+                return nil
+            }
             return (status, headers, decoded)
         }
-        if let length = headers["content-length"].flatMap(Int.init) {
-            guard body.count >= length else { return nil }
+        if let rawLength = headers["content-length"] {
+            let length = try contentLength(rawLength)
+            guard body.count >= length else {
+                if complete { throw refusal("truncated HTTP response") }
+                return nil
+            }
             return (status, headers, Data(body.prefix(length)))
         }
         guard complete else { return nil }
         return (status, headers, Data(body))
     }
 
-    private static func isChunked(_ headers: [String: String]) -> Bool {
-        guard let raw = headers["transfer-encoding"] else { return false }
-        return raw.split(separator: ",").contains {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "chunked"
+    /// Plain ASCII digits only. A value above the body cap is refused before any prefix is taken.
+    private static func contentLength(_ raw: String) throws -> Int {
+        guard !raw.isEmpty, raw.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else {
+            throw refusal("malformed content-length")
         }
+        var length = 0
+        for byte in raw.utf8 {
+            let digit = Int(byte - 48)
+            if length > (maxBodyBytes - digit) / 10 { throw refusal("body exceeds 5 MB") }
+            length = length * 10 + digit
+        }
+        return length
+    }
+
+    private static func refusal(_ detail: String) -> LeadPipelineRefusal {
+        LeadPipelineRefusal(code: "refused:own-site-host", detail: detail)
     }
 
     /// nil when the chunk stream still needs bytes. The decoded body excludes extensions and trailers.
@@ -163,6 +204,9 @@ enum LeadgenPinnedHTTPS {
             if size == 0 {
                 guard trailersFinished(body, from: &index) else { return nil }
                 return output
+            }
+            if size > maxBodyBytes || output.count > maxBodyBytes - size {
+                throw refusal("body exceeds 5 MB")
             }
             guard let dataEnd = body.index(index, offsetBy: size, limitedBy: body.endIndex),
                   let after = body.index(dataEnd, offsetBy: 2, limitedBy: body.endIndex) else { return nil }
