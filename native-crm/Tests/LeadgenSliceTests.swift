@@ -604,6 +604,64 @@ enum LeadgenSliceTests {
     }
     #endif
 
+    static func httpMessage(headers: [String], body: String) -> Data {
+        let head = (["HTTP/1.1 200 OK"] + headers).joined(separator: "\r\n")
+        return Data((head + "\r\n\r\n" + body).utf8)
+    }
+
+    static func assertPinnedHTTPBody(_ label: String, _ raw: Data, complete: Bool, equals expected: String) throws {
+        guard let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: complete) else {
+            throw PortableCheckFailure(description: "\(label) produced no body")
+        }
+        let text = String(decoding: parsed.2, as: UTF8.self)
+        try check(parsed.0 == 200, "\(label) status \(parsed.0)")
+        try check(text == expected, "\(label) body \(text) != \(expected)")
+    }
+
+    /// Several chunks, a multi-digit hex size, a chunk extension, and a trailer. The framing must not reach the directory parser.
+    static func chunkedBodyDecoded() throws {
+        let html = "<p>alpha</p>abcdefghijklmnopqrstuvwxyz<br>"
+        let raw = httpMessage(
+            headers: ["Content-Type: text/html", "Transfer-Encoding: chunked"],
+            body: "c\r\n<p>alpha</p>\r\n1a;foo=bar\r\nabcdefghijklmnopqrstuvwxyz\r\n4\r\n<br>\r\n0\r\nX-Trailer: yes\r\n\r\n"
+        )
+        try assertPinnedHTTPBody("chunked", raw, complete: true, equals: html)
+        try assertPinnedHTTPBody("chunked before close", raw, complete: false, equals: html)
+    }
+
+    static func contentLengthBody() throws {
+        let raw = httpMessage(
+            headers: ["Content-Type: text/html", "Content-Length: 11"],
+            body: "hello worldEXTRA"
+        )
+        try assertPinnedHTTPBody("content-length", raw, complete: true, equals: "hello world")
+    }
+
+    static func connectionCloseBody() throws {
+        let raw = httpMessage(
+            headers: ["Content-Type: text/html"],
+            body: "<html>close</html>"
+        )
+        let open = try LeadgenPinnedHTTPS.parse(raw, complete: false)
+        try check(open == nil, "a body with neither framing header was returned before the connection closed")
+        try assertPinnedHTTPBody("connection close", raw, complete: true, equals: "<html>close</html>")
+    }
+
+    static func malformedChunkFailsClosed() throws {
+        let raw = httpMessage(
+            headers: ["Transfer-Encoding: chunked"],
+            body: "5\r\nhello\r\nzz\r\npartial-html\r\n0\r\n\r\n"
+        )
+        do {
+            let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: true)
+            let text = parsed.map { String(decoding: $0.2, as: UTF8.self) } ?? "nil"
+            throw PortableCheckFailure(description: "malformed chunk size returned \(text)")
+        } catch let error as LeadPipelineRefusal {
+            try check(error.detail == "malformed chunk size", "malformed chunk size failed as \(error)")
+            try check(!error.description.contains("partial-html") && !error.description.contains("hello"), "the error carried body bytes: \(error)")
+        }
+    }
+
     static func readPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
             LeadgenDeclaredToken(id: "62c2378b0d4a7897d34406cee8a5beca", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenSliceTests.hexAccountIDs[0])]),
@@ -2496,6 +2554,18 @@ enum LeadgenSliceTests {
         }))
         cases.append(("/user/tokens/verify is never called", {
             try LeadgenSliceTests.assertNoUserTokenVerify()
+        }))
+        cases.append(("A chunked HTTP body is decoded, including a hex size, a chunk extension, and a trailer", {
+            try LeadgenSliceTests.chunkedBodyDecoded()
+        }))
+        cases.append(("A Content-Length HTTP body is the declared bytes", {
+            try LeadgenSliceTests.contentLengthBody()
+        }))
+        cases.append(("An HTTP body with neither Content-Length nor Transfer-Encoding ends at connection close", {
+            try LeadgenSliceTests.connectionCloseBody()
+        }))
+        cases.append(("A malformed chunk size fails closed and does not return partial HTML", {
+            try LeadgenSliceTests.malformedChunkFailsClosed()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))

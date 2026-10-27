@@ -2,11 +2,13 @@ import Foundation
 #if os(macOS)
 import Network
 import Security
+#endif
 
 /// HTTPS to an address that already passed the pin, with the original hostname as the TLS server name.
 /// Production sets no verify block: the system evaluates the certificate against that hostname.
 /// A non-empty `trustAnchorDERs` is the test seam for a local CA. It is empty in production.
 enum LeadgenPinnedHTTPS {
+    #if os(macOS)
     static func exchange(request: URLRequest, trustAnchorDERs: [Data]) async throws -> (Int, [String: String], Data) {
         guard let url = request.url, let ip = url.host, !ip.isEmpty else {
             throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "pinned request has no host")
@@ -44,7 +46,7 @@ enum LeadgenPinnedHTTPS {
             try await send(connection, request: request, url: url, serverName: serverName)
             let data = try await read(connection, queue: queue)
             connection.cancel()
-            guard let parsed = parse(data, complete: true) else {
+            guard let parsed = try parse(data, complete: true) else {
                 throw LeadPipelineRefusal(code: "refused:own-site-host", detail: "truncated HTTP response")
             }
             return parsed
@@ -117,8 +119,13 @@ enum LeadgenPinnedHTTPS {
                         gate.run { cont.resume(throwing: error) }
                         return
                     }
-                    if parse(box.bytes, complete: isComplete) != nil || isComplete {
-                        gate.run { cont.resume(returning: box.bytes) }
+                    do {
+                        if try parse(box.bytes, complete: isComplete) != nil || isComplete {
+                            gate.run { cont.resume(returning: box.bytes) }
+                            return
+                        }
+                    } catch {
+                        gate.run { cont.resume(throwing: error) }
                         return
                     }
                     receive()
@@ -128,8 +135,10 @@ enum LeadgenPinnedHTTPS {
         }
     }
 
+    #endif
+
     /// nil while the headers, or a declared Content-Length, are still incomplete.
-    static func parse(_ data: Data, complete: Bool) -> (Int, [String: String], Data)? {
+    static func parse(_ data: Data, complete: Bool) throws -> (Int, [String: String], Data)? {
         guard let split = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
         let head = String(decoding: data[..<split.lowerBound], as: UTF8.self)
         let body = data[split.upperBound...]
@@ -154,6 +163,7 @@ enum LeadgenPinnedHTTPS {
     }
 }
 
+#if os(macOS)
 private final class Once: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
