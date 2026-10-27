@@ -7,8 +7,8 @@ import FoundationNetworking
 // prints aggregate counts only: licences read, licences the conflict hold catches (by configured municipality and with no
 // location), and the count per held code. It never prints a firm name, licence number or any town other than the configured
 // ones, writes nothing and makes no network request.
-// If the file is not the real JSON shape the parser refuses it (refused:open-data-schema) and every construction/trades
-// firm is held in the app; this tool then exits 2 and says so.
+// If the file is not the real JSON shape the parser refuses it (refused:open-data-schema) and the app holds every
+// construction_trades firm for rbq-licence-unverified, plus the SOS conflict where that rule still applies; this tool then exits 2 and says so.
 
 func fail(_ message: String, _ code: Int32 = 2) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -70,7 +70,7 @@ for path in files {
         print("  held in the municipalities: \(inArea) (\(places.map { "\($0) \(perPlace[$0, default: 0])" }.joined(separator: ", ")))")
         print("  held with no location (blank Municipalité): \(noLocation)")
         print("  held total: \(inArea) + \(noLocation) = \(inArea + noLocation) (held=\(held))")
-        print("  licences with a held code anywhere in the province: \(codeQualifying); outside whose town contains a configured name (not held, substring check): \(substringOnly)")
+        print("  licences with a held code anywhere in the province: \(codeQualifying); outside whose town contains a configured name (containment is unknown and held, so this stays 0 when the fallback works): \(substringOnly)")
         for condition in area.rbqCodeConditions ?? [] {
             print("  rule for \(RBQOpenData.normalizeCode(condition.code)): not held with all of [\(condition.notHeldIfAllOf.joined(separator: ", "))] or any code starting with [\(condition.notHeldIfAnyCodeStartsWith.joined(separator: ", "))]")
         }
@@ -79,10 +79,10 @@ for path in files {
         print("  check: \(wanted.map { String(perCode[$0, default: 0]) }.joined(separator: " + ")) - \(overlap) = \(wanted.reduce(0) { $0 + perCode[$1, default: 0] } - overlap) (held=\(held))")
         print("  not held: \(licences - held)")
     } catch let refusal as LeadPipelineRefusal {
-        print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): every \((area.rbqRequiredSegments ?? []).joined(separator: ", ")) firm is held")
+        print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): the app holds every construction_trades firm for rbq-licence-unverified, and keeps the SOS conflict for plumbing or excavation in region 02")
         status = 2
     } catch {
-        print("\(url.lastPathComponent): unreadable (\(error.localizedDescription)): every construction/trades firm is held")
+        print("\(url.lastPathComponent): unreadable (\(error.localizedDescription)): the app holds every construction_trades firm for rbq-licence-unverified, and keeps the SOS conflict for plumbing or excavation in region 02")
         status = 2
     }
 }
