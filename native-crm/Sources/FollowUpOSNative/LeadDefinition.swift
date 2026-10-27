@@ -140,11 +140,11 @@ enum LeadDefinition {
         case unknown
     }
 
-    /// Normalised whole-value match, then a containment fallback. An exact key is inside (the configured spelling).
-    /// A town that only contains a listed name is unknown, so it holds. A name in `unresolvedPlaceNames` is unknown
-    /// on an exact key or when the town only contains it. A postal-code-only town whose FSA starts with one of
-    /// `postalFsaPrefixes` is unknown. Anything else readable is outside. Blank is unknown. An area without
-    /// `municipalities` applies everywhere (the region alone).
+    /// Normalised whole-value match, then the rest of Québec, then containment. An exact key on `municipalities` is
+    /// inside (the configured spelling). A G7/G8 postal code anywhere in the address is unknown. An exact key on the
+    /// MAMH province list, or a comma-separated locality that is another Québec municipality or not a Québec
+    /// municipality at all, is outside. A town that only contains a listed name, and is none of those, is unknown.
+    /// Blank is unknown. An area without `municipalities` applies everywhere (the region alone).
     static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
         guard let places = area.municipalities else { return .inside(area.region) }
         let key = municipality.map(placeKey) ?? ""
@@ -152,6 +152,16 @@ enum LeadDefinition {
         if let exact = places.first(where: { placeKey($0) == key }) { return .inside(exact) }
         let unresolved = area.unresolvedPlaceNames ?? []
         if unresolved.contains(where: { placeKey($0) == key }) { return .unknown }
+        if let text = municipality, containsHeldPostal(text, prefixes: area.postalFsaPrefixes ?? []) { return .unknown }
+        let regionKeys = Set(places.map(placeKey))
+        let provinceKeys = Set((area.provinceMunicipalities ?? []).map(placeKey))
+        if provinceKeys.contains(key), !regionKeys.contains(key) { return .outside }
+        if let text = municipality, let locality = commaLocality(text) {
+            let loc = placeKey(locality)
+            if let exact = places.first(where: { placeKey($0) == loc }) { return .inside(exact) }
+            if !loc.isEmpty { return .outside }
+        }
+        if outsideByOfficialSuffix(key, provinceKeys: provinceKeys, regionKeys: regionKeys) { return .outside }
         let padded = " \(key) "
         func containsListed(_ names: [String]) -> Bool {
             names.contains { listed in
@@ -160,32 +170,50 @@ enum LeadDefinition {
             }
         }
         if containsListed(places) || containsListed(unresolved) { return .unknown }
-        if let fsa = postalFSA(municipality), let prefixes = area.postalFsaPrefixes {
-            let folded = prefixes.map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased() }
-            if folded.contains(where: { fsa.hasPrefix($0) }) { return .unknown }
-        }
         return .outside
     }
 
-    /// The FSA of a town that is only a Canadian postal code or FSA, optionally followed by ", QC". Nil otherwise.
-    private static func postalFSA(_ text: String?) -> String? {
-        guard let text else { return nil }
-        var folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
-        folded = folded.trimmingCharacters(in: .whitespacesAndNewlines)
-        var stripping = true
-        while stripping {
-            stripping = false
-            let trimmed = folded.trimmingCharacters(in: .whitespacesAndNewlines)
-            for suffix in [", qc", ", quebec"] where trimmed.hasSuffix(suffix) {
-                folded = String(trimmed.dropLast(suffix.count))
-                stripping = true
+    /// True when the address contains a Canadian postal code or FSA whose FSA starts with a configured prefix.
+    private static func containsHeldPostal(_ text: String, prefixes: [String]) -> Bool {
+        let foldedPrefixes = prefixes.map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased() }.filter { !$0.isEmpty }
+        guard !foldedPrefixes.isEmpty else { return false }
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        guard let regex = try? NSRegularExpression(pattern: #"\b([a-z]\d[a-z])(?:\s*\d[a-z]\d)?\b"#) else { return false }
+        let range = NSRange(folded.startIndex..., in: folded)
+        for match in regex.matches(in: folded, range: range) {
+            guard let hit = Range(match.range(at: 1), in: folded) else { continue }
+            let fsa = String(folded[hit])
+            if foldedPrefixes.contains(where: { fsa.hasPrefix($0) }) { return true }
+        }
+        return false
+    }
+
+    /// The last comma-separated part, after a trailing QC / Québec, when the address has a street or another place beside it.
+    private static func commaLocality(_ text: String) -> String? {
+        var parts = text.split(separator: ",", omittingEmptySubsequences: true).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+        while let last = parts.last {
+            let key = placeKey(last)
+            if key == "qc" || key == "quebec" { parts.removeLast(); continue }
+            break
+        }
+        guard parts.count >= 2, let locality = parts.last else { return nil }
+        return locality
+    }
+
+    /// A longer official name outside region 02 whose key ends with this town (a leading "la " may be dropped).
+    /// La Baie-James is the repertoire row Eeyou Istchee Baie-James, not the borough La Baie.
+    private static func outsideByOfficialSuffix(_ key: String, provinceKeys: Set<String>, regionKeys: Set<String>) -> Bool {
+        var candidates = [key]
+        if key.hasPrefix("la ") { candidates.append(String(key.dropFirst(3))) }
+        var hits = Set<String>()
+        for candidate in candidates where candidate.split(separator: " ").count >= 2 {
+            for official in provinceKeys where !regionKeys.contains(official) && official.hasSuffix(" " + candidate) {
+                hits.insert(official)
             }
         }
-        let compact = folded.replacingOccurrences(of: " ", with: "")
-        let fsaOnly = compact.range(of: #"^[a-z]\d[a-z]$"#, options: .regularExpression) != nil
-        let full = compact.range(of: #"^[a-z]\d[a-z]\d[a-z]\d$"#, options: .regularExpression) != nil
-        guard fsaOnly || full else { return nil }
-        return String(compact.prefix(3))
+        return hits.count == 1
     }
 
     /// Case, accents, collapsed whitespace, hyphens and spaces alike, punctuation stripped, bracketed parts removed,
