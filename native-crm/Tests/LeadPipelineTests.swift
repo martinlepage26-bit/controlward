@@ -1784,7 +1784,7 @@ enum LeadPipelineTests {
                 let outside = ["Saint-Augustin-de-Desmaures", "Saint-Bruno-de-Montarville", "Saint-Bruno-de-Guigues",
                                "Saint-Ambroise-de-Kildare", "Saint-Gédéon-de-Beauce", "Saint-Honoré-de-Shenley",
                                "Saint-Nazaire-d'Acton", "Saint-Stanislas-de-Kostka", "La Baie-James",
-                               "Rue Alma, Montréal", "Alma, Michigan", "Delisle, Saskatchewan"]
+                               "Rue Alma, Montréal"]
                 var outsideRecords: [ProspectRecord] = []
                 for town in outside {
                     let match = LeadDefinition.rbqAreaMatch(town, area: area)
@@ -1816,6 +1816,245 @@ enum LeadPipelineTests {
                 let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
                 if !raw.contains("column munnom") || !raw.contains("Eeyou Istchee Baie-James") || !raw.contains("before partial-name containment") {
                     misses.append("icp.json does not cite the full MAMH munnom list checked before containment")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Shared MAMH names are unknown, never outside or Ready (Argus follow-up)", {
+                // MAMH Répertoire des municipalités, https://donneesouvertes.affmunqc.net/repertoire/MUN.csv,
+                // columns munnom and regadm only, 1281 organisations, checked 2026-10-27.
+                // A name on the region-02 list that also has an organisation outside region 02 is ambiguous.
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                let listed = try unwrap(area.municipalities, "region-02 municipalities")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                func stored(_ town: String) -> (record: ProspectRecord, verdict: LeadDefinition.Verdict) {
+                    var record = plumber(town)
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    record.status = verdict.status
+                    record.reasons = verdict.reasons
+                    return (record, verdict)
+                }
+                func sharedNames(from rows: [(name: String, region: String)], list: [String]) -> [String] {
+                    let outside = Set(rows.compactMap { row -> String? in
+                        row.region == "02" ? nil : LeadDefinition.placeKey(row.name)
+                    })
+                    return list.filter { outside.contains(LeadDefinition.placeKey($0)) }
+                }
+                let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/mamh-mun-regions.tsv")
+                let fixtureText = try String(contentsOf: fixtureURL, encoding: .utf8)
+                var fixtureRows: [(name: String, region: String)] = []
+                var misses: [String] = []
+                if !fixtureText.contains("https://donneesouvertes.affmunqc.net/repertoire/MUN.csv") || !fixtureText.contains("regadm") || !fixtureText.contains("1281 organisations") {
+                    misses.append("MAMH fixture does not cite munnom/regadm, 1281 organisations, checked 2026-10-27")
+                }
+                for line in fixtureText.split(whereSeparator: \.isNewline) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                    let cols = trimmed.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                    guard cols.count >= 2 else { misses.append("bad MAMH row \(trimmed)"); continue }
+                    fixtureRows.append((name: cols[0], region: cols[1]))
+                }
+                if fixtureRows.count != 1281 { misses.append("MAMH fixture has \(fixtureRows.count) organisations, expected 1281") }
+                let shared = sharedNames(from: fixtureRows, list: listed)
+                if shared.isEmpty { misses.append("no shared MAMH names on the region-02 list") }
+                var heldRecords: [ProspectRecord] = []
+                for town in shared {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if match == .outside || verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) came out \(verdict.status) \(verdict.reasons) match \(match)")
+                    }
+                    heldRecords.append(record)
+                }
+                let augustin = LeadDefinition.rbqAreaMatch("Saint-Augustin", area: area)
+                if augustin == .outside { misses.append("Saint-Augustin match \(augustin), expected held") }
+                let desmaures = LeadDefinition.rbqAreaMatch("Saint-Augustin-de-Desmaures", area: area)
+                if desmaures != .outside { misses.append("Saint-Augustin-de-Desmaures match \(desmaures), expected outside") }
+                // A non-G7/G8 postal code must not clear a shared name. G7/G8 stays unknown too.
+                let postalHeld = ["Sainte-Monique H2X 1Y4", "Saint-Stanislas G0X 1A1", "Sainte-Monique G7H 1A1", "Saint-Augustin G8B 2C3"]
+                for town in postalHeld {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .unknown { misses.append("\(town) match \(match), expected unknown") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) came out \(verdict.status) \(verdict.reasons)")
+                    }
+                    heldRecords.append(record)
+                }
+                let outside = ["Saint-Augustin-de-Desmaures", "Saint-Bruno-de-Montarville", "Saint-Bruno-de-Guigues",
+                               "Saint-Ambroise-de-Kildare", "Saint-Gédéon-de-Beauce", "Saint-Honoré-de-Shenley",
+                               "Saint-Nazaire-d'Acton", "Saint-Stanislas-de-Kostka", "La Baie-James",
+                               "Rue Alma, Montréal"]
+                var outsideRecords: [ProspectRecord] = []
+                for town in outside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .outside { misses.append("\(town) match \(match), expected outside") }
+                    let (record, verdict) = stored(town)
+                    if verdict.status == .conflictReview || verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                        misses.append("\(town) held: \(verdict.status) \(verdict.reasons)")
+                    }
+                    outsideRecords.append(record)
+                }
+                let keepInside = listed.filter { !shared.contains($0) }
+                for town in keepInside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .inside(town) { misses.append("\(town) match \(match), expected inside") }
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    if verdict.status != .conflictReview || !verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) || verdict.status == .ready {
+                        misses.append("\(town) dropped: \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                let queued = ProspectIngest.heldForMartin(heldRecords + outsideRecords)
+                let queuedTowns = Set(queued.map(\.town))
+                for record in heldRecords where !queuedTowns.contains(record.town) {
+                    misses.append("held queue dropped \(record.town ?? "-")")
+                }
+                for record in outsideRecords where queuedTowns.contains(record.town) {
+                    misses.append("held queue includes outside town \(record.town ?? "-")")
+                }
+                for record in queued {
+                    let lines = ProspectDisplay.lines(for: record, config: config).joined(separator: "\n")
+                    if !lines.contains("sos-plomberie-excavation-lavoie") {
+                        misses.append("held row has no reason: \(record.town ?? "-")")
+                    }
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Comma locality is outside only for an exact MAMH municipality outside region 02 (Earth and Argus)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                let held = ["Alma, Lac-Saint-Jean", "Roberval, Lac-St-Jean", "Chambord, Lac-Saint-Jean",
+                            "123 rue Racine, Chicoutimi-Nord", "123 rue X, Chicoutimii",
+                            "Saguenay, Canada", "Alma, Canada", "Alma, Québec, Canada",
+                            "123 rue Racine, Chicoutimi, QC, Canada", "Jonquière, Saguenay–Lac-Saint-Jean",
+                            "Roberval, Lac-Saint-Jean", "Roberval, Lac St-Jean", "Dolbeau, Lac-Saint-Jean",
+                            "Alma, Lac-Saint-Jean-Est", "Saint-Félicien, Domaine-du-Roy",
+                            "Saint-Stanislas, G0X 1A1", "Alma, Michigan", "Delisle, Saskatchewan"]
+                var misses: [String] = []
+                for town in held {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if match == .outside || verdict.status == .ready || verdict.status != .conflictReview || !lavoie {
+                        misses.append("\(town) match \(match) \(verdict.status)")
+                    }
+                }
+                let desmaures = "123 rue Y, Saint-Augustin-de-Desmaures"
+                let outsideMatch = LeadDefinition.rbqAreaMatch(desmaures, area: area)
+                let outsideVerdict = LeadDefinition.evaluate(plumber(desmaures), config: config, now: now)
+                if outsideMatch != .outside || outsideVerdict.status == .conflictReview
+                    || outsideVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("\(desmaures) match \(outsideMatch) \(outsideVerdict.status)")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("MRC names stay unknown, and a G7/G8 code in any address field is held (Argus should-fix)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                var misses: [String] = []
+                for town in ["Domaine-du-Roy", "Maria-Chapdelaine", "Lac-Saint-Jean-Est"] {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if match != .unknown || verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) match \(match) \(verdict.status)")
+                    }
+                }
+                var licenceTown = plumber("Montréal")
+                licenceTown.rbqMunicipality = "Montréal"
+                licenceTown.town = "G7H 1A1"
+                let licenceVerdict = LeadDefinition.evaluate(licenceTown, config: config, now: now)
+                if licenceVerdict.status != .conflictReview || !licenceVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("RBQ Montréal with town G7H 1A1 \(licenceVerdict.status) \(licenceVerdict.reasons)")
+                }
+                var street = plumber("Montréal")
+                street.town = "Montréal"
+                street.address = "123 rue Racine G7H 1A1"
+                let streetVerdict = LeadDefinition.evaluate(street, config: config, now: now)
+                if streetVerdict.status != .conflictReview || !streetVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("Montréal town with G7H street \(streetVerdict.status) \(streetVerdict.reasons)")
+                }
+                let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
+                if raw.contains("Saint-Bruno-de-Montarville containing Saint-Bruno, is unknown and held")
+                    || !raw.contains("Saint-Bruno-de-Montarville is outside and not held") {
+                    misses.append("icp.json still describes Saint-Bruno-de-Montarville as held")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Comma-branch mutation (3f33dd1): restoring outside-for-any-last-part is caught", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                let places = try unwrap(area.municipalities, "region-02 municipalities")
+                // The comma branch at 3f33dd1: the last part is the town, and anything that is not an exact region-02 name is outside.
+                func outsideAt3f33dd1(_ text: String) -> Bool {
+                    var parts = text.split(separator: ",", omittingEmptySubsequences: true).map {
+                        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }.filter { !$0.isEmpty }
+                    while let last = parts.last {
+                        let key = LeadDefinition.placeKey(last)
+                        if key == "qc" || key == "quebec" { parts.removeLast(); continue }
+                        break
+                    }
+                    guard parts.count >= 2, let locality = parts.last else { return false }
+                    let loc = LeadDefinition.placeKey(locality)
+                    let region = places.contains { LeadDefinition.placeKey($0) == loc }
+                    return !loc.isEmpty && !region
+                }
+                let held = ["Alma, Lac-Saint-Jean", "Roberval, Lac-St-Jean", "Chambord, Lac-Saint-Jean",
+                            "123 rue Racine, Chicoutimi-Nord", "123 rue X, Chicoutimii",
+                            "Saguenay, Canada", "Alma, Canada", "Alma, Québec, Canada",
+                            "123 rue Racine, Chicoutimi, QC, Canada", "Jonquière, Saguenay–Lac-Saint-Jean",
+                            "Roberval, Lac-Saint-Jean", "Roberval, Lac St-Jean", "Dolbeau, Lac-Saint-Jean",
+                            "Alma, Lac-Saint-Jean-Est", "Saint-Félicien, Domaine-du-Roy"]
+                var misses: [String] = []
+                for town in held {
+                    if !outsideAt3f33dd1(town) { misses.append("3f33dd1 branch would not mark \(town) outside") }
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let verdict = LeadDefinition.evaluate({
+                        var record = LeadKit.readyClinic()
+                        record.segment = "construction_trades"
+                        record.organisation = "Plomberie Fictive \(town)"
+                        record.osmTags = ["craft=plumber"]
+                        record.rbqCheck = "matched"
+                        record.rbqCategories = ["1.3"]
+                        record.town = town
+                        return record
+                    }(), config: config, now: now)
+                    if match == .outside || verdict.status == .ready {
+                        misses.append("live matcher still uses the 3f33dd1 comma branch: \(town) match \(match) \(verdict.status)")
+                    }
+                }
+                let sourceURL = LeadKit.sourcesDirectory.appendingPathComponent("LeadDefinition.swift")
+                let source = try String(contentsOf: sourceURL, encoding: .utf8)
+                if source.contains("if !loc.isEmpty { return .outside }") {
+                    misses.append("LeadDefinition.swift still has the 3f33dd1 comma return")
                 }
                 try expect(misses.isEmpty, misses.joined(separator: " | "))
             }),
