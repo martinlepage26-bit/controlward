@@ -787,6 +787,38 @@ enum LeadgenSliceTests {
         }
     }
 
+    /// EOF after a finished chunk, and EOF in the middle of the next chunk. `5\r\nhel` does not reach either return.
+    static func chunkedEOFAfterAFinishedChunk() throws {
+        for body in ["5\r\nhello\r\n", "5\r\nhello\r\n5\r\nwor"] {
+            let raw = httpMessage(headers: ["Transfer-Encoding: chunked"], body: body)
+            let open = try LeadgenPinnedHTTPS.parse(raw, complete: false)
+            try check(open == nil, "incomplete chunked body \(body.debugDescription) returned \(open.map { String(decoding: $0.2, as: UTF8.self) } ?? "")")
+            try assertPinnedHTTPRefused("chunked EOF \(body.debugDescription)", raw, detail: "truncated HTTP response", absent: "hello")
+        }
+    }
+
+    static func contentLengthAndTransferEncodingRefused() throws {
+        let body = "5\r\nhello\r\n0\r\n\r\n"
+        for headers in [
+            ["Transfer-Encoding: chunked", "Content-Length: 5"],
+            ["Content-Length: 5", "Transfer-Encoding: chunked"],
+        ] {
+            let raw = httpMessage(headers: headers, body: body)
+            try assertPinnedHTTPRefused("content-length with transfer-encoding", raw, detail: "transfer-encoding and content-length", absent: "hello")
+        }
+    }
+
+    static func non2xxStatusRefused() throws {
+        for status in [404, 301, 500, 100] {
+            let raw = Data("HTTP/1.1 \(status) NO\r\nContent-Length: 5\r\n\r\nhello".utf8)
+            try assertPinnedHTTPRefused("status \(status)", raw, complete: false, detail: "http status", absent: "hello")
+            try assertPinnedHTTPRefused("status \(status) at EOF", raw, detail: "http status", absent: "hello")
+        }
+        let continueThenOK = Data("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".utf8)
+        try assertPinnedHTTPRefused("100 Continue before the next response", continueThenOK, complete: false, detail: "http status", absent: "hello")
+        try assertPinnedHTTPRefused("100 Continue", continueThenOK, detail: "http status", absent: "hello")
+    }
+
     /// Dry run with a directory URL must not read leads or projects. Live still must.
     static func dryRunSkipsRecordedDomains() async throws {
         let liveD1 = LeadgenFakeD1()
@@ -1736,8 +1768,9 @@ enum LeadgenSliceTests {
             let fetcher = LeadgenFixture.withDPQSite(LeadgenFixture.fetcher())
             _ = LeadgenFixture.withOwnSite(fetcher, host: "example-clinic-2.test", contact: "<html><body><main><p>Écrivez à info@example-clinic-2.test pour nous joindre.</p></main></body></html>")
             try LeadgenFixture.loadDPQ(fetcher)
+            let log = LeadgenMemoryLog()
             do {
-                let report = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: LeadgenRecordingMailbox(), d1: d1, log: LeadgenMemoryLog(), fetcher: fetcher).run(
+                let report = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: LeadgenRecordingMailbox(), d1: d1, log: log, fetcher: fetcher).run(
                     candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
                 try check(report.prospect.organization == "Example Clinic 2", "did not skip the recorded domain: picked \(report.prospect.organization)")
             } catch let error as LeadgenError {
@@ -1749,8 +1782,11 @@ enum LeadgenSliceTests {
             } catch {
                 throw PortableCheckFailure(description: "did not skip a domain already recorded: \(error)")
             }
-            try check(!fetcher.requested.contains { $0.contains("example-clinic-1.test") }, "fiche 1 was fetched before the skip: \(fetcher.requested)")
-            try check(fetcher.requested.contains { $0.contains("example-clinic-2.test") }, "fiche 2 was not fetched after the skip: \(fetcher.requested)")
+            let lines = await log.lines
+            let fiche1Fetched = fetcher.requested.contains { $0.contains("example-clinic-1.test") }
+            let fiche2Fetched = fetcher.requested.contains { $0.contains("example-clinic-2.test") }
+            let skippedFiche1 = lines.contains { $0.contains("fiche 1 skipped: already recorded") }
+            try check(skippedFiche1 && !fiche1Fetched && fiche2Fetched, "a leads-table stop is not a skip: fiche1Fetched=\(fiche1Fetched) fiche2Fetched=\(fiche2Fetched) log=\(lines) requested=\(fetcher.requested)")
         }
         try await skipped { await $0.occupyProject(LeadgenProjectTarget.meCom.databaseID, domain: "example-clinic-1.test") }
         try await skipped { await $0.occupyProject(LeadgenProjectTarget.pharos.databaseID, domain: "example-clinic-1.test") }
@@ -2769,6 +2805,15 @@ enum LeadgenSliceTests {
         }))
         cases.append(("A folded header line is refused", {
             try LeadgenSliceTests.foldedHeaderRefused()
+        }))
+        cases.append(("A chunked body that ends after a finished chunk, or in the next chunk, is refused at EOF", {
+            try LeadgenSliceTests.chunkedEOFAfterAFinishedChunk()
+        }))
+        cases.append(("Content-Length together with Transfer-Encoding is refused", {
+            try LeadgenSliceTests.contentLengthAndTransferEncodingRefused()
+        }))
+        cases.append(("A status outside 2xx, including 100 Continue, is refused", {
+            try LeadgenSliceTests.non2xxStatusRefused()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
