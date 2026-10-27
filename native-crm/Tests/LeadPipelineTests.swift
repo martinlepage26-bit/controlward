@@ -5,6 +5,80 @@ import FoundationNetworking
 
 /// Correctness tests for the Slice 3 pipeline (not planted reds). Synthetic data only.
 enum LeadPipelineTests {
+    /// Official region 02 names: MAMH MUN.csv (checked 2026-10-27), ARR.csv boroughs of Saguenay, and the former towns named in Order in Council 841-2001.
+    static let region02Municipalities: [String] = [
+        "Saguenay",
+        "Chicoutimi",
+        "Jonquière",
+        "La Baie",
+        "Laterrière",
+        "Lac-Kénogami",
+        "Shipshaw",
+        "Canton de Tremblay",
+        "Canton-Tremblay",
+        "Lac-Bouchette",
+        "Saint-André-du-Lac-Saint-Jean",
+        "Saint-François-de-Sales",
+        "Chambord",
+        "Roberval",
+        "Sainte-Hedwidge",
+        "Saint-Prime",
+        "Saint-Félicien",
+        "La Doré",
+        "Mashteuiatsh",
+        "Lac-Ashuapmushuan",
+        "Saint-Augustin",
+        "Péribonka",
+        "Sainte-Jeanne-d'Arc",
+        "Dolbeau-Mistassini",
+        "Albanel",
+        "Normandin",
+        "Saint-Thomas-Didyme",
+        "Saint-Edmond-les-Plaines",
+        "Girardville",
+        "Notre-Dame-de-Lorette",
+        "Saint-Eugène-d'Argentenay",
+        "Saint-Stanislas",
+        "Passes-Dangereuses",
+        "Sainte-Élisabeth-de-Proulx",
+        "Rivière-Mistassini",
+        "Desbiens",
+        "Métabetchouan--Lac-à-la-Croix",
+        "Hébertville",
+        "Saint-Gédéon",
+        "Alma",
+        "Saint-Nazaire",
+        "Labrecque",
+        "Lamarche",
+        "L'Ascension-de-Notre-Seigneur",
+        "Saint-Henri-de-Taillon",
+        "Sainte-Monique",
+        "Saint-Ludger-de-Milot",
+        "Mont-Apica",
+        "Lac-Moncouche",
+        "Lac-Achouakan",
+        "Belle-Rivière",
+        "Petit-Saguenay",
+        "L'Anse-Saint-Jean",
+        "Rivière-Éternité",
+        "Ferland-et-Boilleau",
+        "Saint-Félix-d'Otis",
+        "Sainte-Rose-du-Nord",
+        "Saint-Fulgence",
+        "Saint-Honoré",
+        "Saint-David-de-Falardeau",
+        "Bégin",
+        "Saint-Ambroise",
+        "Saint-Charles-de-Bourget",
+        "Larouche",
+        "Lalemant",
+        "Lac-Ministuk",
+        "Mont-Valin",
+    ]
+
+    /// The conflict-area description after Martin's 27 Oct 2026 rulings, including the 4:30 PM ET region ruling.
+    static let region02ConflictDescription = "plumbing and excavation firms anywhere in Québec administrative region 02 (Saguenay–Lac-Saint-Jean), including the city of Saguenay, its boroughs and the merged former towns. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation). 4:30 PM ET, first-hand to Argus: Saguenay means the whole region, not only the city."
+
     static func run() async -> Bool {
         let config: ICPConfig
         let confirmed: ICPConfirmed
@@ -22,7 +96,7 @@ enum LeadPipelineTests {
             ("ICP config: seven confirmed segments, equal priority, valid", {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
-                try expect(config.conflictAreas.first?.description == "plumbing and excavation firms in the city of Saguenay only (its boroughs and merged former towns). Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation).", "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
+                try expect(config.conflictAreas.first?.description == region02ConflictDescription, "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
                 try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "2456 rue de Rouen, Montréal QC H2K 1M2", "sender identity")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
@@ -566,15 +640,18 @@ enum LeadPipelineTests {
                 try expect(LeadDefinition.rbqHeldCodes(RBQFixture.annexeIIIBundle, area: area).isEmpty, "proof predicate: bundle")
                 try expect(LeadDefinition.rbqHeldCodes(["1.7G", "2.5"], area: area).isEmpty, "proof predicate: 1.x")
                 try expect(LeadDefinition.rbqHeldCodes(RBQFixture.annexeIIIBundle + ["1.3", "15.5"], area: area) == ["15.5"], "proof predicate: 15.5")
-                // Martin 27 Oct 2026: the Montréal mixed batch is outside Saguenay and is not plumbing or excavation, so a missing or truncated index does not hold it for SOS.
+                // Martin 27 Oct 2026, 4:30 PM ET: a missing or truncated index holds every construction firm for the licence check, not for SOS.
                 for contents in [nil, Data(#"{"Liste Licence":[{"Licence":{"#.utf8)] as [Data?] {
                     let out = try await EarthRBQ.appRun(contents: contents)
-                    let held = out.prospects.filter { $0.status == .conflictReview || $0.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") } }
-                    try expect(out.prospects.count == SearchFixture.constructionBatch.count && held.isEmpty,
-                               "Montréal batch must not be held for SOS: \(out.prospects.map { "\($0.organisation) \($0.status) \($0.reasons)" })")
+                    let licence = out.prospects.filter { prospect in
+                        prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                            && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    }
+                    try expect(out.prospects.count == SearchFixture.constructionBatch.count && licence.count == out.prospects.count && out.drafts.isEmpty,
+                               "Montréal batch must be held for the licence check only: \(out.prospects.map { "\($0.organisation) \($0.status) \($0.reasons)" }) drafts=\(out.drafts.count)")
                 }
             }),
-            ("RBQ area rule (Martin 8:39, Water 8:41, list widened 9:02): the code hold applies only in the Saguenay area (whole, normalised Municipalité), or with no location; never a substring", {
+            ("RBQ area rule (Martin 8:39, Water 8:41, region 02 at 4:30 PM ET): the code hold applies in region 02 after place normalisation, or when the town is unknown; a non-exact string that contains a listed name is unknown", {
                 let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let bundle = RBQFixture.annexeIIIBundle.map { (nil as String?, $0) }
@@ -583,14 +660,14 @@ enum LeadPipelineTests {
                     ("Services Fictifs Alpha", "Jonquière", [("Specialisee", "15.5")], true, "15.5 in Jonquière"),
                     ("Services Fictifs Bravo", "Montréal", [("Specialisee", "15.5")], false, "15.5 in Montréal"),
                     ("Services Fictifs Charlie", "", [("Specialisee", "15.5")], true, "15.5 with no location"),
-                    ("Services Fictifs Delta", "Petit-Saguenay", [("Specialisee", "15.5")], false, "15.5 in Petit-Saguenay (no substring match)"),
+                    ("Services Fictifs Delta", "Petit-Saguenay", [("Specialisee", "15.5")], true, "15.5 in Petit-Saguenay (a municipality of MRC Le Fjord-du-Saguenay)"),
                     ("Services Fictifs Echo", "Saguenay", [("Specialisee", "15.5")], true, "15.5 in Saguenay"),
                     ("Services Fictifs Foxtrot", " SAGUENAY ", [("Specialisee", "15.5")], true, "15.5 in ' SAGUENAY ' (case and spaces)"),
                     ("Services Fictifs Golf", "Jonquiere", [("Specialisee", "15.5")], true, "15.5 in 'Jonquiere' (accent-normalised)"),
                     ("Services Fictifs Hotel", "Saguenay", [("Specialisee", "2.5")], true, "2.5 alone in Saguenay"),
                     ("Services Fictifs India", "Laval", [("Specialisee", "2.5")], false, "2.5 alone in Laval"),
                     ("Services Fictifs Juliett", "Saguenay", bundle, false, "2.5 within the full bundle in Saguenay"),
-                    ("Services Fictifs Kilo", "Saguenay-Lac-Saint-Jean", [("Specialisee", "15.5")], false, "15.5 in a longer name containing Saguenay")
+                    ("Services Fictifs Kilo", "Saguenay-Lac-Saint-Jean", [("Specialisee", "15.5")], true, "15.5 in a longer name containing Saguenay (unknown, fail closed)")
                 ]
                 let data = RBQFixture.json(kinds.enumerated().map { index, kind in
                     RBQFixture.jsonRecord(licence: "0000-0002-\(10 + index)", name: kind.name, town: kind.town, codes: kind.codes)
@@ -607,21 +684,24 @@ enum LeadPipelineTests {
                                "\(kind.why): expected \(kind.held ? "held" : "not held"), got \(status) (\(String(describing: record.rbqCheck)))")
                     try expect(LeadDefinition.rbqHeldCodes(kind.codes.map(\.1), area: area, municipality: kind.town).isEmpty == !kind.held, "proof predicate: \(kind.why)")
                 }
-                try expect(LeadDefinition.rbqAreaMatch("Petit-Saguenay", area: area) == .outside && LeadDefinition.rbqAreaMatch(nil, area: area) == .unknown
-                           && LeadDefinition.rbqAreaMatch("  ", area: area) == .unknown && LeadDefinition.rbqAreaMatch("jonquière", area: area) == .inside("Jonquière"),
+                try expect(LeadDefinition.rbqAreaMatch("Petit-Saguenay", area: area) == .inside("Petit-Saguenay") && LeadDefinition.rbqAreaMatch(nil, area: area) == .unknown
+                           && LeadDefinition.rbqAreaMatch("  ", area: area) == .unknown && LeadDefinition.rbqAreaMatch("jonquière", area: area) == .inside("Jonquière")
+                           && LeadDefinition.rbqAreaMatch("Saguenay-Lac-Saint-Jean", area: area) == .unknown
+                           && LeadDefinition.rbqAreaMatch("Québec", area: area) == .outside,
                            "area match classes")
-                // The full list (Water 9:02 replaces the two values of 8:41) is asserted in the "Conflict area (Water 9:02)" test.
-                try expect(area.municipalities?.prefix(2) == ["Saguenay", "Jonquière"], "conflict area starts with Martin's two values: \(String(describing: area.municipalities))")
-                // Martin 27 Oct 2026: no index does not hold the Montréal mixed batch for this conflict.
+                try expect(area.municipalities?.prefix(4) == ["Saguenay", "Chicoutimi", "Jonquière", "La Baie"], "region 02 list starts with the city and its boroughs: \(String(describing: area.municipalities?.prefix(4)))")
+                // Martin 27 Oct 2026, 4:30 PM ET: no index holds the Montréal mixed batch for the licence check, not for SOS.
                 let out = try await EarthRBQ.appRun(contents: nil)
-                let held = out.prospects.filter { $0.status == .conflictReview }
-                try expect(out.prospects.count == SearchFixture.constructionBatch.count && held.isEmpty,
-                           "no index does not hold the Montréal batch: \(out.prospects.map { "\($0.status) \($0.reasons)" })")
+                let licence = out.prospects.filter { prospect in
+                    prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                        && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                }
+                try expect(out.prospects.count == SearchFixture.constructionBatch.count && licence.count == out.prospects.count && out.drafts.isEmpty,
+                           "no index holds the Montréal batch for the licence check: \(out.prospects.map { "\($0.status) \($0.reasons)" })")
             }),
-            ("Conflict area (Water 9:02): keyword and map-tag holds follow the Saguenay area; unreadable town held; elsewhere not held", {
+            ("Conflict area (Water 9:02, region 02 at 4:30 PM ET): keyword and map-tag holds follow the official region; unreadable town held; elsewhere not held", {
                 let area = try unwrap(config.conflictAreas.first, "conflict area")
-                try expect(area.municipalities == ["Saguenay", "Jonquière", "Chicoutimi", "Chicoutimi-Nord", "La Baie", "Laterrière", "Shipshaw",
-                                                   "Lac-Kénogami", "Canton-Tremblay", "Arvida", "Kénogami"], "one list in icp.json: \(String(describing: area.municipalities))")
+                try expect(area.municipalities == region02Municipalities, "one official list in icp.json: \(String(describing: area.municipalities))")
                 // A matched licence with no listed code, so only the keyword or map tag and the town decide.
                 func firm(_ name: String, tags: [String], town: String?) -> ProspectRecord {
                     var record = LeadKit.readyClinic()
@@ -637,8 +717,9 @@ enum LeadPipelineTests {
                     (firm("Plomberie Fictive Mike", tags: ["craft=builder"], town: "Montréal"), false, "keyword firm in Montréal"),
                     (firm("Plomberie Fictive November", tags: ["craft=builder"], town: nil), true, "keyword firm with no town"),
                     (firm("Plomberie Fictive Oscar", tags: ["craft=builder"], town: "  "), true, "keyword firm with a blank town"),
-                    (firm("Services Fictifs Papa", tags: ["craft=plumber"], town: "Petit-Saguenay"), false, "map-data plumber in Petit-Saguenay"),
-                    (firm("Excavation Fictive Quebec", tags: ["craft=builder"], town: "arvida"), true, "keyword firm in 'arvida' (normalised)"),
+                    (firm("Services Fictifs Papa", tags: ["craft=plumber"], town: "Petit-Saguenay"), true, "map-data plumber in Petit-Saguenay"),
+                    (firm("Excavation Fictive Quebec", tags: ["craft=builder"], town: "Laterrière"), true, "keyword firm in Laterrière"),
+                    (firm("Excavation Fictive Arvida", tags: ["craft=builder"], town: "Arvida"), false, "Arvida is not on the official region-02 list"),
                     (firm("Services Fictifs Romeo", tags: ["craft=excavation"], town: "Laval"), false, "map-data excavation in Laval")
                 ]
                 for item in cases {
@@ -666,11 +747,10 @@ enum LeadPipelineTests {
                 try expect(status == .conflictReview, "map-data plumber in Chicoutimi: expected held, got \(status)")
                 try expect(LeadDefinition.conflictArea(for: record, config: config) != nil, "outreach check: map-data plumber in Chicoutimi")
             }),
-            ("SOS conflict (Martin Lepage, 27 Oct 2026, 3:55 and 3:56 PM ET): held only when the firm is plumbing or excavation AND in Saguenay", {
-                // 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only.
-                // A town that cannot be read keeps the previous fail-closed hold. Pavage / asphalt with no excavation
-                // keyword and no RBQ 2.5 is clear. "Pavage et terrassement", and a paving firm that carries 2.5, are
-                // left on the excavation signals (keyword "terrassement", licence 2.5) and are not redefined here.
+            ("SOS conflict and RBQ licence hold (Martin Lepage, 27 Oct 2026, 3:55, 3:56 and 4:30 PM ET)", {
+                // Lavoie: plumbing or excavation AND in region 02 (or an unreadable town when the trade signals or codes match).
+                // Licence: any construction_trades firm, anywhere, when the RBQ check is not a verified match. Its reason id
+                // is rbq-licence-unverified, never sos-plomberie-excavation-lavoie. Both reasons are listed when both apply.
                 func firm(_ name: String, tags: [String], town: String?, rbq: String?, codes: [String] = [], segment: String = "construction_trades") -> ProspectRecord {
                     var record = LeadKit.readyClinic()
                     record.segment = segment
@@ -681,44 +761,58 @@ enum LeadPipelineTests {
                     record.rbqCategories = codes
                     return record
                 }
-                let cases: [(record: ProspectRecord, held: Bool, why: String)] = [
-                    (firm("Plomberie Fictive Montréal", tags: ["craft=plumber"], town: "Montréal", rbq: "matched", codes: ["15.5"]), false, "(a) Montréal plumber with RBQ 15.5"),
-                    (firm("Excavation Fictive Laval", tags: ["craft=excavation"], town: "Laval", rbq: "matched", codes: ["2.5"]), false, "(b) Laval excavation with RBQ 2.5 and no Annexe III bundle"),
-                    (firm("Constructions Fictives Montréal", tags: ["craft=builder"], town: "Montréal", rbq: "no-match"), false, "(c) Montréal construction-trade firm with no RBQ match"),
-                    (firm("Constructions Fictives Montréal", tags: ["craft=builder"], town: "Montréal", rbq: "unavailable"), false, "(c) Montréal construction-trade firm with no RBQ file"),
-                    (firm("Services Fictifs Lima", tags: ["craft=plumber"], town: "Chicoutimi", rbq: "matched", codes: ["1.3"]), true, "(d) Chicoutimi plumber"),
-                    (firm("Services Fictifs Alpha", tags: ["craft=builder"], town: "Jonquière", rbq: "matched", codes: ["15.5"]), true, "(d) Jonquière 15.5 licence"),
-                    (firm("Services Fictifs Echo", tags: ["craft=excavation"], town: "Saguenay", rbq: "no-match"), true, "(e) Saguenay excavation firm with no RBQ match"),
-                    (firm("Plomberie Fictive Saguenay", tags: ["craft=plumber"], town: "Saguenay", rbq: "unavailable"), true, "(e) Saguenay plumber with no RBQ file"),
-                    (firm("Toitures Fictives", tags: ["craft=roofer"], town: "Chicoutimi", rbq: "no-match"), false, "(f) Chicoutimi roofing firm with no RBQ match"),
-                    (firm("Peinture Fictive", tags: ["craft=painter"], town: "Chicoutimi", rbq: "no-match"), false, "(f) Chicoutimi painting firm with no RBQ match"),
-                    (firm("Constructions Fictives Saguenay", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, "(f) Saguenay generic construction firm with no RBQ match"),
-                    (firm("Plomberie Fictive Jonquière", tags: ["craft=builder"], town: "Jonquière", rbq: "no-match"), true, "(g) Jonquière firm with plomberie in its name and no RBQ match"),
-                    (firm("Plomberie Fictive Saguenay", tags: ["craft=plumber"], town: "Saguenay", rbq: "matched", codes: ["15.5"]), true, "(1) Saguenay plumber"),
-                    (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, "(2) Saguenay paving firm (pavage)"),
-                    (firm("Asphalt Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, "(2) Saguenay paving firm (asphalt)"),
-                    (firm("Plomberie Fictive Centre", tags: ["craft=plumber"], town: "Montréal", rbq: "no-match"), false, "(3) Montréal plumber"),
-                    (firm("Clinique Exemple Nord", tags: ["healthcare=clinic"], town: "Montréal", rbq: nil, segment: "clinic"), false, "(4) Montréal clinic"),
-                    (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: nil, rbq: "no-match"), true, "unknown town: construction firm with no RBQ match stays held"),
-                    (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: "  ", rbq: "unavailable"), true, "blank town: construction firm with no RBQ file stays held")
+                let cases: [(record: ProspectRecord, lavoie: Bool, licence: Bool, why: String)] = [
+                    (firm("Plomberie Fictive Montréal", tags: ["craft=plumber"], town: "Montréal", rbq: "matched", codes: ["15.5"]), false, false, "(a) Montréal plumber with a verified RBQ 15.5 match"),
+                    (firm("Excavation Fictive Laval", tags: ["craft=excavation"], town: "Laval", rbq: "matched", codes: ["2.5"]), false, false, "(b) Laval excavation with a verified RBQ 2.5 match and no Annexe III bundle"),
+                    (firm("Constructions Fictives Montréal", tags: ["craft=builder"], town: "Montréal", rbq: "no-match"), false, true, "(c) Montréal construction-trade firm with no RBQ match"),
+                    (firm("Constructions Fictives Montréal", tags: ["craft=builder"], town: "Montréal", rbq: "unavailable"), false, true, "(c) Montréal construction-trade firm with no RBQ file"),
+                    (firm("Services Fictifs Lima", tags: ["craft=plumber"], town: "Chicoutimi", rbq: "matched", codes: ["1.3"]), true, false, "(d) Chicoutimi plumber with a verified match"),
+                    (firm("Services Fictifs Alpha", tags: ["craft=builder"], town: "Jonquière", rbq: "matched", codes: ["15.5"]), true, false, "(d) Jonquière 15.5 licence"),
+                    (firm("Services Fictifs Echo", tags: ["craft=excavation"], town: "Saguenay", rbq: "no-match"), true, true, "(e) Saguenay excavation firm with no RBQ match"),
+                    (firm("Plomberie Fictive Saguenay", tags: ["craft=plumber"], town: "Saguenay", rbq: "unavailable"), true, true, "(e) Saguenay plumber with no RBQ file"),
+                    (firm("Toitures Fictives", tags: ["craft=roofer"], town: "Chicoutimi", rbq: "no-match"), false, true, "(f) Chicoutimi roofing firm with no RBQ match"),
+                    (firm("Peinture Fictive", tags: ["craft=painter"], town: "Chicoutimi", rbq: "no-match"), false, true, "(f) Chicoutimi painting firm with no RBQ match"),
+                    (firm("Constructions Fictives Saguenay", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, true, "(f) Saguenay generic construction firm with no RBQ match"),
+                    (firm("Plomberie Fictive Jonquière", tags: ["craft=builder"], town: "Jonquière", rbq: "no-match"), true, true, "(g) Jonquière firm with plomberie in its name and no RBQ match"),
+                    (firm("Plomberie Fictive Saguenay", tags: ["craft=plumber"], town: "Saguenay", rbq: "matched", codes: ["15.5"]), true, false, "(1) Saguenay plumber with a verified match"),
+                    (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, true, "(2) Saguenay paving firm (pavage) with no RBQ match"),
+                    (firm("Asphalt Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, true, "(2) Saguenay paving firm (asphalt) with no RBQ match"),
+                    (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "matched", codes: ["1.3"]), false, false, "(2) Saguenay paving firm with a verified non-excavation licence"),
+                    (firm("Pavage et terrassement Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), true, true, "Saguenay paving name containing terrassement stays on the excavation keyword"),
+                    (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "matched", codes: ["2.5"]), true, false, "Saguenay paving firm carrying RBQ 2.5 stays on the excavation code"),
+                    (firm("Plomberie Fictive Centre", tags: ["craft=plumber"], town: "Montréal", rbq: "no-match"), false, true, "(3) Montréal plumber with no RBQ match"),
+                    (firm("Clinique Exemple Nord", tags: ["healthcare=clinic"], town: "Montréal", rbq: nil, segment: "clinic"), false, false, "(4) Montréal clinic"),
+                    (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: nil, rbq: "no-match"), false, true, "unknown town: generic construction firm is a licence hold, not a Lavoie conflict"),
+                    (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: "  ", rbq: "unavailable"), false, true, "blank town: generic construction firm is a licence hold, not a Lavoie conflict"),
+                    (firm("Plomberie Fictive Inconnue", tags: ["craft=plumber"], town: nil, rbq: "no-match"), true, true, "unknown town: a plumber with no match is both holds")
                 ]
                 let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
                 let source = area.rbqCodeConditions?.first?.source ?? ""
-                try expect(area.description.contains("unless in Saguenay") && area.description.contains("3:55 PM ET") && area.description.contains("3:56 PM ET"),
-                           "description cites the 27 Oct 2026 rule: \(area.description)")
-                try expect(!source.contains("Applies province-wide") && source.contains("unless in Saguenay") && source.contains("27 Oct 2026"),
-                           "2.5 condition cites the rule and no longer says province-wide: \(source)")
+                let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
+                try expect(area.description == region02ConflictDescription, "description cites 3:55, 3:56 and the 4:30 region ruling")
+                try expect(!source.contains("Applies province-wide") && source.contains("unless in Saguenay") && source.contains("27 Oct 2026") && source.contains("4:30 PM ET"),
+                           "2.5 condition cites the rulings and no longer says province-wide: \(source)")
+                try expect(raw.contains("rbq-licence-unverified") && raw.contains("Yes, keep a separate RBQ licence-check hold for construction firms everywhere."),
+                           "icp.json cites the separate licence-hold ruling")
+                try expect(raw.contains("Saguenay–Lac-Saint-Jean") && raw.contains("4:30 PM ET"), "icp.json cites the region-02 ruling")
+                try expect(raw.contains("donneesouvertes.affmunqc.net/repertoire/MUN.csv") && raw.contains("2026-10-27"), "icp.json cites the MAMH list and the date it was checked")
+                try expect(raw.contains("cautious team call pending Martin"), "paving and 2.5 pavers are labeled a team call, not Martin's rule")
                 var misses: [String] = []
                 for item in cases {
                     let verdict = LeadDefinition.evaluate(item.record, config: config, now: now)
-                    let held = verdict.status == .conflictReview && verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
-                    if held != item.held {
-                        misses.append("\(item.why): expected \(item.held ? "HELD" : "CLEAR"), got \(verdict.status) \(verdict.reasons)")
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    let held = item.lavoie || item.licence
+                    if lavoie != item.lavoie || licence != item.licence || (verdict.status == .conflictReview) != held {
+                        misses.append("\(item.why): expected lavoie=\(item.lavoie) licence=\(item.licence), got \(verdict.status) \(verdict.reasons)")
+                    }
+                    if held && verdict.reasons.count < (item.lavoie && item.licence ? 2 : 1) {
+                        misses.append("\(item.why): reasons are not listed separately \(verdict.reasons)")
                     }
                     var gated = item.record
                     gated.status = verdict.status
                     let blocked = OutreachDraftGate.holds(gated, config: config)?.code == "refused:hold:conflict-review"
-                    if blocked != item.held {
+                    if blocked != held {
                         misses.append("\(item.why): outreach \(blocked ? "blocked" : "not blocked")")
                     }
                 }
@@ -1119,25 +1213,28 @@ enum LeadPipelineTests {
                 try expect(refusal(Data())?.code == "refused:open-data-schema" && refusal(RBQFixture.json([]))?.code == "refused:open-data-schema", "empty file or no records")
                 try expect(refusal(Data(#"{"Liste Licence":[{"Licence":{"#.utf8))?.code == "refused:open-data-schema", "truncated file")
             }),
-            ("RBQ fail-closed is Saguenay plumbing or excavation only: a Montréal builder is not held when the file is missing, unreadable or unmatched; a Saguenay plumber still is", {
+            ("RBQ licence hold is province-wide for construction firms; a Montréal builder is held when the file is missing, unreadable or unmatched, and not for SOS; a Saguenay plumber is held for both", {
                 var misses: [String] = []
                 for (rbq, failure, expected) in [(nil as RBQIndex?, nil as String?, "unavailable"), (nil, "refused:open-data-schema", "error:refused:open-data-schema"),
                                                  (RBQIndex([]), nil, "no-match")] {
                     let fixture = SearchFixture.builder(config: config)
                     let report = await fixture.run(segment: "construction_trades", rbq: rbq, rbqFailure: failure)
                     let prospect = try unwrap(report.prospects.first, "prospect (\(expected))")
-                    let sos = prospect.status == .conflictReview || prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
-                    if prospect.rbqCheck != expected || sos {
-                        misses.append("\(expected): rbqCheck=\(prospect.rbqCheck ?? "-") status=\(prospect.status) reasons=\(prospect.reasons)")
+                    let licence = prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    let sos = prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if prospect.rbqCheck != expected || !licence || sos || !report.drafts.isEmpty {
+                        misses.append("\(expected): rbqCheck=\(prospect.rbqCheck ?? "-") status=\(prospect.status) reasons=\(prospect.reasons) drafts=\(report.drafts.count)")
                     }
                 }
-                try expect(misses.isEmpty, "Montréal builder must not be held for SOS: \(misses)")
+                try expect(misses.isEmpty, "Montréal builder must be held for the licence check only: \(misses)")
                 for (rbq, failure, expected) in [(nil as RBQIndex?, nil as String?, "unavailable"), (RBQIndex([]), nil, "no-match")] {
                     let fixture = SearchFixture.saguenayPlumber(config: config)
                     let report = await fixture.run(segment: "construction_trades", rbq: rbq, rbqFailure: failure)
                     let prospect = try unwrap(report.prospects.first, "Saguenay plumber (\(expected))")
-                    try expect(prospect.rbqCheck == expected && prospect.status == .conflictReview && report.drafts.isEmpty,
-                               "Saguenay plumber \(expected): rbqCheck=\(prospect.rbqCheck ?? "-") status=\(prospect.status) drafts=\(report.drafts.count)")
+                    let both = prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                        && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    try expect(prospect.rbqCheck == expected && prospect.status == .conflictReview && report.drafts.isEmpty && both,
+                               "Saguenay plumber \(expected): rbqCheck=\(prospect.rbqCheck ?? "-") status=\(prospect.status) reasons=\(prospect.reasons) drafts=\(report.drafts.count)")
                 }
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let licences = try RBQOpenData.parse(data: RBQFixture.json([
@@ -1163,20 +1260,24 @@ enum LeadPipelineTests {
                 let reports = await env.searchAndIngest([.init(segmentID: "construction_trades", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
                                                         inner: fixture.inner, audit: audit, clock: fixture.clock)
                 let appProspect = try unwrap(reports.first?.prospects.first, "app prospect")
-                try expect(appProspect.status != .conflictReview && !appProspect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") },
-                           "Montréal builder is not held for SOS when the cache is unreadable: \(appProspect.status) \(appProspect.reasons)")
+                try expect(appProspect.status == .conflictReview && appProspect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                           && !appProspect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") },
+                           "Montréal builder is held for the licence check, not SOS, when the cache is unreadable: \(appProspect.status) \(appProspect.reasons)")
                 try expect(audit.lines.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }, "refusal audited")
             }),
-            ("RBQ fail-closed in the app (Martin 27 Oct 2026): a missing, truncated or bad-header cached index does not hold a Montréal mixed construction batch for SOS, and still audits why", {
+            ("RBQ licence hold in the app (Martin 27 Oct 2026, 4:30 PM ET): a missing, truncated or bad-header cached index holds a Montréal mixed construction batch for the licence check, not for SOS, and still audits why", {
                 for (label, contents, expectedLoad) in [("missing", nil as Data?, nil as String?),
                                                         ("truncated", Data(#"{"Liste Licence":[{"Licence":{"#.utf8), "refused:open-data-schema"),
                                                         ("bad header", RBQFixture.json([RBQFixture.jsonRecord(licence: "0000-0000-07", name: SearchFixture.builderName, town: "Montréal",
                                                                                                              codes: [("Specialisee", "15.5")], renaming: ("Catégories et sous-catégories", "Categories"))]),
                                                          "refused:open-data-schema")] {
                     let held = try await EarthRBQ.appRun(contents: contents)
-                    let sos = held.prospects.filter { $0.status == .conflictReview || $0.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") } }
-                    try expect(held.prospects.count == SearchFixture.constructionBatch.count && sos.isEmpty,
-                               "\(label): \(held.prospects.map { "\($0.organisation) \($0.status)/\($0.rbqCheck ?? "-") \($0.reasons)" })")
+                    let licence = held.prospects.filter { prospect in
+                        prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                            && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    }
+                    try expect(held.prospects.count == SearchFixture.constructionBatch.count && licence.count == held.prospects.count && held.drafts.isEmpty,
+                               "\(label): \(held.prospects.map { "\($0.organisation) \($0.status)/\($0.rbqCheck ?? "-") \($0.reasons)" }) drafts=\(held.drafts.count)")
                     if let expectedLoad {
                         try expect(held.audit.contains { $0.action == "rbq-load" && $0.result == expectedLoad }, "\(label): rbq-load audited as \(expectedLoad)")
                     }
@@ -1499,6 +1600,118 @@ enum LeadPipelineTests {
                                               inner: fixture.inner, audit: MemoryAuditSink(), clock: fixture.clock)
                 try expect(env.funnel(now: fixture.clock.now) == funnel, "a second run of the same places does not inflate the funnel")
             }),
+            ("Place names (Argus must-fix 1, Martin 4:30 PM ET region 02): plumbing-like spellings hold for Lavoie after normalisation", {
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive Est"
+                    record.osmTags = ["craft=plumber"]
+                    record.town = town
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    return record
+                }
+                let towns = [" La  Baie ", "Ville de Saguenay", "Saguenay (Chicoutimi)", "Saguenay, QC", "Lac Kénogami",
+                             "Dolbeau Mistassini", "Métabetchouan–Lac-à-la-Croix", "Métabetchouan-Lac-à-la-Croix", "Métabetchouan Lac à la Croix",
+                             "Chicoutimi-Nord"]
+                var misses: [String] = []
+                for town in towns {
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    if verdict.status != .conflictReview || !lavoie || licence {
+                        misses.append("\(town): \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                let quebec = LeadDefinition.evaluate(plumber("Québec"), config: config, now: now)
+                if quebec.status == .conflictReview || quebec.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") || $0.contains("rbq-licence-unverified") }) {
+                    misses.append("Québec plumber with a verified match must be clear: \(quebec.status) \(quebec.reasons)")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Region 02 (Martin 4:30 PM ET): Alma, Roberval and Dolbeau-Mistassini plumbing or excavation firms are Lavoie holds; an Alma clinic and a Québec City plumber with a verified licence are clear", {
+                func firm(_ name: String, tags: [String], town: String, segment: String = "construction_trades", rbq: String? = "matched", codes: [String] = ["1.3"]) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = segment
+                    record.organisation = name
+                    record.osmTags = tags
+                    record.town = town
+                    record.rbqCheck = rbq
+                    record.rbqCategories = codes
+                    return record
+                }
+                let held: [(ProspectRecord, String)] = [
+                    (firm("Plomberie Fictive Alma", tags: ["craft=plumber"], town: "Alma"), "Alma plumber"),
+                    (firm("Excavation Fictive Roberval", tags: ["craft=excavation"], town: "Roberval", codes: ["2.5"]), "Roberval excavation"),
+                    (firm("Plomberie Fictive Dolbeau", tags: ["craft=plumber"], town: "Dolbeau-Mistassini"), "Dolbeau-Mistassini plumber")
+                ]
+                var misses: [String] = []
+                for (record, why) in held {
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    if verdict.status != .conflictReview || !verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                        misses.append("\(why): \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                let clear: [(ProspectRecord, String)] = [
+                    (firm("Clinique Exemple Alma", tags: ["healthcare=clinic"], town: "Alma", segment: "clinic", rbq: nil, codes: []), "Alma clinic"),
+                    (firm("Plomberie Fictive Québec", tags: ["craft=plumber"], town: "Québec", codes: ["15.5"]), "Québec City plumber with a verified 15.5 match"),
+                    (firm("Plomberie Fictive Québec", tags: ["craft=plumber"], town: "Ville de Québec", codes: ["15.5"]), "Ville de Québec plumber with a verified 15.5 match")
+                ]
+                for (record, why) in clear {
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    if verdict.status == .conflictReview {
+                        misses.append("\(why): \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("RBQ unavailable inside region 02 (Argus must-fix 2): a construction firm with no trade words is held for the licence check when the index is missing or corrupt, and is not a Lavoie conflict", {
+                func tremblay(_ rbq: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Entreprises Tremblay"
+                    record.osmTags = ["craft=builder"]
+                    record.town = "Saguenay"
+                    record.rbqCheck = rbq
+                    return record
+                }
+                for rbq in ["unavailable", "error:refused:open-data-schema", "no-match"] {
+                    let verdict = LeadDefinition.evaluate(tremblay(rbq), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    try expect(verdict.status == .conflictReview && licence && !lavoie, "\(rbq): \(verdict.status) \(verdict.reasons)")
+                }
+                let missing = await SearchFixture.saguenayGenericBuilder(config: config).run(segment: "construction_trades", rbq: nil)
+                let corrupt = await SearchFixture.saguenayGenericBuilder(config: config).run(segment: "construction_trades", rbq: nil, rbqFailure: "refused:open-data-schema")
+                for (label, report, expected) in [("missing", missing, "unavailable"), ("corrupt", corrupt, "error:refused:open-data-schema")] {
+                    let prospect = try unwrap(report.prospects.first, label)
+                    let licence = prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    let lavoie = prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    try expect(prospect.rbqCheck == expected && prospect.status == .conflictReview && report.drafts.isEmpty && licence && !lavoie,
+                               "\(label): \(prospect.rbqCheck ?? "-") \(prospect.status) \(prospect.reasons) drafts=\(report.drafts.count)")
+                }
+            }),
+            ("Loi 25: the gate is closed by default, and the only cold-outreach send check calls it", {
+                try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
+                let root = LeadKit.sourcesDirectory
+                let files = try FileManager.default.subpathsOfDirectory(atPath: root.path).filter { $0.hasSuffix(".swift") }
+                try expect(files.count > 10, "scanned sources: \(files.count)")
+                var gateReturns: [String] = []
+                var outreachSends: [String] = []
+                for relative in files {
+                    let text = try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+                    if text.contains("return LeadPipelineRefusal(code: \"refused:loi25-gate\")") { gateReturns.append(relative) }
+                    let sends = text.contains("messages/send") || text.contains("drafts/send") || text.contains("url(\"messages\", \"send\")") || text.contains("url(\"drafts\", \"send\")")
+                    if text.contains("OutreachDraft") && sends && !text.contains("loi25Gate") && !text.contains("OutreachSendGate") {
+                        outreachSends.append(relative)
+                    }
+                }
+                try expect(gateReturns.sorted() == ["Outreach.swift"], "the loi25 send refusal lives only in Outreach.swift: \(gateReturns)")
+                let outreach = try String(contentsOf: root.appendingPathComponent("Outreach.swift"), encoding: .utf8)
+                try expect(outreach.contains("enum OutreachSendGate") && outreach.contains("loi25Gate.open") && outreach.contains("refused:loi25-gate"),
+                           "OutreachSendGate.check is the send entry that calls the gate")
+                try expect(outreachSends.isEmpty, "a cold-outreach send skips the Loi 25 gate: \(outreachSends)")
+            }),
             ("Proof verifier: flags a seeded store, a send line and an off-allowlist host", {
                 let fixture = SearchFixture(config: config)
                 let report = await fixture.run()
@@ -1556,8 +1769,28 @@ struct SearchFixture {
         return fixture
     }
 
+    /// A Montréal plumber on the same synthetic site. A missing or unmatched RBQ index holds it for the licence
+    /// check, not for the Lavoie conflict.
+    static func montrealPlumber(config: ICPConfig) -> SearchFixture {
+        let fixture = SearchFixture(config: config)
+        fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """
+        {"elements":[{"type":"node","id":2301,"lat":45.5,"lon":-73.6,"tags":{"name":"Plomberie Fictive Centre","craft":"builder","website":"https://www.clinique-exemple.test","addr:city":"Montréal"}}]}
+        """, headers: ["content-type": "application/json"])
+        return fixture
+    }
+
+    /// A Saguenay construction firm with no plumbing or excavation words. A missing or corrupt RBQ index holds it
+    /// for the licence check only.
+    static func saguenayGenericBuilder(config: ICPConfig) -> SearchFixture {
+        let fixture = SearchFixture(config: config)
+        fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """
+        {"elements":[{"type":"node","id":2401,"lat":45.5,"lon":-73.6,"tags":{"name":"Entreprises Tremblay","craft":"builder","website":"https://www.clinique-exemple.test","addr:city":"Saguenay"}}]}
+        """, headers: ["content-type": "application/json"])
+        return fixture
+    }
+
     /// A Saguenay plumber on the same synthetic site as `builder`. Fail-closed reds use this so a missing RBQ
-    /// file still has a firm the SOS hold must catch (plumbing, inside the city).
+    /// file still has a firm the SOS hold must catch (plumbing, inside the region).
     static func saguenayPlumber(config: ICPConfig) -> SearchFixture {
         let fixture = SearchFixture(config: config)
         fixture.inner.respond("https://overpass.private.coffee/api/interpreter", body: """

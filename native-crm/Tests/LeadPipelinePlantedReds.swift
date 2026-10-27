@@ -396,17 +396,29 @@ enum LeadPipelinePlantedReds {
             do { _ = try RBQOpenData.parse(data: data, source: rbqSource); return nil }
             catch let refusal as LeadPipelineRefusal { return refusal.code == "refused:open-data-schema" ? refusal.code : nil }
         }
-        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a Saguenay plumbing firm with no RBQ file gets Ready and a draft") {
-            let fixture = SearchFixture.saguenayPlumber(config: config)
-            let report = await fixture.run(segment: "construction_trades", rbq: nil)
-            guard let prospect = report.prospects.first else { return nil }
-            return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-")), 0 drafts" : nil
+        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a plumbing firm with no RBQ file gets Ready and a draft") {
+            let saguenay = await SearchFixture.saguenayPlumber(config: config).run(segment: "construction_trades", rbq: nil)
+            let montreal = await SearchFixture.montrealPlumber(config: config).run(segment: "construction_trades", rbq: nil)
+            guard let sag = saguenay.prospects.first, let mon = montreal.prospects.first else { return nil }
+            let sagOK = sag.status == .conflictReview && saguenay.drafts.isEmpty
+                && sag.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                && sag.reasons.contains { $0.contains("rbq-licence-unverified") }
+            let monOK = mon.status == .conflictReview && montreal.drafts.isEmpty
+                && mon.reasons.contains { $0.contains("rbq-licence-unverified") }
+                && !mon.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            return sagOK && monOK ? "Saguenay both holds, Montréal licence only (rbq \(mon.rbqCheck ?? "-")), 0 drafts" : nil
         }
-        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a Saguenay plumbing firm with no licence match passes") {
-            let fixture = SearchFixture.saguenayPlumber(config: config)
-            let report = await fixture.run(segment: "construction_trades", rbq: RBQIndex([]))
-            guard let prospect = report.prospects.first else { return nil }
-            return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-"))" : nil
+        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a plumbing firm with no licence match passes") {
+            let saguenay = await SearchFixture.saguenayPlumber(config: config).run(segment: "construction_trades", rbq: RBQIndex([]))
+            let montreal = await SearchFixture.montrealPlumber(config: config).run(segment: "construction_trades", rbq: RBQIndex([]))
+            guard let sag = saguenay.prospects.first, let mon = montreal.prospects.first else { return nil }
+            let sagOK = sag.status == .conflictReview && saguenay.drafts.isEmpty
+                && sag.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                && sag.reasons.contains { $0.contains("rbq-licence-unverified") }
+            let monOK = mon.status == .conflictReview && montreal.drafts.isEmpty
+                && mon.reasons.contains { $0.contains("rbq-licence-unverified") }
+                && !mon.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            return sagOK && monOK ? "Saguenay both holds, Montréal licence only (rbq \(mon.rbqCheck ?? "-")), 0 drafts" : nil
         }
         add("ARGUS-RED", "5 SSRF-IP-LITERAL: an own-site fetch to 127.0.0.1, 169.254.169.254, [::1], 10/8, 192.168/16 or x.local") {
             let inner = FakeLeadTransport()
@@ -473,19 +485,37 @@ enum LeadPipelinePlantedReds {
             return findings.isEmpty ? nil : "caught: \(findings.joined(separator: ", "))"
         }
         // EARTH (6:59 AM ET findings on 75285c4, narrowed by Water 7:18 AM ET so they don't overlap Argus reds 2 and 3).
-        // Martin 27 Oct 2026: the fail-closed hold is Saguenay plumbing and excavation, not every construction firm.
-        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, Saguenay plumbing and excavation firms get Ready or a draft") {
-            let out = try await EarthRBQ.appRun(contents: nil, makeFixture: SearchFixture.saguenayConflictBatch)
-            let all = SearchFixture.saguenayConflictFirms.count
-            return out.prospects.count == all && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty
-                ? "\(all)/\(all) held in one run (rbq \(out.prospects.first?.rbqCheck ?? "-")), 0 drafts" : nil
+        // Martin 27 Oct 2026, 4:30 PM ET: outside the region the hold is the licence check; Saguenay plumbing stays a conflict too.
+        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, construction firms get Ready or a draft") {
+            let montreal = try await EarthRBQ.appRun(contents: nil, makeFixture: SearchFixture.mixedConstructionBatch)
+            let saguenay = try await EarthRBQ.appRun(contents: nil, makeFixture: SearchFixture.saguenayConflictBatch)
+            let monCount = SearchFixture.constructionBatch.count
+            let sagCount = SearchFixture.saguenayConflictFirms.count
+            let monOK = montreal.prospects.count == monCount && montreal.drafts.isEmpty && montreal.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            }
+            let sagOK = saguenay.prospects.count == sagCount && saguenay.drafts.isEmpty && saguenay.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+            }
+            return monOK && sagOK ? "Montréal \(monCount)/\(monCount) licence, Saguenay \(sagCount)/\(sagCount) both, 0 drafts" : nil
         }
-        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets Saguenay plumbing and excavation firms through") {
-            let out = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8), makeFixture: SearchFixture.saguenayConflictBatch)
-            let all = SearchFixture.saguenayConflictFirms.count
-            guard out.prospects.count == all, out.prospects.allSatisfy({ $0.status == .conflictReview }), out.drafts.isEmpty,
-                  out.audit.contains(where: { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }) else { return nil }
-            return "truncated: \(all)/\(all) held, 0 drafts, rbq-load refused:open-data-schema"
+        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets construction firms through") {
+            let truncated = Data(#"{"Liste Licence":[{"Licence":{"#.utf8)
+            let montreal = try await EarthRBQ.appRun(contents: truncated, makeFixture: SearchFixture.mixedConstructionBatch)
+            let saguenay = try await EarthRBQ.appRun(contents: truncated, makeFixture: SearchFixture.saguenayConflictBatch)
+            let monCount = SearchFixture.constructionBatch.count
+            let sagCount = SearchFixture.saguenayConflictFirms.count
+            let monOK = montreal.prospects.count == monCount && montreal.drafts.isEmpty && montreal.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            } && montreal.audit.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }
+            let sagOK = saguenay.prospects.count == sagCount && saguenay.drafts.isEmpty && saguenay.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+            } && saguenay.audit.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }
+            return monOK && sagOK ? "truncated: Montréal licence, Saguenay both, 0 drafts, rbq-load refused:open-data-schema" : nil
         }
         return cases
     }
