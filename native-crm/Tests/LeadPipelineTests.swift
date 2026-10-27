@@ -74,6 +74,20 @@ enum LeadPipelineTests {
         "Lalemant",
         "Lac-Ministuk",
         "Mont-Valin",
+        // Former municipalities and sectors, checked 2026-10-27. The plain name Lac-Saint-Jean is not in this list.
+        "Arvida",
+        "Kénogami",
+        "Port-Alfred",
+        "Grande-Baie",
+        "Bagotville",
+        "Delisle",
+        "Isle-Maligne",
+        "Naudville",
+        "Riverbend",
+        "Dolbeau",
+        "Mistassini",
+        "Métabetchouan",
+        "Saint-Bruno",
     ]
 
     /// The conflict-area description after Martin's 27 Oct 2026 rulings, including the 4:30 PM ET region ruling.
@@ -719,7 +733,7 @@ enum LeadPipelineTests {
                     (firm("Plomberie Fictive Oscar", tags: ["craft=builder"], town: "  "), true, "keyword firm with a blank town"),
                     (firm("Services Fictifs Papa", tags: ["craft=plumber"], town: "Petit-Saguenay"), true, "map-data plumber in Petit-Saguenay"),
                     (firm("Excavation Fictive Quebec", tags: ["craft=builder"], town: "Laterrière"), true, "keyword firm in Laterrière"),
-                    (firm("Excavation Fictive Arvida", tags: ["craft=builder"], town: "Arvida"), false, "Arvida is not on the official region-02 list"),
+                    (firm("Excavation Fictive Arvida", tags: ["craft=builder"], town: "Arvida"), true, "Arvida is a sector of Saguenay (Commission de toponymie)"),
                     (firm("Services Fictifs Romeo", tags: ["craft=excavation"], town: "Laval"), false, "map-data excavation in Laval")
                 ]
                 for item in cases {
@@ -1119,9 +1133,11 @@ enum LeadPipelineTests {
                 }
                 try expect(failures.isEmpty, "check 2 must stay unmatched: \(failures)")
             }),
-            ("Planted-red tally (Water/Earth): one planted red that slips prints 'expected 56 failures, got 55: MISMATCH' and fails the run", {
+            ("Planted-red tally (Water/Earth): one planted red that slips prints a MISMATCH for one fewer failure than the full tally", {
                 var cases = try LeadPipelinePlantedReds.makeCases()
-                try expect(cases.count == 56, "56 planted cases, got \(cases.count)")
+                let total = LeadPipelinePlantedReds.expectedTotal
+                let slippedTotal = total - 1
+                try expect(cases.count == total, "\(total) planted cases, got \(cases.count)")
                 // Make the count independent of a local vitest run: reds 9/10 stand in as caught.
                 for index in cases.indices where cases[index].label.contains("(pharos-api vitest)") {
                     cases[index].probe = { "stub: vitest caught it" }
@@ -1130,12 +1146,13 @@ enum LeadPipelineTests {
                 let slipped = cases[slipIndex].label
                 cases[slipIndex].probe = { nil }   // the bad input gets through
                 let result = await LeadPipelinePlantedReds.tally(cases)
-                try expect(result.summary == "Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected 56 failures, got 55: MISMATCH", "summary: \(result.summary)")
-                try expect(result.failures == 55 && !result.ok, "one slip must fail the run: failures=\(result.failures) ok=\(result.ok)")
+                let expectedSummary = "\(LeadPipelinePlantedReds.summaryLead): expected \(total) failures, got \(slippedTotal): MISMATCH"
+                try expect(result.summary == expectedSummary, "summary: \(result.summary)")
+                try expect(result.failures == slippedTotal && !result.ok, "one slip must fail the run: failures=\(result.failures) ok=\(result.ok)")
                 try expect(result.lines.contains("S3-RED-SPAM: expected 5 failures, got 4: MISMATCH"), "group line names the slip")
                 try expect(result.lines.contains("  RED-MISSED [S3-RED-SPAM] \(slipped): the planted bad input was accepted"), "the slipped red is named")
-                try expect(!result.lines.contains { $0.hasPrefix("expected 56 failures, got") && $0.hasSuffix(": OK") }, "no OK line when a red slips")
-                try expect(LeadPipelinePlantedReds.tallyMessage(expected: 56, got: result.failures) == "Slice 3 planted reds: expected 56 failures, got 55: MISMATCH", "fatal text carries 55")
+                try expect(!result.lines.contains { $0.hasPrefix("expected \(total) failures, got") && $0.hasSuffix(": OK") }, "no OK line when a red slips")
+                try expect(LeadPipelinePlantedReds.tallyMessage(expected: total, got: result.failures) == "Slice 3 planted reds: expected \(total) failures, got \(slippedTotal): MISMATCH", "fatal text carries \(slippedTotal)")
             }),
             ("Planted-red tally (CI 9:45): a missing pharos-api vitest report reads NOT-RUN, never 'accepted'; the failure text carries the real counts", {
                 let missing = FileManager.default.temporaryDirectory.appendingPathComponent("cw-no-report-\(UUID().uuidString).json").path
@@ -1628,6 +1645,114 @@ enum LeadPipelineTests {
                     misses.append("Québec plumber with a verified match must be clear: \(quebec.status) \(quebec.reasons)")
                 }
                 try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Former places (Argus must-fix A): cited sectors are inside region 02; plain Lac-Saint-Jean is unknown; a verified plumber is never READY", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                try expect(area.municipalities == region02Municipalities, "official list includes the cited former names: \(String(describing: area.municipalities))")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                let inside = ["Arvida", "Kénogami", "Port-Alfred", "Grande-Baie", "Bagotville", "Delisle", "Isle-Maligne",
+                              "Naudville", "Riverbend", "Dolbeau", "Mistassini", "Métabetchouan", "Saint-Bruno"]
+                var misses: [String] = []
+                for town in inside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .inside(town) { misses.append("\(town) match \(match), expected inside") }
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    if verdict.status != .conflictReview || !lavoie || licence || verdict.status == .ready {
+                        misses.append("\(town): \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                let lac = LeadDefinition.rbqAreaMatch("Lac-Saint-Jean", area: area)
+                if lac != .unknown { misses.append("Lac-Saint-Jean match \(lac), expected unknown") }
+                let lacVerdict = LeadDefinition.evaluate(plumber("Lac-Saint-Jean"), config: config, now: now)
+                if lacVerdict.status != .conflictReview || !lacVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("Lac-Saint-Jean: \(lacVerdict.status) \(lacVerdict.reasons)")
+                }
+                // A longer name that only contains Saint-Bruno is unknown and held, the same rule as Chicoutimi-Nord.
+                let montarville = LeadDefinition.rbqAreaMatch("Saint-Bruno-de-Montarville", area: area)
+                if montarville != .unknown { misses.append("Saint-Bruno-de-Montarville match \(montarville), expected unknown") }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+                let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
+                let citations = [
+                    "no_seq=72345", "no_seq=32311", "no_seq=72508", "no_seq=26319", "no_seq=72350", "no_seq=96950", "no_seq=1013",
+                    "modifications_municipalites.pdf", "1498-2025", "107844.pdf", "unresolved_place_names", "postal_fsa_prefixes"
+                ]
+                let missing = citations.filter { !raw.contains($0) }
+                try expect(missing.isEmpty, "icp.json is missing \(missing)")
+            }),
+            ("Saint abbreviations, Ville d' and G7/G8 postal codes (Argus must-fix B and should-fix)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive Est"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                let expanded: [(String, String)] = [
+                    ("St-Félicien", "Saint-Félicien"),
+                    ("St Félicien", "Saint-Félicien"),
+                    ("St-Prime", "Saint-Prime"),
+                    ("Ste-Hedwidge", "Sainte-Hedwidge"),
+                    ("Ste Hedwidge", "Sainte-Hedwidge"),
+                    ("L'Anse-St-Jean", "L'Anse-Saint-Jean"),
+                    ("Ville d'Alma", "Alma")
+                ]
+                var misses: [String] = []
+                for (town, listed) in expanded {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .inside(listed) { misses.append("\(town) match \(match), expected inside \(listed)") }
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    if verdict.status != .conflictReview || !verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                        misses.append("\(town): \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                for town in ["G7H 1A1", "G7H", "g8b2c3", "G8B 2C3, QC"] {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .unknown { misses.append("\(town) match \(match), expected unknown") }
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    if verdict.status != .conflictReview || !verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                        misses.append("\(town): \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                for town in ["H2X 1Y4", "H2K 1M2"] {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .outside { misses.append("\(town) match \(match), expected outside") }
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    if verdict.status == .conflictReview || verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                        misses.append("\(town) must stay clear: \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("OutreachDraftGate.holds (Argus should-fix): the licence check blocks a record that is not already marked held", {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Constructions Fictives Montréal"
+                record.osmTags = ["craft=builder"]
+                record.town = "Montréal"
+                record.rbqCheck = "no-match"
+                try expect(record.status == .fix, "fixture starts unmarked: \(record.status)")
+                try expect(LeadDefinition.conflictArea(for: record, config: config) == nil, "Montréal builder is not a Lavoie conflict")
+                try expect(LeadDefinition.rbqLicenceUnverified(record, config: config), "the licence hold applies")
+                try expect(OutreachDraftGate.holds(record, config: config)?.code == "refused:hold:conflict-review",
+                           "holds() must refuse before the record is marked held: \(String(describing: OutreachDraftGate.holds(record, config: config)))")
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                try expect(OutreachDraftGate.holds(record, config: config) == nil, "a verified Montréal builder is not blocked")
             }),
             ("Region 02 (Martin 4:30 PM ET): Alma, Roberval and Dolbeau-Mistassini plumbing or excavation firms are Lavoie holds; an Alma clinic and a Québec City plumber with a verified licence are clear", {
                 func firm(_ name: String, tags: [String], town: String, segment: String = "construction_trades", rbq: String? = "matched", codes: [String] = ["1.3"]) -> ProspectRecord {

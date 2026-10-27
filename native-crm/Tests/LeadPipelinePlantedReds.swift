@@ -5,8 +5,9 @@ import FoundationNetworking
 
 /// Slice 3 planted reds (wind-acceptance-tests.md §3, slice total amended 6:11 AM ET): 41 bad inputs, plus Argus's 13
 /// (gate file controlward-18-2026-10-23.md; total amended to 54 by Water, 6:53 AM ET), plus Earth's 2 RBQ fail-closed
-/// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth). A case "fails" when the code refuses
-/// it, so a healthy build prints `expected 56 failures, got 56: OK`. Any other count exits non-zero.
+/// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth),
+/// plus 14 former-place reds and 4 Saint/Sainte abbreviation reds (Argus on f02a8e7: 56 -> 74). A case "fails" when the code refuses
+/// it, so a healthy build prints `expected 74 failures, got 74: OK`. Any other count exits non-zero.
 /// Argus reds 9 and 10 live in pharos-api's vitest suite; they count only when CW_PHAROS_PLANTED_REDS points at that
 /// run's JSON report and the matching tests passed. Without the report they print RED-NOT-RUN with the reason (never "accepted")
 /// and the total is a MISMATCH.
@@ -22,7 +23,10 @@ enum LeadPipelinePlantedReds {
         var probe: Probe
     }
 
-    static let expectedTotal = 56
+    static let expectedTotal = 74
+
+    /// Printed ahead of the expected/got counts. The slip test matches this text.
+    static let summaryLead = "Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth + 14 place + 4 abbreviation)"
 
     /// The line for a red that did not fail as planted.
     static func missedLine(group: String, label: String, report: PharosPlantedReds.Status? = nil) -> String {
@@ -45,7 +49,8 @@ enum LeadPipelinePlantedReds {
     static let expectedByGroup: [(String, Int)] = [
         ("S3-RED (original)", 4), ("S3-RED-PC", 1), ("S3-RED-SRC", 2), ("S3-RED-SPAM", 5), ("S3-RED-SEQ", 2), ("S3-RED-FROM", 1),
         ("S3-RED-ICP", 3), ("S3-RED-ADDR", 3), ("S3-RED-LOI25", 3), ("S3-RED-LEADREC", 5), ("S3-RED-FRESH", 3), ("S3-RED-HOLD", 2),
-        ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2)
+        ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2),
+        ("ARGUS-RED-PLACE", 14), ("ARGUS-RED-ABBR", 4)
     ]
 
     /// Result of counting a set of planted reds: overall verdict, failures caught and the printed lines.
@@ -83,7 +88,7 @@ enum LeadPipelinePlantedReds {
             lines.append("\(group): expected \(expected) failures, got \(got): \(line)")
         }
         ok = ok && failures == expectedTotal
-        lines.append("Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
+        lines.append("\(summaryLead): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
         if ok { lines.append("expected \(expectedTotal) failures, got \(failures): OK") }
         return Tally(ok: ok, failures: failures, lines: lines)
     }
@@ -516,6 +521,46 @@ enum LeadPipelinePlantedReds {
                     && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
             } && saguenay.audit.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }
             return monOK && sagOK ? "truncated: Montréal licence, Saguenay both, 0 drafts, rbq-load refused:open-data-schema" : nil
+        }
+
+        // Argus on f02a8e7: a verified plumber in a former municipality or sector must not come out READY.
+        // Lac-Saint-Jean has no municipality citation, so unknown still holds; the other names are inside once listed.
+        let formerPlaces = [
+            "Arvida", "Kénogami", "Port-Alfred", "Grande-Baie", "Bagotville", "Delisle", "Isle-Maligne",
+            "Naudville", "Riverbend", "Dolbeau", "Mistassini", "Métabetchouan", "Lac-Saint-Jean", "Saint-Bruno"
+        ]
+        for (offset, town) in formerPlaces.enumerated() {
+            let place = town
+            add("ARGUS-RED-PLACE", "\(offset + 1) \(place): a verified plumber comes out READY") {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Plomberie Fictive \(place)"
+                record.osmTags = ["craft=plumber"]
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                record.town = place
+                let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                return verdict.status == .conflictReview && lavoie && !licence ? "held, not READY: \(place)" : nil
+            }
+        }
+        let abbreviated = ["St-Félicien", "St-Prime", "Ste-Hedwidge", "L'Anse-St-Jean"]
+        for (offset, town) in abbreviated.enumerated() {
+            let place = town
+            add("ARGUS-RED-ABBR", "\(offset + 1) \(place): a verified plumber comes out READY") {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Plomberie Fictive \(place)"
+                record.osmTags = ["craft=plumber"]
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                record.town = place
+                let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                return verdict.status == .conflictReview && lavoie && !licence ? "held, not READY: \(place)" : nil
+            }
         }
         return cases
     }
