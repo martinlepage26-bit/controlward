@@ -1678,9 +1678,10 @@ enum LeadPipelineTests {
                 if lacVerdict.status != .conflictReview || !lacVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
                     misses.append("Lac-Saint-Jean: \(lacVerdict.status) \(lacVerdict.reasons)")
                 }
-                // A longer name that only contains Saint-Bruno is unknown and held, the same rule as Chicoutimi-Nord.
+                // Saint-Bruno-de-Montarville is its own municipality outside region 02. An exact MAMH
+                // name is outside; it is not held just because it contains Saint-Bruno.
                 let montarville = LeadDefinition.rbqAreaMatch("Saint-Bruno-de-Montarville", area: area)
-                if montarville != .unknown { misses.append("Saint-Bruno-de-Montarville match \(montarville), expected unknown") }
+                if montarville != .outside { misses.append("Saint-Bruno-de-Montarville match \(montarville), expected outside") }
                 try expect(misses.isEmpty, misses.joined(separator: " | "))
                 let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
                 let citations = [
@@ -1735,6 +1736,86 @@ enum LeadPipelineTests {
                     if verdict.status == .conflictReview || verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
                         misses.append("\(town) must stay clear: \(verdict.status) \(verdict.reasons)")
                     }
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("G7/G8 anywhere is unknown, and another Québec municipality is outside before containment (Argus follow-up)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                func stored(_ town: String) -> (record: ProspectRecord, verdict: LeadDefinition.Verdict) {
+                    var record = plumber(town)
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    record.status = verdict.status
+                    record.reasons = verdict.reasons
+                    return (record, verdict)
+                }
+                var misses: [String] = []
+                let stillInside = ["Alma", "Roberval", "Saint-Bruno", "Saint-Ambroise", "Saint-Honoré", "Saint-Gédéon",
+                                   "Saint-Nazaire", "Saint-Stanislas", "Delisle", "La Baie", "Saguenay", "Arvida"]
+                var heldRecords: [ProspectRecord] = []
+                for town in stillInside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .inside(town) { misses.append("\(town) match \(match), expected inside") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status != .conflictReview || !lavoie { misses.append("\(town) dropped: \(verdict.status) \(verdict.reasons)") }
+                    heldRecords.append(record)
+                }
+                let postalUnknown = ["Montréal G7H 1A1", "Laval G7S", "Alma G8B 1A1"]
+                for town in postalUnknown {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .unknown { misses.append("\(town) match \(match), expected unknown") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) came out \(verdict.status) \(verdict.reasons)")
+                    }
+                    heldRecords.append(record)
+                }
+                let outside = ["Saint-Augustin-de-Desmaures", "Saint-Bruno-de-Montarville", "Saint-Bruno-de-Guigues",
+                               "Saint-Ambroise-de-Kildare", "Saint-Gédéon-de-Beauce", "Saint-Honoré-de-Shenley",
+                               "Saint-Nazaire-d'Acton", "Saint-Stanislas-de-Kostka", "La Baie-James",
+                               "Rue Alma, Montréal", "Alma, Michigan", "Delisle, Saskatchewan"]
+                var outsideRecords: [ProspectRecord] = []
+                for town in outside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .outside { misses.append("\(town) match \(match), expected outside") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status == .conflictReview || lavoie || verdict.status == .ready && lavoie {
+                        misses.append("\(town) held: \(verdict.status) \(verdict.reasons)")
+                    }
+                    if verdict.status == .conflictReview { misses.append("\(town) is conflictReview") }
+                    outsideRecords.append(record)
+                }
+                let queued = ProspectIngest.heldForMartin(heldRecords + outsideRecords)
+                let queuedIDs = Set(queued.map(\.town))
+                for record in heldRecords where !queuedIDs.contains(record.town) {
+                    misses.append("held queue dropped \(record.town ?? "-")")
+                }
+                for record in outsideRecords where queuedIDs.contains(record.town) {
+                    misses.append("held queue includes outside town \(record.town ?? "-")")
+                }
+                let conflictCount = (heldRecords + outsideRecords).filter { $0.status == .conflictReview }.count
+                if queued.count != conflictCount { misses.append("held queue \(queued.count) != conflictReview \(conflictCount)") }
+                for record in queued {
+                    let lines = ProspectDisplay.lines(for: record, config: config).joined(separator: "\n")
+                    if !lines.contains("sos-plomberie-excavation-lavoie") {
+                        misses.append("held row has no reason: \(record.town ?? "-") \(lines)")
+                    }
+                }
+                let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
+                if !raw.contains("column munnom") || !raw.contains("Eeyou Istchee Baie-James") || !raw.contains("before partial-name containment") {
+                    misses.append("icp.json does not cite the full MAMH munnom list checked before containment")
                 }
                 try expect(misses.isEmpty, misses.joined(separator: " | "))
             }),
