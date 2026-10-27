@@ -662,6 +662,131 @@ enum LeadgenSliceTests {
         }
     }
 
+    static func assertPinnedHTTPRefused(_ label: String, _ raw: Data, complete: Bool = true, detail: String, absent: String = "partial-html") throws {
+        do {
+            let parsed = try LeadgenPinnedHTTPS.parse(raw, complete: complete)
+            let text = parsed.map { String(decoding: $0.2, as: UTF8.self) } ?? "nil"
+            throw PortableCheckFailure(description: "\(label) returned \(text)")
+        } catch let error as LeadPipelineRefusal {
+            try check(error.code == "refused:own-site-host", "\(label) code \(error.code)")
+            try check(error.detail == detail, "\(label) failed as \(error)")
+            if !absent.isEmpty {
+                try check(!error.description.contains(absent), "\(label) carried body bytes: \(error)")
+            }
+        }
+    }
+
+    /// `+3` is first so a red run fails by assertion. `-1` is only reached once that refusal holds.
+    static func contentLengthMustBePlainDigits() throws {
+        for value in ["+3", "-1", "3a", "1.5", "", "0x10"] {
+            let raw = httpMessage(headers: ["Content-Length: \(value)"], body: "partial-html")
+            try assertPinnedHTTPRefused("content-length \(value.debugDescription)", raw, detail: "malformed content-length")
+        }
+        let raw = httpMessage(headers: ["Content-Length: 11"], body: "hello worldEXTRA")
+        try assertPinnedHTTPBody("content-length digits", raw, complete: true, equals: "hello world")
+    }
+
+    static func headersCappedAt64KB() throws {
+        let unfinished = try LeadgenPinnedHTTPS.parse(Data("HTTP/1.1 200 OK\r\nContent-Length: 5".utf8), complete: false)
+        try check(unfinished == nil, "an unfinished header block was parsed")
+        let limit = 64 * 1024
+        let prefix = Data("HTTP/1.1 200 OK\r\nX-Pad: ".utf8)
+        var over = prefix
+        over.append(Data(repeating: 0x61, count: limit - prefix.count + 1))
+        over.append(Data("\r\n\r\npartial-html".utf8))
+        try assertPinnedHTTPRefused("headers over 64 KB", over, detail: "headers exceed 64 KB")
+        let bare = Data(repeating: 0x61, count: limit + 1)
+        try assertPinnedHTTPRefused("unfinished headers over 64 KB", bare, complete: false, detail: "headers exceed 64 KB", absent: "")
+        var exact = prefix
+        exact.append(Data(repeating: 0x62, count: limit - prefix.count))
+        exact.append(Data("\r\n\r\nOK".utf8))
+        try assertPinnedHTTPBody("headers at 64 KB", exact, complete: true, equals: "OK")
+    }
+
+    static func bodyCappedAt5MB() throws {
+        let cap = 5 * 1024 * 1024
+        let declared = httpMessage(headers: ["Content-Length: \(cap + 1)"], body: "partial-html")
+        try assertPinnedHTTPRefused("content-length over 5 MB", declared, detail: "body exceeds 5 MB")
+        let chunk = httpMessage(headers: ["Transfer-Encoding: chunked"], body: "500001\r\n")
+        try assertPinnedHTTPRefused("chunk size over 5 MB", chunk, complete: false, detail: "body exceeds 5 MB", absent: "")
+        var wire = Data("HTTP/1.1 200 OK\r\n\r\n".utf8)
+        wire.append(Data(count: cap + 1))
+        do {
+            let parsed = try LeadgenPinnedHTTPS.parse(wire, complete: true)
+            throw PortableCheckFailure(description: "connection-close body over 5 MB returned \(parsed?.2.count ?? -1) bytes")
+        } catch let error as LeadPipelineRefusal {
+            try check(error.code == "refused:own-site-host", "connection-close body over 5 MB code \(error.code)")
+            try check(error.detail == "body exceeds 5 MB", "connection-close body over 5 MB failed as \(error)")
+        }
+        var exact = Data("HTTP/1.1 200 OK\r\nContent-Length: \(cap)\r\n\r\n".utf8)
+        exact.append(Data(count: cap))
+        let parsed = try LeadgenPinnedHTTPS.parse(exact, complete: true)
+        try check(parsed?.2.count == cap, "a body of exactly 5 MB was refused or short: \(parsed?.2.count ?? -1)")
+    }
+
+    static func chunkDataRequiresCRLF() throws {
+        let raw = httpMessage(headers: ["Transfer-Encoding: chunked"], body: "5\r\nhelloXX0\r\n\r\n")
+        try assertPinnedHTTPRefused("chunk missing CRLF", raw, detail: "malformed chunk size", absent: "hello")
+    }
+
+    static func chunkedBodyCutOffAtEOF() throws {
+        let raw = httpMessage(headers: ["Transfer-Encoding: chunked"], body: "5\r\nhel")
+        let open = try LeadgenPinnedHTTPS.parse(raw, complete: false)
+        try check(open == nil, "a partial chunk was returned before EOF")
+        try assertPinnedHTTPRefused("chunked body cut off at EOF", raw, detail: "truncated HTTP response", absent: "hel")
+    }
+
+    static func contentLengthCutOffAtEOF() throws {
+        let raw = httpMessage(headers: ["Content-Length: 11"], body: "hello")
+        let open = try LeadgenPinnedHTTPS.parse(raw, complete: false)
+        try check(open == nil, "a short content-length body was returned before EOF")
+        try assertPinnedHTTPRefused("content-length cut off at EOF", raw, detail: "truncated HTTP response", absent: "hello")
+    }
+
+    static func chunkTrailerMustTerminate() throws {
+        let raw = httpMessage(headers: ["Transfer-Encoding: chunked"], body: "5\r\nhello\r\n0\r\nX-Trailer: yes\r\n")
+        let open = try LeadgenPinnedHTTPS.parse(raw, complete: false)
+        try check(open == nil, "a chunked body was returned before the trailer terminator")
+        try assertPinnedHTTPRefused("trailer without terminator", raw, detail: "truncated HTTP response", absent: "hello")
+    }
+
+    static func duplicateContentLengthRefused() throws {
+        let raw = httpMessage(headers: ["Content-Length: 5", "Content-Length: 11"], body: "hello world")
+        try assertPinnedHTTPRefused("duplicate content-length", raw, detail: "duplicate content-length", absent: "hello")
+        let mixed = httpMessage(headers: ["Content-Length: 5", "content-length: 5"], body: "hello!")
+        try assertPinnedHTTPRefused("duplicate content-length mixed case", mixed, detail: "duplicate content-length", absent: "hello")
+    }
+
+    static func duplicateTransferEncodingRefused() throws {
+        let raw = httpMessage(
+            headers: ["Transfer-Encoding: chunked", "Transfer-Encoding: chunked"],
+            body: "5\r\nhello\r\n0\r\n\r\n"
+        )
+        try assertPinnedHTTPRefused("duplicate transfer-encoding", raw, detail: "duplicate transfer-encoding", absent: "hello")
+    }
+
+    static func transferEncodingMustBeExactlyChunked() throws {
+        let body = "5\r\nhello\r\n0\r\n\r\n"
+        for value in ["Chunked", "gzip, chunked", "chunked, gzip", "identity"] {
+            let raw = httpMessage(headers: ["Transfer-Encoding: \(value)"], body: body)
+            try assertPinnedHTTPRefused("transfer-encoding \(value)", raw, detail: "transfer-encoding", absent: "hello")
+        }
+    }
+
+    static func contentEncodingRefused() throws {
+        for value in ["gzip", "identity", ""] {
+            let raw = httpMessage(headers: ["Content-Encoding: \(value)", "Content-Length: 5"], body: "helloEXTRA")
+            try assertPinnedHTTPRefused("content-encoding \(value.debugDescription)", raw, detail: "content-encoding", absent: "hello")
+        }
+    }
+
+    static func foldedHeaderRefused() throws {
+        for fold in [" folded", "\tfolded"] {
+            let raw = Data("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\(fold)\r\nContent-Length: 5\r\n\r\nhello".utf8)
+            try assertPinnedHTTPRefused("folded header", raw, detail: "folded header", absent: "hello")
+        }
+    }
+
     /// Dry run with a directory URL must not read leads or projects. Live still must.
     static func dryRunSkipsRecordedDomains() async throws {
         let liveD1 = LeadgenFakeD1()
@@ -2608,6 +2733,42 @@ enum LeadgenSliceTests {
         }))
         cases.append(("A dry run with a directory URL skips the duplicate check, fetches one clinic, and a live run still reads recorded domains", {
             try await LeadgenSliceTests.dryRunSkipsRecordedDomains()
+        }))
+        cases.append(("A Content-Length that is not plain ASCII digits is refused, including a sign", {
+            try LeadgenSliceTests.contentLengthMustBePlainDigits()
+        }))
+        cases.append(("An HTTP header block over 64 KB is refused", {
+            try LeadgenSliceTests.headersCappedAt64KB()
+        }))
+        cases.append(("An HTTP body over 5 MB is refused", {
+            try LeadgenSliceTests.bodyCappedAt5MB()
+        }))
+        cases.append(("Chunk data without the following CRLF is refused", {
+            try LeadgenSliceTests.chunkDataRequiresCRLF()
+        }))
+        cases.append(("A chunked body cut off at EOF is refused and does not return a partial body", {
+            try LeadgenSliceTests.chunkedBodyCutOffAtEOF()
+        }))
+        cases.append(("A Content-Length body cut off at EOF is refused and does not return a partial body", {
+            try LeadgenSliceTests.contentLengthCutOffAtEOF()
+        }))
+        cases.append(("A chunked trailer without its terminating blank line is refused", {
+            try LeadgenSliceTests.chunkTrailerMustTerminate()
+        }))
+        cases.append(("A duplicate Content-Length is refused", {
+            try LeadgenSliceTests.duplicateContentLengthRefused()
+        }))
+        cases.append(("A duplicate Transfer-Encoding is refused", {
+            try LeadgenSliceTests.duplicateTransferEncodingRefused()
+        }))
+        cases.append(("A Transfer-Encoding other than exactly chunked is refused", {
+            try LeadgenSliceTests.transferEncodingMustBeExactlyChunked()
+        }))
+        cases.append(("Any Content-Encoding is refused", {
+            try LeadgenSliceTests.contentEncodingRefused()
+        }))
+        cases.append(("A folded header line is refused", {
+            try LeadgenSliceTests.foldedHeaderRefused()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
