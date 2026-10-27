@@ -162,8 +162,8 @@ struct ProspectRecord: Codable, Equatable, Identifiable, Sendable {
     /// The firm's town from the map listing (`addr:city`), for the conflict area when no licence town is readable.
     var town: String?
     /// Outcome of the RBQ licence lookup: "matched", "no-match", "unavailable" (no RBQ file) or "error:<code>"
-    /// (file present but unreadable). Anything but "matched" can hold the prospect, and only where the conflict
-    /// still applies (inside the area and the same trade, or when the town cannot be read).
+    /// (file present but unreadable). Anything but "matched" holds a construction_trades firm for
+    /// rbq-licence-unverified, everywhere. The Lavoie conflict is separate and stays inside region 02.
     var rbqCheck: String?
     var linkedinNote: String?
     var openTenderURL: String?

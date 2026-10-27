@@ -41,17 +41,26 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var rbqSubcategoryCodes: [String]?
         /// Where the codes were checked: RBQ's own sub-category list (URL and date).
         var rbqSubcategorySource: String?
-        /// Segments the fail-closed RBQ hold can apply to. Martin Lepage, 27 Oct 2026: outside the area's
-        /// municipalities it does not hold; inside them it holds only a firm that looks like the area's trade
-        /// (selectors or keywords) when the lookup did not match; with no readable town, any firm in the segment stays held.
+        /// Segments named on this conflict for the old fail-closed note. The province-wide licence hold is
+        /// `rbqLicenceHold`, not this field. Martin Lepage, 27 Oct 2026, 3:56 and 4:30 PM ET: this conflict
+        /// holds only plumbing or excavation inside region 02 (or an unreadable town when the trade matches).
         var rbqRequiredSegments: [String]?
         /// Conditions under which a listed code does NOT hold a licence (Water 7:20 / 7:26 AM ET, Air's map 10c). A code without a
         /// condition always holds. All codes come from config; nothing about specific codes is hard-coded.
         var rbqCodeConditions: [RBQCodeCondition]?
-        /// Where this conflict applies (Martin 8:39 / Water 8:41 AM ET, and 27 Oct 2026 3:55 PM ET: unless in
-        /// Saguenay, nothing conflicts with SOS): whole-value matches on the licence's Municipalité,
-        /// case- and accent-normalised, never a substring. A licence with no readable location is held (fail closed).
+        /// Where this conflict applies (Martin 8:39 / Water 8:41 AM ET; 27 Oct 2026 3:55 PM ET and 4:30 PM ET:
+        /// Saguenay means Québec region 02): a normalised whole-value match on one municipality. A town string
+        /// that only contains a listed name is unknown and held. A licence with no readable location is held
+        /// when the trade signals or the codes match (fail closed).
         var municipalities: [String]?
+    }
+    /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: any firm in `segments` is held, everywhere, unless `rbqCheck` is "matched".
+    /// The reason id is this hold's id, never a conflict-area id.
+    struct RBQLicenceHold: Codable, Equatable, Sendable {
+        var id: String
+        var description: String
+        var segments: [String]
+        var note: String?
     }
     /// A listed RBQ code holds a licence unless the licence carries every code of `notHeldIfAllOf` (e.g. the full Annexe III
     /// bundle) or any code starting with one of `notHeldIfAnyCodeStartsWith` (e.g. "1." = a general-contractor 1.x code).
@@ -173,6 +182,9 @@ struct ICPConfig: Codable, Equatable, Sendable {
     var triggerSignals: [String: [String]]
     var draftForbidden: [ContentRule]
     var conflictAreas: [ConflictArea]
+    /// Province-wide construction-trades hold when the RBQ lookup is not a verified match.
+    /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: separate from the Lavoie conflict.
+    var rbqLicenceHold: RBQLicenceHold?
     var sender: Sender
     var loi25Gate: Loi25Gate
     var allowlist: Allowlist

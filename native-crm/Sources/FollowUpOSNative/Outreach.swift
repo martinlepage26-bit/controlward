@@ -207,7 +207,9 @@ enum OutreachDraftGate {
 
     /// Conflict-area trades and organisations with an open tender are never drafted.
     static func holds(_ prospect: ProspectRecord, config: ICPConfig) -> LeadPipelineRefusal? {
-        if prospect.status == .conflictReview || LeadDefinition.conflictArea(for: prospect, config: config) != nil {
+        if prospect.status == .conflictReview
+            || LeadDefinition.conflictArea(for: prospect, config: config) != nil
+            || LeadDefinition.rbqLicenceUnverified(prospect, config: config) {
             return LeadPipelineRefusal(code: "refused:hold:conflict-review")
         }
         if prospect.openTenderURL != nil { return LeadPipelineRefusal(code: "refused:hold:open-tender") }

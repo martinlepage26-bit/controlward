@@ -13,11 +13,17 @@ enum LeadDefinition {
         guard let segment = config.segment(prospect.segment) else {
             return Verdict(status: .drop, reasons: ["no matching segment"])
         }
+        // Each hold is its own reason. Lavoie is the conflict area. The licence check is rbq-licence-unverified.
+        var holdReasons: [String] = []
         if let area = conflictArea(for: prospect, config: config) {
-            return Verdict(status: .conflictReview, reasons: ["conflict area: \(area.id)"])
+            holdReasons.append("conflict area: \(area.id)")
         }
-        if let area = rbqUnchecked(prospect, config: config) {
-            return Verdict(status: .conflictReview, reasons: ["conflict area: \(area.id) (RBQ check: \(prospect.rbqCheck ?? "not run"))"])
+        if rbqLicenceUnverified(prospect, config: config) {
+            let check = prospect.rbqCheck ?? "not run"
+            holdReasons.append("\(config.rbqLicenceHold?.id ?? "rbq-licence-unverified") (RBQ check: \(check))")
+        }
+        if !holdReasons.isEmpty {
+            return Verdict(status: .conflictReview, reasons: holdReasons)
         }
         var reasons: [String] = []
         reasons += sourceEvidence(prospect)
@@ -88,31 +94,19 @@ enum LeadDefinition {
         return calendar.isDate(a, inSameDayAs: b)
     }
 
-    /// Argus must-fix 1 (fail closed), scoped by Martin Lepage on 27 Oct 2026.
-    /// 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only.
-    /// Outside the area's municipalities this conflict does not hold. Inside them, a firm that looks like
-    /// plumbing or excavation (the area's selectors or keywords) is held when the RBQ lookup did not match
-    /// a licence. A firm in the area that does not look like either trade is not held. When the town cannot
-    /// be read, the previous behaviour stays: any segment in `rbq_required_segments` is held.
-    static func rbqUnchecked(_ prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
-        guard prospect.rbqCheck != "matched", let segment = prospect.segment else { return nil }
-        return config.conflictAreas.first { area in
-            guard (area.rbqRequiredSegments ?? []).contains(segment) else { return false }
-            switch rbqAreaMatch(firmTown(prospect), area: area) {
-            case .outside:
-                return false
-            case .unknown:
-                return true
-            case .inside:
-                return tradeSignalsMatch(prospect, area: area)
-            }
-        }
+    /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: a construction firm anywhere is held when the RBQ lookup is missing,
+    /// corrupt, an error, or no licence match. A verified match (`rbqCheck == "matched"`) passes. The reason id
+    /// comes from `rbq_licence_hold` and is not a conflict-area id.
+    static func rbqLicenceUnverified(_ prospect: ProspectRecord, config: ICPConfig) -> Bool {
+        guard let hold = config.rbqLicenceHold, prospect.rbqCheck != "matched", let segment = prospect.segment else { return false }
+        return hold.segments.contains(segment)
     }
 
     /// S3-R14 / S3-R17d: plumbing and excavation in the configured municipalities are held for Martin.
     /// Martin Lepage, 27 Oct 2026, 3:55 PM ET: nothing outside those municipalities conflicts with SOS.
     /// 3:56 PM ET: the firm must also be plumbing or excavation (selectors, keywords, or the area's RBQ codes).
-    /// A town that cannot be read stays fail-closed. RBQ licences hold on exact sub-category codes from config
+    /// 4:30 PM ET: the municipalities are Québec region 02. A town that cannot be read stays fail-closed when
+    /// the trade signals or the codes match. RBQ licences hold on exact sub-category codes from config
     /// (one JSON record per licence), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
         // Water 9:02 AM ET: map tags, keywords and licence codes all hold only inside the area's municipalities, or when the
@@ -146,17 +140,60 @@ enum LeadDefinition {
         case unknown
     }
 
-    /// Whole-value comparison after trimming and case/accent folding: "Petit-Saguenay" is not "Saguenay". An area without
-    /// `municipalities` applies everywhere (the region alone).
+    /// Normalised whole-value match, then a containment fallback. An exact key is inside (the configured spelling).
+    /// A town that only contains a listed name is unknown, so it holds. Anything else readable is outside.
+    /// Blank is unknown. An area without `municipalities` applies everywhere (the region alone).
     static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
         guard let places = area.municipalities else { return .inside(area.region) }
         let key = municipality.map(placeKey) ?? ""
         guard !key.isEmpty else { return .unknown }
-        return places.first { placeKey($0) == key }.map(RBQAreaMatch.inside) ?? .outside
+        if let exact = places.first(where: { placeKey($0) == key }) { return .inside(exact) }
+        let padded = " \(key) "
+        if places.contains(where: { listed in
+            let needle = placeKey(listed)
+            return !needle.isEmpty && padded.contains(" \(needle) ")
+        }) {
+            return .unknown
+        }
+        return .outside
     }
 
+    /// Case, accents, collapsed whitespace, hyphens and spaces alike, punctuation stripped, bracketed parts removed,
+    /// a trailing ", QC" or ", Québec" removed, and a leading "Ville de" or "Municipalité de" removed.
     static func placeKey(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        var raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        raw = raw.replacingOccurrences(of: #"\([^)]*\)"#, with: " ", options: .regularExpression)
+        raw = raw.replacingOccurrences(of: #"\[[^\]]*\]"#, with: " ", options: .regularExpression)
+        var folded = raw.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        var stripping = true
+        while stripping {
+            stripping = false
+            let trimmed = folded.trimmingCharacters(in: .whitespacesAndNewlines)
+            for suffix in [", qc", ", quebec"] where trimmed.hasSuffix(suffix) {
+                folded = String(trimmed.dropLast(suffix.count))
+                stripping = true
+            }
+        }
+        var tokens: [String] = []
+        var token = ""
+        func flush() {
+            if !token.isEmpty { tokens.append(token); token = "" }
+        }
+        for scalar in folded.unicodeScalars {
+            if breaksPlaceToken(scalar) { flush() } else { token.unicodeScalars.append(scalar) }
+        }
+        flush()
+        while tokens.count >= 2, (tokens[0] == "ville" || tokens[0] == "municipalite"), tokens[1] == "de" {
+            tokens.removeFirst(2)
+        }
+        return tokens.joined(separator: " ")
+    }
+
+    private static func breaksPlaceToken(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isWhitespace { return true }
+        if "-\u{2010}\u{2011}\u{2012}\u{2013}\u{2014}\u{2015}".unicodeScalars.contains(scalar) { return true }
+        if scalar.properties.isAlphabetic || CharacterSet.decimalDigits.contains(scalar) { return false }
+        return true
     }
 
     /// The codes that hold this licence where it is: none outside the area; inside it, or with no readable location, the codes.

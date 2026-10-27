@@ -371,7 +371,7 @@
   "conflict_areas": [
     {
       "id": "sos-plomberie-excavation-lavoie",
-      "description": "plumbing and excavation firms in the city of Saguenay only (its boroughs and merged former towns). Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation).",
+      "description": "plumbing and excavation firms anywhere in Québec administrative region 02 (Saguenay–Lac-Saint-Jean), including the city of Saguenay, its boroughs and the merged former towns. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation). 4:30 PM ET, first-hand to Argus: Saguenay means the whole region, not only the city.",
       "action": "conflict_review",
       "osm_selectors": [
         "craft=plumber",
@@ -397,16 +397,72 @@
       "region": "QC",
       "municipalities": [
         "Saguenay",
-        "Jonquière",
         "Chicoutimi",
-        "Chicoutimi-Nord",
+        "Jonquière",
         "La Baie",
         "Laterrière",
-        "Shipshaw",
         "Lac-Kénogami",
+        "Shipshaw",
+        "Canton de Tremblay",
         "Canton-Tremblay",
-        "Arvida",
-        "Kénogami"
+        "Lac-Bouchette",
+        "Saint-André-du-Lac-Saint-Jean",
+        "Saint-François-de-Sales",
+        "Chambord",
+        "Roberval",
+        "Sainte-Hedwidge",
+        "Saint-Prime",
+        "Saint-Félicien",
+        "La Doré",
+        "Mashteuiatsh",
+        "Lac-Ashuapmushuan",
+        "Saint-Augustin",
+        "Péribonka",
+        "Sainte-Jeanne-d'Arc",
+        "Dolbeau-Mistassini",
+        "Albanel",
+        "Normandin",
+        "Saint-Thomas-Didyme",
+        "Saint-Edmond-les-Plaines",
+        "Girardville",
+        "Notre-Dame-de-Lorette",
+        "Saint-Eugène-d'Argentenay",
+        "Saint-Stanislas",
+        "Passes-Dangereuses",
+        "Sainte-Élisabeth-de-Proulx",
+        "Rivière-Mistassini",
+        "Desbiens",
+        "Métabetchouan--Lac-à-la-Croix",
+        "Hébertville",
+        "Saint-Gédéon",
+        "Alma",
+        "Saint-Nazaire",
+        "Labrecque",
+        "Lamarche",
+        "L'Ascension-de-Notre-Seigneur",
+        "Saint-Henri-de-Taillon",
+        "Sainte-Monique",
+        "Saint-Ludger-de-Milot",
+        "Mont-Apica",
+        "Lac-Moncouche",
+        "Lac-Achouakan",
+        "Belle-Rivière",
+        "Petit-Saguenay",
+        "L'Anse-Saint-Jean",
+        "Rivière-Éternité",
+        "Ferland-et-Boilleau",
+        "Saint-Félix-d'Otis",
+        "Sainte-Rose-du-Nord",
+        "Saint-Fulgence",
+        "Saint-Honoré",
+        "Saint-David-de-Falardeau",
+        "Bégin",
+        "Saint-Ambroise",
+        "Saint-Charles-de-Bourget",
+        "Larouche",
+        "Lalemant",
+        "Lac-Ministuk",
+        "Mont-Valin"
       ],
       "rbq_subcategory_codes": [
         "15.5",
@@ -416,17 +472,42 @@
       "rbq_code_conditions": [
         {
           "code": "2.5",
-          "not_held_if_all_of": ["2.5", "2.7", "3.2", "4.2", "5.2", "6.2", "7", "8", "9", "11.2", "12", "13.5", "17.2"],
-          "not_held_if_any_code_starts_with": ["1."],
-          "source": "Water 7:20 and 7:26 AM ET 2026-10-23 (wind-acceptance-tests.md amendments), per Air's connector and lead map section 10c and RBQ's official sub-category list (https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/, 'Liste des sous-catégories', PDF 1592-A). 2.5 = Entrepreneur en excavation et terrassement, Annexe III. Annexe III sub-categories need no knowledge exam and come bundled, so 2.5 holds a licence only when the licence does NOT carry the whole Annexe III bundle (all 13 codes: 2.5, 2.7, 3.2, 4.2, 5.2, 6.2, 7, 8, 9, 11.2, 12, 13.5, 17.2) AND carries no general-contractor 1.x code. 15.5 (plumbing, Annexe II) has no condition and is held wherever this conflict applies. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation). Outside the municipalities on this area, these codes do not hold. A licence with no readable location stays held."
+          "not_held_if_all_of": [
+            "2.5",
+            "2.7",
+            "3.2",
+            "4.2",
+            "5.2",
+            "6.2",
+            "7",
+            "8",
+            "9",
+            "11.2",
+            "12",
+            "13.5",
+            "17.2"
+          ],
+          "not_held_if_any_code_starts_with": [
+            "1."
+          ],
+          "source": "Water 7:20 and 7:26 AM ET 2026-10-23 (wind-acceptance-tests.md amendments), per Air's connector and lead map section 10c and RBQ's official sub-category list (https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/, 'Liste des sous-catégories', PDF 1592-A). 2.5 = Entrepreneur en excavation et terrassement, Annexe III. Annexe III sub-categories need no knowledge exam and come bundled, so 2.5 holds a licence only when the licence does NOT carry the whole Annexe III bundle (all 13 codes: 2.5, 2.7, 3.2, 4.2, 5.2, 6.2, 7, 8, 9, 11.2, 12, 13.5, 17.2) AND carries no general-contractor 1.x code. 15.5 (plumbing, Annexe II) has no condition and is held wherever this conflict applies. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation). Martin Lepage, 27 Oct 2026, 4:30 PM ET, first-hand to Argus: 'Saguenay' means the whole Saguenay–Lac-Saint-Jean administrative region (Québec region 02), including Alma and Roberval, not only the city. The Lavoie conflict stays plumbing or excavation anywhere in that region. A separate ruling the same afternoon: 'Yes, keep a separate RBQ licence-check hold for construction firms everywhere.' That hold is rbq-licence-unverified, not this conflict. Outside these municipalities these codes do not hold for this conflict. A licence with no readable location stays held when the trade signals or these codes match."
         }
       ],
       "rbq_required_segments": [
         "construction_trades"
       ],
-      "rbq_required_note": "Fail closed (Argus gate 2026-10-23 must-fix 1, Water 6:54 AM ET), scoped by Martin Lepage on 27 Oct 2026. 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only. Inside the municipalities on this area, a firm that looks like plumbing or excavation (this area's selectors or keywords) is held unless the RBQ lookup matched its licence; a construction_trades firm there that does not look like either trade is not held for this conflict. Outside those municipalities, nothing is held for this conflict. When the town cannot be read, the previous behaviour stays: a prospect in these segments is held unless the RBQ lookup matched. No RBQ file, no licence match, or a file that does not parse is what 'not matched' means."
+      "rbq_required_note": "The Lavoie conflict (sos-plomberie-excavation-lavoie) is not a province-wide licence check. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only. 4:30 PM ET, first-hand to Argus: (1) 'Saguenay' means the whole Saguenay–Lac-Saint-Jean administrative region (Québec region 02), including Alma and Roberval, not only the city. (2) The Lavoie conflict stays plumbing or excavation and anywhere in that region; when another hold also applies, the record lists each reason separately. (3) 'Yes, keep a separate RBQ licence-check hold for construction firms everywhere.' Inside the region, selectors, keywords, or RBQ 15.5 / 2.5 hold this conflict. A genuine RBQ no-match still holds when the firm looks like plumbing or excavation. A generic construction_trades firm does not. Outside the region, this conflict does not hold. An unreadable town stays fail-closed for this conflict when the trade signals or the codes match. A town string that contains a listed municipality but does not normalise to one is unknown and held. Municipalities checked 2026-10-27 from the MAMH Répertoire des municipalités, https://donneesouvertes.affmunqc.net/repertoire/MUN.csv (region administrative Saguenay--Lac-Saint-Jean (02), 59 organisations, including Mashteuiatsh and the unorganized territories in that file), boroughs from https://donneesouvertes.affmunqc.net/repertoire/ARR.csv (Chicoutimi, Jonquière, La Baie), and former towns named in Order in Council 841-2001, Gazette officielle du Québec, https://www.publicationsduquebec.gouv.qc.ca/fileadmin/gazette/pdf_encrypte/lois_reglements/2001F/36499.pdf (Laterrière, Lac-Kénogami, Shipshaw, Canton de Tremblay; Canton-Tremblay is that same canton without the particle 'de'). Arvida and Kénogami are not in those sources. Chicoutimi-Nord is not either; because the name contains Chicoutimi it is unknown and held.",
+      "team_call_note": "Holding a region-02 paving firm whose name contains 'terrassement', and holding a paving firm that carries RBQ 2.5, is a cautious team call pending Martin, not his rule. The keyword terrassement and the code 2.5 stay, so real excavation firms are not dropped. Pavage or asphalt alone, with no excavation keyword and no 2.5, is not the Lavoie conflict."
     }
   ],
+  "rbq_licence_hold": {
+    "id": "rbq-licence-unverified",
+    "description": "construction_trades firms anywhere whose RBQ licence is not a verified match. Martin Lepage, 27 Oct 2026, 4:30 PM ET, first-hand to Argus: 'Yes, keep a separate RBQ licence-check hold for construction firms everywhere.'",
+    "segments": [
+      "construction_trades"
+    ],
+    "note": "Separate from sos-plomberie-excavation-lavoie. Martin Lepage, 27 Oct 2026, 4:30 PM ET, first-hand to Argus, three rulings: (1) 'Saguenay' means the whole Saguenay–Lac-Saint-Jean administrative region (Québec region 02), including Alma and Roberval, not only the city. (2) The Lavoie conflict stays plumbing or excavation and anywhere in that region; both holds can apply to the same firm, and the record lists each reason separately. (3) 'Yes, keep a separate RBQ licence-check hold for construction firms everywhere.' Any construction_trades firm anywhere is held when the RBQ index is missing, corrupt, errors, or returns no licence match. A verified RBQ licence match passes this hold. The reason id is rbq-licence-unverified and is not attributed to sos-plomberie-excavation-lavoie. Place list checked 2026-10-27: https://donneesouvertes.affmunqc.net/repertoire/MUN.csv and https://donneesouvertes.affmunqc.net/repertoire/ARR.csv and Order in Council 841-2001 (https://www.publicationsduquebec.gouv.qc.ca/fileadmin/gazette/pdf_encrypte/lois_reglements/2001F/36499.pdf)."
+  },
   "sender": {
     "name": "Martin Lepage",
     "organization": "PHAROS AI",
