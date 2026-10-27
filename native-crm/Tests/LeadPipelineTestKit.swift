@@ -205,13 +205,11 @@ enum RBQFixture {
     ]
 }
 
-/// Earth 6:59: runs the app path (LeadPipelineEnvironment.searchAndIngest) for the construction_trades segment with the
-/// cached RBQ index missing (contents nil) or replaced by the given bytes. Every firm it finds must come back held.
-/// Runs the app path (LeadPipelineEnvironment.searchAndIngest) for construction_trades over SearchFixture.constructionBatch,
-/// with the cached RBQ file absent (nil) or holding `contents`.
+/// Runs the app path (LeadPipelineEnvironment.searchAndIngest) for construction_trades with the cached RBQ
+/// file absent (nil) or holding `contents`. The default listings are the Montréal mixed batch.
 enum EarthRBQ {
     struct Outcome { var prospects: [ProspectRecord]; var drafts: [OutreachDraft]; var audit: [CWAuditLine] }
-    static func appRun(contents: Data?) async throws -> Outcome {
+    static func appRun(contents: Data?, makeFixture: (ICPConfig) -> SearchFixture = SearchFixture.mixedConstructionBatch) async throws -> Outcome {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-earth-rbq-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
@@ -219,7 +217,7 @@ enum EarthRBQ {
             try FileManager.default.createDirectory(at: env.rbqDirectory, withIntermediateDirectories: true)
             try contents.write(to: RBQOpenData.cacheFile(in: env.rbqDirectory))
         }
-        let fixture = SearchFixture.mixedConstructionBatch(config: env.config)
+        let fixture = makeFixture(env.config)
         let audit = MemoryAuditSink()
         let reports = await env.searchAndIngest([.init(segmentID: "construction_trades", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
                                                 inner: fixture.inner, audit: audit, clock: fixture.clock)

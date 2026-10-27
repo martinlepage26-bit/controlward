@@ -396,14 +396,14 @@ enum LeadPipelinePlantedReds {
             do { _ = try RBQOpenData.parse(data: data, source: rbqSource); return nil }
             catch let refusal as LeadPipelineRefusal { return refusal.code == "refused:open-data-schema" ? refusal.code : nil }
         }
-        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a silent construction site with no RBQ file gets Ready and a draft") {
-            let fixture = SearchFixture.builder(config: config)
+        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a Saguenay plumbing firm with no RBQ file gets Ready and a draft") {
+            let fixture = SearchFixture.saguenayPlumber(config: config)
             let report = await fixture.run(segment: "construction_trades", rbq: nil)
             guard let prospect = report.prospects.first else { return nil }
             return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-")), 0 drafts" : nil
         }
-        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a construction prospect with no licence match passes") {
-            let fixture = SearchFixture.builder(config: config)
+        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a Saguenay plumbing firm with no licence match passes") {
+            let fixture = SearchFixture.saguenayPlumber(config: config)
             let report = await fixture.run(segment: "construction_trades", rbq: RBQIndex([]))
             guard let prospect = report.prospects.first else { return nil }
             return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-"))" : nil
@@ -472,17 +472,17 @@ enum LeadPipelinePlantedReds {
             let findings = HTMLImportScan.findings(in: "let text = NSAttributedString(html: data, documentAttributes: nil)")
             return findings.isEmpty ? nil : "caught: \(findings.joined(separator: ", "))"
         }
-        // EARTH (6:59 AM ET findings on 75285c4, narrowed by Water 7:18 AM ET so they don't overlap Argus reds 2 and 3):
-        // through the app path, a mixed batch of construction/trades firms is held all at once.
-        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, firms of a mixed construction batch get Ready or a draft") {
-            let out = try await EarthRBQ.appRun(contents: nil)
-            let all = SearchFixture.constructionBatch.count
+        // EARTH (6:59 AM ET findings on 75285c4, narrowed by Water 7:18 AM ET so they don't overlap Argus reds 2 and 3).
+        // Martin 27 Oct 2026: the fail-closed hold is Saguenay plumbing and excavation, not every construction firm.
+        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, Saguenay plumbing and excavation firms get Ready or a draft") {
+            let out = try await EarthRBQ.appRun(contents: nil, makeFixture: SearchFixture.saguenayConflictBatch)
+            let all = SearchFixture.saguenayConflictFirms.count
             return out.prospects.count == all && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty
                 ? "\(all)/\(all) held in one run (rbq \(out.prospects.first?.rbqCheck ?? "-")), 0 drafts" : nil
         }
-        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets firms of a mixed construction batch through") {
-            let out = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8))
-            let all = SearchFixture.constructionBatch.count
+        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets Saguenay plumbing and excavation firms through") {
+            let out = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8), makeFixture: SearchFixture.saguenayConflictBatch)
+            let all = SearchFixture.saguenayConflictFirms.count
             guard out.prospects.count == all, out.prospects.allSatisfy({ $0.status == .conflictReview }), out.drafts.isEmpty,
                   out.audit.contains(where: { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }) else { return nil }
             return "truncated: \(all)/\(all) held, 0 drafts, rbq-load refused:open-data-schema"
