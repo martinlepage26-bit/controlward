@@ -207,7 +207,9 @@ enum CSVHeaderMap {
         add(.lastName, "last_name", "lastname", "surname", "family_name", "nom_de_famille")
         add(.email, "email", "e_mail", "email_address", "courriel", "adresse_courriel", "adresse_electronique")
         add(.phone, "phone", "phone_number", "telephone", "tel", "mobile", "cell", "telephone_number", "numero_de_telephone", "cellulaire")
-        add(.company, "company", "company_name", "business", "business_name", "organization", "organisation", "entreprise", "compagnie", "nom_de_l'entreprise")
+        add(.company, "company", "company_name", "business", "business_name", "organization", "organisation", "entreprise", "compagnie", "nom_de_l'entreprise",
+            "org", "organization_name", "organisation_name", "org_name", "institution", "employer", "account", "account_name", "firm", "agency",
+            "etablissement", "employeur", "nom_de_l'organisation", "organisme")
         add(.service, "service", "services", "project", "project_type", "service_type", "service_requested", "job", "projet", "type_de_projet", "service_demande")
         add(.amount, "quote", "quote_amount", "amount", "$", "price", "estimate", "total", "value", "soumission", "montant", "prix", "estimation")
         add(.date, "date", "created", "created_at", "date_created", "quote_date", "date_sent", "sent_date", "date_de_creation", "date_de_soumission")
@@ -234,6 +236,154 @@ enum CSVHeaderMap {
 
 private extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
+}
+
+// MARK: - CSV import result (Slice CSV, Water 9:42 AM ET)
+
+/// One row the import did not take as a lead, or took with a warning. `row` counts the header as row 1.
+struct CSVRowNote: Equatable, Sendable {
+    var row: Int
+    var reason: String
+}
+
+/// What one CSV import did, kept on the store until Martin closes it.
+struct CSVImportResult: Equatable, Sendable {
+    var fileName: String
+    var finishedAt: Date
+    var imported = 0
+    /// Not imported and not reviewable as a person (e.g. `no-name`).
+    var skipped: [CSVRowNote] = []
+    /// Not imported; needs Martin's review (placeholder or role names, `duplicate-lead`).
+    var flagged: [CSVRowNote] = []
+    /// Imported, with a field left empty: `row 7, quote: "about 5k"`.
+    var warnings: [String] = []
+    var ignoredColumns: [String] = []
+    /// The header(s) that actually filled `company`.
+    var companyColumns: [String] = []
+    /// Set when the save failed; nothing from the file was kept.
+    var failure: String?
+    /// Set when the same bytes were already imported this session; nothing was imported.
+    var alreadyImportedAt: Date?
+    var summary = ""
+    /// The name text of skipped/flagged rows, for Martin's panel only. Never written to a log.
+    var rowNames: [Int: String] = [:]
+}
+
+/// The lines the import result panel shows (CSV-5).
+enum CSVImportPresentation {
+    static func lines(_ result: CSVImportResult) -> [String] {
+        let time = result.finishedAt.formatted(date: .abbreviated, time: .shortened)
+        var lines = ["\(result.fileName), \(time)", result.summary]
+        if result.failure == nil, result.alreadyImportedAt == nil {
+            lines.append("Imported \(result.imported) · Skipped \(result.skipped.count) · Flagged \(result.flagged.count) · Warnings \(result.warnings.count)")
+        }
+        if !result.companyColumns.isEmpty { lines.append("company from: \(result.companyColumns.joined(separator: ", "))") }
+        func named(_ note: CSVRowNote) -> String {
+            guard let name = result.rowNames[note.row], !name.isEmpty else { return "" }
+            return " (\(name))"
+        }
+        lines += result.skipped.map { "skipped row \($0.row): \($0.reason)\(named($0))" }
+        lines += result.flagged.map { "flagged row \($0.row): \($0.reason)\(named($0))" }
+        lines += result.warnings.map { "warning: \($0)" }
+        lines += result.ignoredColumns.map { "ignored column: \($0)" }
+        return lines
+    }
+}
+
+/// Names that are placeholders or role descriptions, not people (CSV-7).
+enum CSVNameCheck {
+    static let placeholders: Set<String> = ["none identified", "none", "n/a", "na", "n.a.", "tbd", "tba", "to be determined", "unknown", "inconnu",
+                                            "inconnue", "a determiner", "role only", "not found", "aucun", "aucune", "null", "nil", "placeholder",
+                                            "xxx", "?", "-", "--", "—"]
+    static let titleWords: Set<String> = ["officer", "chief", "director", "directeur", "directrice", "general", "generale", "manager", "president",
+                                          "presidente", "vp", "vice", "head", "coordinator", "coordonnateur", "coordonnatrice", "responsable",
+                                          "gestionnaire", "ceo", "cfo", "coo", "cro", "cto", "cio", "ciso", "dpo", "counsel", "secretary",
+                                          "secretaire", "administrator", "administrateur", "administratrice", "founder", "fondateur", "fondatrice",
+                                          "owner", "proprietaire", "conseiller", "conseillere", "adjoint", "adjointe", "analyst", "analyste",
+                                          "superintendent", "registrar", "registraire", "dean", "doyen", "doyenne", "provost", "recteur", "rectrice"]
+
+    /// Order matters: placeholder, semicolon, person-in-parentheses, more-than-6-words, title-only.
+    static func flag(_ name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folded = trimmed.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        if placeholders.contains(folded) || !trimmed.contains(where: \.isLetter) { return "placeholder" }
+        if trimmed.contains(";") { return "semicolon" }
+        if trimmed.contains("(") || trimmed.contains(")") || trimmed.contains("[") { return "person-in-parentheses" }
+        let words = trimmed.split(whereSeparator: \.isWhitespace)
+        if words.count > 6 { return "more-than-6-words" }
+        let tokens = folded.split { !($0.isLetter) }.map(String.init)
+        if tokens.contains(where: titleWords.contains) { return "title-only" }
+        return nil
+    }
+}
+
+/// Strict value readers for CSV-4: nothing is guessed.
+enum CSVValue {
+    enum AmountReading: Equatable { case empty, value(Double), unreadable }
+    /// `day` is `yyyy-MM-dd`.
+    enum DateReading: Equatable { case empty, day(String), ambiguous, unreadable }
+
+    static func amount(_ raw: String) -> AmountReading {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .empty }
+        var core = trimmed
+        for mark in ["CAD", "CA$", "$", "€"] { core = core.replacingOccurrences(of: mark, with: "") }
+        core = core.trimmingCharacters(in: .whitespaces.union(CharacterSet(charactersIn: "\u{00A0}\u{202F}")))
+        let allowed = Set("0123456789,. \u{00A0}\u{202F}")
+        guard let first = core.first, let last = core.last, first.isASCII, first.isNumber, last.isASCII, last.isNumber,
+              core.allSatisfy(allowed.contains) else { return .unreadable }
+        return CSVAmount.parse(core).map(AmountReading.value) ?? .unreadable
+    }
+
+    private static func day(_ year: Int, _ month: Int, _ day: Int) -> String? {
+        var parts = DateComponents()
+        parts.year = year; parts.month = month; parts.day = day
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard (1...12).contains(month), (1...31).contains(day), (1000...9999).contains(year), let date = calendar.date(from: parts),
+              calendar.component(.day, from: date) == day else { return nil }
+        return String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    static func date(_ raw: String) -> DateReading {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .empty }
+        // ISO: 2026-10-23, optionally with a time.
+        let isoDay = trimmed.prefix(10)
+        if isoDay.count == 10, trimmed.count == 10 || trimmed.dropFirst(10).first == "T" || trimmed.dropFirst(10).first == " " {
+            let parts = isoDay.split(separator: "-", omittingEmptySubsequences: false)
+            if parts.count == 3, parts[0].count == 4, let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) {
+                return day(y, m, d).map(DateReading.day) ?? .unreadable
+            }
+        }
+        // Numeric day/month/year with / - or . separators.
+        for separator in ["/", "-", "."] where trimmed.contains(separator) {
+            let parts = trimmed.split(separator: Character(separator), omittingEmptySubsequences: false).map(String.init)
+            guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }),
+                  parts[2].count == 4, let a = Int(parts[0]), let b = Int(parts[1]), let y = Int(parts[2]) else { continue }
+            if a == b || a > 12 { return day(y, b, a).map(DateReading.day) ?? .unreadable }
+            if b > 12 { return day(y, a, b).map(DateReading.day) ?? .unreadable }
+            return .ambiguous
+        }
+        // Month names, English or French.
+        for locale in ["en_US_POSIX", "fr_CA"] {
+            for format in ["MMM d, yyyy", "MMMM d, yyyy", "d MMM yyyy", "d MMMM yyyy", "MMM d yyyy", "MMMM d yyyy"] {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: locale)
+                formatter.timeZone = TimeZone(identifier: "UTC")
+                formatter.calendar = Calendar(identifier: .gregorian)
+                formatter.dateFormat = format
+                formatter.isLenient = false
+                if let date = formatter.date(from: trimmed) {
+                    var calendar = Calendar(identifier: .gregorian)
+                    calendar.timeZone = TimeZone(identifier: "UTC")!
+                    let c = calendar.dateComponents([.year, .month, .day], from: date)
+                    if let y = c.year, let m = c.month, let d = c.day, let text = day(y, m, d) { return .day(text) }
+                }
+            }
+        }
+        return .unreadable
+    }
 }
 
 // MARK: - LeadGen Codable schema (F5)

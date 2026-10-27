@@ -13,17 +13,25 @@ enum LeadDefinition {
         guard let segment = config.segment(prospect.segment) else {
             return Verdict(status: .drop, reasons: ["no matching segment"])
         }
+        // Each hold is its own reason. Lavoie is the conflict area. The licence check is rbq-licence-unverified.
+        var holdReasons: [String] = []
         if let area = conflictArea(for: prospect, config: config) {
-            return Verdict(status: .conflictReview, reasons: ["conflict area: \(area.id)"])
+            holdReasons.append("conflict area: \(area.id)")
         }
-        if let area = rbqUnchecked(prospect, config: config) {
-            return Verdict(status: .conflictReview, reasons: ["conflict area: \(area.id) (RBQ check: \(prospect.rbqCheck ?? "not run"))"])
+        if rbqLicenceUnverified(prospect, config: config) {
+            let check = prospect.rbqCheck ?? "not run"
+            holdReasons.append("\(config.rbqLicenceHold?.id ?? "rbq-licence-unverified") (RBQ check: \(check))")
+        }
+        if !holdReasons.isEmpty {
+            return Verdict(status: .conflictReview, reasons: holdReasons)
         }
         var reasons: [String] = []
         reasons += sourceEvidence(prospect)
         if let reason = namedPerson(prospect, segment: segment, config: config) { reasons.append(reason) }
         reasons += recordFields(prospect)
         reasons += triggerFreshness(prospect.trigger, segment: segment, config: config, now: now)
+        // LIVE-R5 (Earth 14:05): Ready requires a recorded consent basis (S3-R6); without one the record stays Fix.
+        if prospect.consent == nil { reasons.append("no consent basis recorded") }
         if prospect.openTenderURL != nil { reasons.append("open tender") }
         return Verdict(status: reasons.isEmpty ? .ready : .fix, reasons: reasons)
     }
@@ -86,27 +94,36 @@ enum LeadDefinition {
         return calendar.isDate(a, inSameDayAs: b)
     }
 
-    /// Argus must-fix 1 (fail closed): a segment listed in an area's `rbq_required_segments` is held unless the RBQ lookup ran and
-    /// matched a licence. No file, an unreadable file, a parse error or no match all go to conflict review, never to Ready.
-    static func rbqUnchecked(_ prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
-        guard prospect.rbqCheck != "matched", let segment = prospect.segment else { return nil }
-        return config.conflictAreas.first { ($0.rbqRequiredSegments ?? []).contains(segment) }
+    /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: a construction firm anywhere is held when the RBQ lookup is missing,
+    /// corrupt, an error, or no licence match. A verified match (`rbqCheck == "matched"`) passes. The reason id
+    /// comes from `rbq_licence_hold` and is not a conflict-area id.
+    static func rbqLicenceUnverified(_ prospect: ProspectRecord, config: ICPConfig) -> Bool {
+        guard let hold = config.rbqLicenceHold, prospect.rbqCheck != "matched", let segment = prospect.segment else { return false }
+        return hold.segments.contains(segment)
     }
 
-    /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area (icp.json `municipalities`) are held
-    /// for Martin. RBQ licences hold on
-    /// exact sub-category codes from config (one JSON record per licence), never on words.
+    /// S3-R14 / S3-R17d: plumbing and excavation in the configured municipalities are held for Martin.
+    /// Martin Lepage, 27 Oct 2026, 3:55 PM ET: nothing outside those municipalities conflicts with SOS.
+    /// 3:56 PM ET: the firm must also be plumbing or excavation (selectors, keywords, or the area's RBQ codes).
+    /// 4:30 PM ET: the municipalities are Québec region 02. A town that cannot be read stays fail-closed when
+    /// the trade signals or the codes match. RBQ licences hold on exact sub-category codes from config
+    /// (one JSON record per licence), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
-        let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
         // Water 9:02 AM ET: map tags, keywords and licence codes all hold only inside the area's municipalities, or when the
         // firm's town can't be read (fail closed). Outside the area none of them holds.
         let town = firmTown(prospect)
         return config.conflictAreas.first { area in
             guard rbqAreaMatch(town, area: area) != .outside else { return false }
-            return area.osmSelectors.contains { prospect.osmTags.contains($0) }
-                || area.keywords.contains { haystack.contains($0.lowercased()) }
+            return tradeSignalsMatch(prospect, area: area)
                 || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: town).isEmpty
         }
+    }
+
+    /// The area's selectors or keywords. RBQ codes are a separate signal (`rbqHeldCodes`).
+    static func tradeSignalsMatch(_ prospect: ProspectRecord, area: ICPConfig.ConflictArea) -> Bool {
+        let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
+        return area.osmSelectors.contains { prospect.osmTags.contains($0) }
+            || area.keywords.contains { haystack.contains($0.lowercased()) }
     }
 
     /// The firm's town for the conflict area: the licence's Municipalité, else the map listing's town; nil when neither reads.
@@ -123,17 +140,95 @@ enum LeadDefinition {
         case unknown
     }
 
-    /// Whole-value comparison after trimming and case/accent folding: "Petit-Saguenay" is not "Saguenay". An area without
+    /// Normalised whole-value match, then a containment fallback. An exact key is inside (the configured spelling).
+    /// A town that only contains a listed name is unknown, so it holds. A name in `unresolvedPlaceNames` is unknown
+    /// on an exact key or when the town only contains it. A postal-code-only town whose FSA starts with one of
+    /// `postalFsaPrefixes` is unknown. Anything else readable is outside. Blank is unknown. An area without
     /// `municipalities` applies everywhere (the region alone).
     static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
         guard let places = area.municipalities else { return .inside(area.region) }
         let key = municipality.map(placeKey) ?? ""
         guard !key.isEmpty else { return .unknown }
-        return places.first { placeKey($0) == key }.map(RBQAreaMatch.inside) ?? .outside
+        if let exact = places.first(where: { placeKey($0) == key }) { return .inside(exact) }
+        let unresolved = area.unresolvedPlaceNames ?? []
+        if unresolved.contains(where: { placeKey($0) == key }) { return .unknown }
+        let padded = " \(key) "
+        func containsListed(_ names: [String]) -> Bool {
+            names.contains { listed in
+                let needle = placeKey(listed)
+                return !needle.isEmpty && padded.contains(" \(needle) ")
+            }
+        }
+        if containsListed(places) || containsListed(unresolved) { return .unknown }
+        if let fsa = postalFSA(municipality), let prefixes = area.postalFsaPrefixes {
+            let folded = prefixes.map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased() }
+            if folded.contains(where: { fsa.hasPrefix($0) }) { return .unknown }
+        }
+        return .outside
     }
 
+    /// The FSA of a town that is only a Canadian postal code or FSA, optionally followed by ", QC". Nil otherwise.
+    private static func postalFSA(_ text: String?) -> String? {
+        guard let text else { return nil }
+        var folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        folded = folded.trimmingCharacters(in: .whitespacesAndNewlines)
+        var stripping = true
+        while stripping {
+            stripping = false
+            let trimmed = folded.trimmingCharacters(in: .whitespacesAndNewlines)
+            for suffix in [", qc", ", quebec"] where trimmed.hasSuffix(suffix) {
+                folded = String(trimmed.dropLast(suffix.count))
+                stripping = true
+            }
+        }
+        let compact = folded.replacingOccurrences(of: " ", with: "")
+        let fsaOnly = compact.range(of: #"^[a-z]\d[a-z]$"#, options: .regularExpression) != nil
+        let full = compact.range(of: #"^[a-z]\d[a-z]\d[a-z]\d$"#, options: .regularExpression) != nil
+        guard fsaOnly || full else { return nil }
+        return String(compact.prefix(3))
+    }
+
+    /// Case, accents, collapsed whitespace, hyphens and spaces alike, punctuation stripped, bracketed parts removed,
+    /// a trailing ", QC" or ", Québec" removed, a leading "Ville de" / "Ville d'" or "Municipalité de" / "Municipalité d'" removed,
+    /// and a whole token "St" or "Ste" expanded to "Saint" or "Sainte".
     static func placeKey(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        var raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        raw = raw.replacingOccurrences(of: #"\([^)]*\)"#, with: " ", options: .regularExpression)
+        raw = raw.replacingOccurrences(of: #"\[[^\]]*\]"#, with: " ", options: .regularExpression)
+        var folded = raw.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        var stripping = true
+        while stripping {
+            stripping = false
+            let trimmed = folded.trimmingCharacters(in: .whitespacesAndNewlines)
+            for suffix in [", qc", ", quebec"] where trimmed.hasSuffix(suffix) {
+                folded = String(trimmed.dropLast(suffix.count))
+                stripping = true
+            }
+        }
+        var tokens: [String] = []
+        var token = ""
+        func flush() {
+            if !token.isEmpty { tokens.append(token); token = "" }
+        }
+        for scalar in folded.unicodeScalars {
+            if breaksPlaceToken(scalar) { flush() } else { token.unicodeScalars.append(scalar) }
+        }
+        flush()
+        for index in tokens.indices {
+            if tokens[index] == "st" { tokens[index] = "saint" }
+            else if tokens[index] == "ste" { tokens[index] = "sainte" }
+        }
+        while tokens.count >= 2, (tokens[0] == "ville" || tokens[0] == "municipalite"), tokens[1] == "de" || tokens[1] == "d" {
+            tokens.removeFirst(2)
+        }
+        return tokens.joined(separator: " ")
+    }
+
+    private static func breaksPlaceToken(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isWhitespace { return true }
+        if "-\u{2010}\u{2011}\u{2012}\u{2013}\u{2014}\u{2015}".unicodeScalars.contains(scalar) { return true }
+        if scalar.properties.isAlphabetic || CharacterSet.decimalDigits.contains(scalar) { return false }
+        return true
     }
 
     /// The codes that hold this licence where it is: none outside the area; inside it, or with no readable location, the codes.
@@ -174,6 +269,8 @@ enum LeadDefinition {
         }
         if prospect.contact?.titleSource == .searchOnly { return "Title seen only in search: confirm on the page before writing." }
         if prospect.consent == nil { return "No consent basis recorded: no draft." }
+        // Earth 12:19: only a trigger with a fetch time is a dated trigger; without one there is nothing to write about.
+        if prospect.trigger?.url == nil || prospect.trigger?.fetchedAt == nil { return "No trigger on the own site with a fetch time: no draft." }
         return "Low: own-site evidence, dated trigger."
     }
 }
@@ -206,3 +303,32 @@ enum AddressProvenance {
         return HostMatch.belongs(host, to: domain) && prospect.snapshots.contains { $0.url == url }
     }
 }
+
+/// LIVE-R6 (Earth 14:05): every evidence URL on a record is on that record's own site domain. Hosts of the enabled
+/// open-data registries and watch feeds in the allowlist are exempt (a public registry tied to the same organisation).
+/// A violation is a hard fail: ingest and the search run refuse the record, and proof check 6 fails.
+enum EvidenceDomain {
+    static func urls(_ record: ProspectRecord) -> [String] {
+        var out = [record.sourceURL, record.addressSourceURL, record.contact?.sourceURL, record.route?.sourceURL, record.trigger?.url].compactMap { $0 }
+        out += record.snapshots.map(\.url)
+        if case .conspicuousPublication(let url)? = record.consent { out.append(url) }
+        if let research = record.research {
+            out += research.observedFacts.evidence.keys.sorted().flatMap { research.observedFacts.evidence[$0]?.map(\.url) ?? [] }
+            out += research.assessment.supportingEvidence.map(\.url)
+        }
+        return out.filter { !$0.isEmpty }
+    }
+
+    /// The off-domain evidence URLs on a record. A record without an own domain has no evidence that can be checked,
+    /// so every URL it carries counts as off-domain.
+    static func offDomain(_ record: ProspectRecord, config: ICPConfig) -> [String] {
+        let exempt = Set((config.allowlist.openDataSources.filter(\.enabled).map(\.host) + config.allowlist.watchHosts).map { $0.lowercased() })
+        return urls(record).filter { url in
+            guard let host = URL(string: url)?.host?.lowercased() else { return true }
+            if exempt.contains(host) { return false }
+            guard let domain = record.businessDomain, !domain.isEmpty else { return true }
+            return !HostMatch.belongs(host, to: domain)
+        }
+    }
+}
+

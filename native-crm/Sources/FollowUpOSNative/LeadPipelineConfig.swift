@@ -41,14 +41,31 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var rbqSubcategoryCodes: [String]?
         /// Where the codes were checked: RBQ's own sub-category list (URL and date).
         var rbqSubcategorySource: String?
-        /// Segments that are held unless the RBQ lookup matched a licence (fail closed: no file, no match or a parse error holds).
+        /// Segments named on this conflict for the old fail-closed note. The province-wide licence hold is
+        /// `rbqLicenceHold`, not this field. Martin Lepage, 27 Oct 2026, 3:56 and 4:30 PM ET: this conflict
+        /// holds only plumbing or excavation inside region 02 (or an unreadable town when the trade matches).
         var rbqRequiredSegments: [String]?
         /// Conditions under which a listed code does NOT hold a licence (Water 7:20 / 7:26 AM ET, Air's map 10c). A code without a
         /// condition always holds. All codes come from config; nothing about specific codes is hard-coded.
         var rbqCodeConditions: [RBQCodeCondition]?
-        /// Where the RBQ code hold applies (Martin 8:39 / Water 8:41 AM ET): whole-value matches on the licence's Municipalité,
-        /// case- and accent-normalised, never a substring. A licence with no readable location is held (fail closed).
+        /// Where this conflict applies (Martin 8:39 / Water 8:41 AM ET; 27 Oct 2026 3:55 PM ET and 4:30 PM ET:
+        /// Saguenay means Québec region 02): a normalised whole-value match on one municipality. A town string
+        /// that only contains a listed name is unknown and held. A licence with no readable location is held
+        /// when the trade signals or the codes match (fail closed).
         var municipalities: [String]?
+        /// Readable names with no official municipality or sector citation. Exact, or contained in a longer town,
+        /// they are unknown and held, never outside and never Ready for a matching trade.
+        var unresolvedPlaceNames: [String]?
+        /// Canadian FSA prefixes. A postal-code-only town whose FSA starts with one of these is unknown and held.
+        var postalFsaPrefixes: [String]?
+    }
+    /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: any firm in `segments` is held, everywhere, unless `rbqCheck` is "matched".
+    /// The reason id is this hold's id, never a conflict-area id.
+    struct RBQLicenceHold: Codable, Equatable, Sendable {
+        var id: String
+        var description: String
+        var segments: [String]
+        var note: String?
     }
     /// A listed RBQ code holds a licence unless the licence carries every code of `notHeldIfAllOf` (e.g. the full Annexe III
     /// bundle) or any code starting with one of `notHeldIfAnyCodeStartsWith` (e.g. "1." = a general-contractor 1.x code).
@@ -170,6 +187,9 @@ struct ICPConfig: Codable, Equatable, Sendable {
     var triggerSignals: [String: [String]]
     var draftForbidden: [ContentRule]
     var conflictAreas: [ConflictArea]
+    /// Province-wide construction-trades hold when the RBQ lookup is not a verified match.
+    /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: separate from the Lavoie conflict.
+    var rbqLicenceHold: RBQLicenceHold?
     var sender: Sender
     var loi25Gate: Loi25Gate
     var allowlist: Allowlist

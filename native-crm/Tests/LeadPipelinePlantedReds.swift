@@ -5,8 +5,9 @@ import FoundationNetworking
 
 /// Slice 3 planted reds (wind-acceptance-tests.md §3, slice total amended 6:11 AM ET): 41 bad inputs, plus Argus's 13
 /// (gate file controlward-18-2026-10-23.md; total amended to 54 by Water, 6:53 AM ET), plus Earth's 2 RBQ fail-closed
-/// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth). A case "fails" when the code refuses
-/// it, so a healthy build prints `expected 56 failures, got 56: OK`. Any other count exits non-zero.
+/// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth),
+/// plus 14 former-place reds and 4 Saint/Sainte abbreviation reds (Argus on f02a8e7: 56 -> 74). A case "fails" when the code refuses
+/// it, so a healthy build prints `expected 74 failures, got 74: OK`. Any other count exits non-zero.
 /// Argus reds 9 and 10 live in pharos-api's vitest suite; they count only when CW_PHAROS_PLANTED_REDS points at that
 /// run's JSON report and the matching tests passed. Without the report they print RED-NOT-RUN with the reason (never "accepted")
 /// and the total is a MISMATCH.
@@ -22,7 +23,10 @@ enum LeadPipelinePlantedReds {
         var probe: Probe
     }
 
-    static let expectedTotal = 56
+    static let expectedTotal = 74
+
+    /// Printed ahead of the expected/got counts. The slip test matches this text.
+    static let summaryLead = "Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth + 14 place + 4 abbreviation)"
 
     /// The line for a red that did not fail as planted.
     static func missedLine(group: String, label: String, report: PharosPlantedReds.Status? = nil) -> String {
@@ -45,8 +49,49 @@ enum LeadPipelinePlantedReds {
     static let expectedByGroup: [(String, Int)] = [
         ("S3-RED (original)", 4), ("S3-RED-PC", 1), ("S3-RED-SRC", 2), ("S3-RED-SPAM", 5), ("S3-RED-SEQ", 2), ("S3-RED-FROM", 1),
         ("S3-RED-ICP", 3), ("S3-RED-ADDR", 3), ("S3-RED-LOI25", 3), ("S3-RED-LEADREC", 5), ("S3-RED-FRESH", 3), ("S3-RED-HOLD", 2),
-        ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2)
+        ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2),
+        ("ARGUS-RED-PLACE", 14), ("ARGUS-RED-ABBR", 4)
     ]
+
+    /// Result of counting a set of planted reds: overall verdict, failures caught and the printed lines.
+    struct Tally {
+        var ok: Bool
+        var failures: Int
+        var lines: [String]
+        var summary: String { lines.last { $0.hasPrefix("Slice 3 planted reds") } ?? "" }
+    }
+
+    static func tally(_ cases: [Case]) async -> Tally {
+        var lines: [String] = []
+        var failures = 0
+        var byGroup: [String: Int] = [:]
+        for item in cases {
+            var outcome: String?
+            var notRun: String?
+            do { outcome = try await item.probe() } catch let skipped as NotRun { notRun = skipped.reason } catch { outcome = "threw \(error)" }
+            if let notRun {
+                lines.append(missedLine(group: item.group, label: item.label, report: .missing(notRun)))
+            } else if let outcome {
+                failures += 1
+                byGroup[item.group, default: 0] += 1
+                lines.append("  RED-OK [\(item.group)] \(item.label): \(outcome)")
+            } else {
+                lines.append(missedLine(group: item.group, label: item.label))
+            }
+        }
+        var ok = cases.count == expectedTotal
+        for (group, expected) in expectedByGroup {
+            let got = byGroup[group, default: 0]
+            let declared = cases.filter { $0.group == group }.count
+            let line = got == expected && declared == expected ? "OK" : "MISMATCH"
+            if line != "OK" { ok = false }
+            lines.append("\(group): expected \(expected) failures, got \(got): \(line)")
+        }
+        ok = ok && failures == expectedTotal
+        lines.append("\(summaryLead): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
+        if ok { lines.append("expected \(expectedTotal) failures, got \(failures): OK") }
+        return Tally(ok: ok, failures: failures, lines: lines)
+    }
 
     static func run() async -> Bool {
         let cases: [Case]
@@ -56,35 +101,10 @@ enum LeadPipelinePlantedReds {
             lastFailures = 0
             return false
         }
-        var failures = 0
-        var byGroup: [String: Int] = [:]
-        for item in cases {
-            var outcome: String?
-            var notRun: String?
-            do { outcome = try await item.probe() } catch let skipped as NotRun { notRun = skipped.reason } catch { outcome = "threw \(error)" }
-            if let notRun {
-                print(missedLine(group: item.group, label: item.label, report: .missing(notRun)))
-            } else if let outcome {
-                failures += 1
-                byGroup[item.group, default: 0] += 1
-                print("  RED-OK [\(item.group)] \(item.label): \(outcome)")
-            } else {
-                print(missedLine(group: item.group, label: item.label))
-            }
-        }
-        var ok = cases.count == expectedTotal
-        for (group, expected) in expectedByGroup {
-            let got = byGroup[group, default: 0]
-            let declared = cases.filter { $0.group == group }.count
-            let line = got == expected && declared == expected ? "OK" : "MISMATCH"
-            if line != "OK" { ok = false }
-            print("\(group): expected \(expected) failures, got \(got): \(line)")
-        }
-        ok = ok && failures == expectedTotal
-        lastFailures = failures
-        print("Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth): expected \(expectedTotal) failures, got \(failures): \(ok ? "OK" : "MISMATCH")")
-        if ok { print("expected \(expectedTotal) failures, got \(failures): OK") }
-        return ok
+        let result = await tally(cases)
+        result.lines.forEach { print($0) }
+        lastFailures = result.failures
+        return result.ok
     }
 
     // MARK: - Cases
@@ -381,17 +401,29 @@ enum LeadPipelinePlantedReds {
             do { _ = try RBQOpenData.parse(data: data, source: rbqSource); return nil }
             catch let refusal as LeadPipelineRefusal { return refusal.code == "refused:open-data-schema" ? refusal.code : nil }
         }
-        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a silent construction site with no RBQ file gets Ready and a draft") {
-            let fixture = SearchFixture.builder(config: config)
-            let report = await fixture.run(segment: "construction_trades", rbq: nil)
-            guard let prospect = report.prospects.first else { return nil }
-            return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-")), 0 drafts" : nil
+        add("ARGUS-RED", "3 RBQ-NO-CACHE-HOLD: a plumbing firm with no RBQ file gets Ready and a draft") {
+            let saguenay = await SearchFixture.saguenayPlumber(config: config).run(segment: "construction_trades", rbq: nil)
+            let montreal = await SearchFixture.montrealPlumber(config: config).run(segment: "construction_trades", rbq: nil)
+            guard let sag = saguenay.prospects.first, let mon = montreal.prospects.first else { return nil }
+            let sagOK = sag.status == .conflictReview && saguenay.drafts.isEmpty
+                && sag.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                && sag.reasons.contains { $0.contains("rbq-licence-unverified") }
+            let monOK = mon.status == .conflictReview && montreal.drafts.isEmpty
+                && mon.reasons.contains { $0.contains("rbq-licence-unverified") }
+                && !mon.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            return sagOK && monOK ? "Saguenay both holds, Montréal licence only (rbq \(mon.rbqCheck ?? "-")), 0 drafts" : nil
         }
-        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a construction prospect with no licence match passes") {
-            let fixture = SearchFixture.builder(config: config)
-            let report = await fixture.run(segment: "construction_trades", rbq: RBQIndex([]))
-            guard let prospect = report.prospects.first else { return nil }
-            return prospect.status == .conflictReview && report.drafts.isEmpty ? "conflict_review (rbq \(prospect.rbqCheck ?? "-"))" : nil
+        add("ARGUS-RED", "4 RBQ-NO-MATCH-HOLD: a plumbing firm with no licence match passes") {
+            let saguenay = await SearchFixture.saguenayPlumber(config: config).run(segment: "construction_trades", rbq: RBQIndex([]))
+            let montreal = await SearchFixture.montrealPlumber(config: config).run(segment: "construction_trades", rbq: RBQIndex([]))
+            guard let sag = saguenay.prospects.first, let mon = montreal.prospects.first else { return nil }
+            let sagOK = sag.status == .conflictReview && saguenay.drafts.isEmpty
+                && sag.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                && sag.reasons.contains { $0.contains("rbq-licence-unverified") }
+            let monOK = mon.status == .conflictReview && montreal.drafts.isEmpty
+                && mon.reasons.contains { $0.contains("rbq-licence-unverified") }
+                && !mon.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            return sagOK && monOK ? "Saguenay both holds, Montréal licence only (rbq \(mon.rbqCheck ?? "-")), 0 drafts" : nil
         }
         add("ARGUS-RED", "5 SSRF-IP-LITERAL: an own-site fetch to 127.0.0.1, 169.254.169.254, [::1], 10/8, 192.168/16 or x.local") {
             let inner = FakeLeadTransport()
@@ -457,20 +489,78 @@ enum LeadPipelinePlantedReds {
             let findings = HTMLImportScan.findings(in: "let text = NSAttributedString(html: data, documentAttributes: nil)")
             return findings.isEmpty ? nil : "caught: \(findings.joined(separator: ", "))"
         }
-        // EARTH (6:59 AM ET findings on 75285c4, narrowed by Water 7:18 AM ET so they don't overlap Argus reds 2 and 3):
-        // through the app path, a mixed batch of construction/trades firms is held all at once.
-        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, firms of a mixed construction batch get Ready or a draft") {
-            let out = try await EarthRBQ.appRun(contents: nil)
-            let all = SearchFixture.constructionBatch.count
-            return out.prospects.count == all && out.prospects.allSatisfy({ $0.status == .conflictReview }) && out.drafts.isEmpty
-                ? "\(all)/\(all) held in one run (rbq \(out.prospects.first?.rbqCheck ?? "-")), 0 drafts" : nil
+        // EARTH (6:59 AM ET findings on 75285c4, narrowed by Water 7:18 AM ET so they don't overlap Argus reds 2 and 3).
+        // Martin 27 Oct 2026, 4:30 PM ET: outside the region the hold is the licence check; Saguenay plumbing stays a conflict too.
+        add("EARTH-RED", "1 RBQ-MISSING-INDEX (app path): with no cached RBQ file, construction firms get Ready or a draft") {
+            let montreal = try await EarthRBQ.appRun(contents: nil, makeFixture: SearchFixture.mixedConstructionBatch)
+            let saguenay = try await EarthRBQ.appRun(contents: nil, makeFixture: SearchFixture.saguenayConflictBatch)
+            let monCount = SearchFixture.constructionBatch.count
+            let sagCount = SearchFixture.saguenayConflictFirms.count
+            let monOK = montreal.prospects.count == monCount && montreal.drafts.isEmpty && montreal.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            }
+            let sagOK = saguenay.prospects.count == sagCount && saguenay.drafts.isEmpty && saguenay.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+            }
+            return monOK && sagOK ? "Montréal \(monCount)/\(monCount) licence, Saguenay \(sagCount)/\(sagCount) both, 0 drafts" : nil
         }
-        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets firms of a mixed construction batch through") {
-            let out = try await EarthRBQ.appRun(contents: Data(#"{"Liste Licence":[{"Licence":{"#.utf8))
-            let all = SearchFixture.constructionBatch.count
-            guard out.prospects.count == all, out.prospects.allSatisfy({ $0.status == .conflictReview }), out.drafts.isEmpty,
-                  out.audit.contains(where: { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }) else { return nil }
-            return "truncated: \(all)/\(all) held, 0 drafts, rbq-load refused:open-data-schema"
+        add("EARTH-RED", "2 RBQ-CORRUPT-INDEX (app path): a truncated RBQ file lets construction firms through") {
+            let truncated = Data(#"{"Liste Licence":[{"Licence":{"#.utf8)
+            let montreal = try await EarthRBQ.appRun(contents: truncated, makeFixture: SearchFixture.mixedConstructionBatch)
+            let saguenay = try await EarthRBQ.appRun(contents: truncated, makeFixture: SearchFixture.saguenayConflictBatch)
+            let monCount = SearchFixture.constructionBatch.count
+            let sagCount = SearchFixture.saguenayConflictFirms.count
+            let monOK = montreal.prospects.count == monCount && montreal.drafts.isEmpty && montreal.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+                    && !prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+            } && montreal.audit.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }
+            let sagOK = saguenay.prospects.count == sagCount && saguenay.drafts.isEmpty && saguenay.prospects.allSatisfy { prospect in
+                prospect.status == .conflictReview && prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    && prospect.reasons.contains { $0.contains("rbq-licence-unverified") }
+            } && saguenay.audit.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }
+            return monOK && sagOK ? "truncated: Montréal licence, Saguenay both, 0 drafts, rbq-load refused:open-data-schema" : nil
+        }
+
+        // Argus on f02a8e7: a verified plumber in a former municipality or sector must not come out READY.
+        // Lac-Saint-Jean has no municipality citation, so unknown still holds; the other names are inside once listed.
+        let formerPlaces = [
+            "Arvida", "Kénogami", "Port-Alfred", "Grande-Baie", "Bagotville", "Delisle", "Isle-Maligne",
+            "Naudville", "Riverbend", "Dolbeau", "Mistassini", "Métabetchouan", "Lac-Saint-Jean", "Saint-Bruno"
+        ]
+        for (offset, town) in formerPlaces.enumerated() {
+            let place = town
+            add("ARGUS-RED-PLACE", "\(offset + 1) \(place): a verified plumber comes out READY") {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Plomberie Fictive \(place)"
+                record.osmTags = ["craft=plumber"]
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                record.town = place
+                let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                return verdict.status == .conflictReview && lavoie && !licence ? "held, not READY: \(place)" : nil
+            }
+        }
+        let abbreviated = ["St-Félicien", "St-Prime", "Ste-Hedwidge", "L'Anse-St-Jean"]
+        for (offset, town) in abbreviated.enumerated() {
+            let place = town
+            add("ARGUS-RED-ABBR", "\(offset + 1) \(place): a verified plumber comes out READY") {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Plomberie Fictive \(place)"
+                record.osmTags = ["craft=plumber"]
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                record.town = place
+                let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                return verdict.status == .conflictReview && lavoie && !licence ? "held, not READY: \(place)" : nil
+            }
         }
         return cases
     }
