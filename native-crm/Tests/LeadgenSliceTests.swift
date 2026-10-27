@@ -662,6 +662,41 @@ enum LeadgenSliceTests {
         }
     }
 
+    /// Dry run with a directory URL must not read leads or projects. Live still must.
+    static func dryRunSkipsRecordedDomains() async throws {
+        let liveD1 = LeadgenFakeD1()
+        let liveFetcher = LeadgenFixture.fetcher()
+        _ = try await LeadgenFixture.runner(LeadgenFixture.liveConfig, mailbox: LeadgenRecordingMailbox(), d1: liveD1, fetcher: liveFetcher).run(
+            candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
+        let liveSQL = await liveD1.statements.map(\.sql)
+        try check(liveSQL.contains("SELECT domain FROM projects"), "a live-config run did not call recordedDomains: \(liveSQL)")
+
+        let previous = getenv("LEADGEN_SUPPRESSION").map { String(cString: $0) }
+        let suppression = FileManager.default.temporaryDirectory.appendingPathComponent("leadgen-dry-sup-\(UUID().uuidString).json")
+        try Data("[]".utf8).write(to: suppression)
+        setenv("LEADGEN_SUPPRESSION", suppression.path, 1)
+        defer {
+            if let previous { setenv("LEADGEN_SUPPRESSION", previous, 1) }
+            else { unsetenv("LEADGEN_SUPPRESSION") }
+        }
+        let fetcher = LeadgenFixture.fetcher()
+        let d1 = LeadgenFakeD1()
+        let mailbox = LeadgenRecordingMailbox()
+        let probe = LeadgenDepsProbe(deps: LeadgenLiveDeps(fetcher: fetcher, mailbox: mailbox, d1: d1, log: LeadgenMemoryLog(), logPath: "-"))
+        let env = ["LEADGEN_CONFIG": try LeadgenFixture.tempConfig(directory: LeadgenFixture.directory.absoluteString)]
+        let (code, lines) = await LeadgenCLI.run(arguments: [], environment: env, makeFetcher: { fetcher }, dns: LeadgenMappedDNS(), makeLive: probe.make)
+        let calls = await mailbox.calls
+        let statements = await d1.statementCount()
+        try check(code == 0, "dry-run exit \(code): \(lines)")
+        try check(probe.calls == 0 && calls.isEmpty && statements == 0, "dry-run built adapters \(probe.calls)x, Gmail \(calls.count)x, D1 \(statements)x")
+        let directoryFetches = fetcher.requested.filter { $0 == LeadgenFixture.directory.absoluteString }
+        try check(directoryFetches.count == 1, "directory fetches \(directoryFetches) in \(fetcher.requested)")
+        let clinicHosts = Set(fetcher.requested.compactMap { URL(string: $0)?.host }.filter { $0 != "dpq.quebec" })
+        try check(clinicHosts.count <= 1, "more than one clinic site was fetched: \(clinicHosts) from \(fetcher.requested)")
+        try check(clinicHosts.count == 1, "the clinic site was not fetched: \(fetcher.requested)")
+        try check(lines.contains("duplicate check not run (dry run): leads/projects not read"), "missing dry-run duplicate line: \(lines)")
+    }
+
     static func readPolicy() -> LeadgenDeclaredPolicy {
         LeadgenDeclaredPolicy(tokens: [
             LeadgenDeclaredToken(id: "62c2378b0d4a7897d34406cee8a5beca", env: LeadgenTokenProof.readTokenEnvs[0], permissions: [LeadgenDeclaredPermission(id: LeadgenTokenProof.d1ReadPermissionGroupID, name: LeadgenTokenProof.d1ReadPermissionGroupName, accountID: LeadgenSliceTests.hexAccountIDs[0])]),
@@ -2566,6 +2601,9 @@ enum LeadgenSliceTests {
         }))
         cases.append(("A malformed chunk size fails closed and does not return partial HTML", {
             try LeadgenSliceTests.malformedChunkFailsClosed()
+        }))
+        cases.append(("A dry run with a directory URL skips the duplicate check, fetches one clinic, and a live run still reads recorded domains", {
+            try await LeadgenSliceTests.dryRunSkipsRecordedDomains()
         }))
         #if os(macOS)
         cases.append(("A pinned HTTPS fetch checks the certificate against the hostname, and a mismatched name fails", { try await LeadgenSliceTests.pinnedTLS() }))
