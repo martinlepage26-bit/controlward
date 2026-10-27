@@ -141,25 +141,56 @@ enum LeadDefinition {
     }
 
     /// Normalised whole-value match, then a containment fallback. An exact key is inside (the configured spelling).
-    /// A town that only contains a listed name is unknown, so it holds. Anything else readable is outside.
-    /// Blank is unknown. An area without `municipalities` applies everywhere (the region alone).
+    /// A town that only contains a listed name is unknown, so it holds. A name in `unresolvedPlaceNames` is unknown
+    /// on an exact key or when the town only contains it. A postal-code-only town whose FSA starts with one of
+    /// `postalFsaPrefixes` is unknown. Anything else readable is outside. Blank is unknown. An area without
+    /// `municipalities` applies everywhere (the region alone).
     static func rbqAreaMatch(_ municipality: String?, area: ICPConfig.ConflictArea) -> RBQAreaMatch {
         guard let places = area.municipalities else { return .inside(area.region) }
         let key = municipality.map(placeKey) ?? ""
         guard !key.isEmpty else { return .unknown }
         if let exact = places.first(where: { placeKey($0) == key }) { return .inside(exact) }
+        let unresolved = area.unresolvedPlaceNames ?? []
+        if unresolved.contains(where: { placeKey($0) == key }) { return .unknown }
         let padded = " \(key) "
-        if places.contains(where: { listed in
-            let needle = placeKey(listed)
-            return !needle.isEmpty && padded.contains(" \(needle) ")
-        }) {
-            return .unknown
+        func containsListed(_ names: [String]) -> Bool {
+            names.contains { listed in
+                let needle = placeKey(listed)
+                return !needle.isEmpty && padded.contains(" \(needle) ")
+            }
+        }
+        if containsListed(places) || containsListed(unresolved) { return .unknown }
+        if let fsa = postalFSA(municipality), let prefixes = area.postalFsaPrefixes {
+            let folded = prefixes.map { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased() }
+            if folded.contains(where: { fsa.hasPrefix($0) }) { return .unknown }
         }
         return .outside
     }
 
+    /// The FSA of a town that is only a Canadian postal code or FSA, optionally followed by ", QC". Nil otherwise.
+    private static func postalFSA(_ text: String?) -> String? {
+        guard let text else { return nil }
+        var folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        folded = folded.trimmingCharacters(in: .whitespacesAndNewlines)
+        var stripping = true
+        while stripping {
+            stripping = false
+            let trimmed = folded.trimmingCharacters(in: .whitespacesAndNewlines)
+            for suffix in [", qc", ", quebec"] where trimmed.hasSuffix(suffix) {
+                folded = String(trimmed.dropLast(suffix.count))
+                stripping = true
+            }
+        }
+        let compact = folded.replacingOccurrences(of: " ", with: "")
+        let fsaOnly = compact.range(of: #"^[a-z]\d[a-z]$"#, options: .regularExpression) != nil
+        let full = compact.range(of: #"^[a-z]\d[a-z]\d[a-z]\d$"#, options: .regularExpression) != nil
+        guard fsaOnly || full else { return nil }
+        return String(compact.prefix(3))
+    }
+
     /// Case, accents, collapsed whitespace, hyphens and spaces alike, punctuation stripped, bracketed parts removed,
-    /// a trailing ", QC" or ", Québec" removed, and a leading "Ville de" or "Municipalité de" removed.
+    /// a trailing ", QC" or ", Québec" removed, a leading "Ville de" / "Ville d'" or "Municipalité de" / "Municipalité d'" removed,
+    /// and a whole token "St" or "Ste" expanded to "Saint" or "Sainte".
     static func placeKey(_ text: String) -> String {
         var raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
         raw = raw.replacingOccurrences(of: #"\([^)]*\)"#, with: " ", options: .regularExpression)
@@ -183,7 +214,11 @@ enum LeadDefinition {
             if breaksPlaceToken(scalar) { flush() } else { token.unicodeScalars.append(scalar) }
         }
         flush()
-        while tokens.count >= 2, (tokens[0] == "ville" || tokens[0] == "municipalite"), tokens[1] == "de" {
+        for index in tokens.indices {
+            if tokens[index] == "st" { tokens[index] = "saint" }
+            else if tokens[index] == "ste" { tokens[index] = "sainte" }
+        }
+        while tokens.count >= 2, (tokens[0] == "ville" || tokens[0] == "municipalite"), tokens[1] == "de" || tokens[1] == "d" {
             tokens.removeFirst(2)
         }
         return tokens.joined(separator: " ")

@@ -53,6 +53,11 @@ struct ICPConfig: Codable, Equatable, Sendable {
         /// that only contains a listed name is unknown and held. A licence with no readable location is held
         /// when the trade signals or the codes match (fail closed).
         var municipalities: [String]?
+        /// Readable names with no official municipality or sector citation. Exact, or contained in a longer town,
+        /// they are unknown and held, never outside and never Ready for a matching trade.
+        var unresolvedPlaceNames: [String]?
+        /// Canadian FSA prefixes. A postal-code-only town whose FSA starts with one of these is unknown and held.
+        var postalFsaPrefixes: [String]?
     }
     /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: any firm in `segments` is held, everywhere, unless `rbqCheck` is "matched".
     /// The reason id is this hold's id, never a conflict-area id.

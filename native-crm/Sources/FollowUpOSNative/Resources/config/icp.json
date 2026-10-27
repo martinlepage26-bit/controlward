@@ -462,7 +462,27 @@
         "Larouche",
         "Lalemant",
         "Lac-Ministuk",
-        "Mont-Valin"
+        "Mont-Valin",
+        "Arvida",
+        "Kénogami",
+        "Port-Alfred",
+        "Grande-Baie",
+        "Bagotville",
+        "Delisle",
+        "Isle-Maligne",
+        "Naudville",
+        "Riverbend",
+        "Dolbeau",
+        "Mistassini",
+        "Métabetchouan",
+        "Saint-Bruno"
+      ],
+      "unresolved_place_names": [
+        "Lac-Saint-Jean"
+      ],
+      "postal_fsa_prefixes": [
+        "G7",
+        "G8"
       ],
       "rbq_subcategory_codes": [
         "15.5",
@@ -496,7 +516,7 @@
       "rbq_required_segments": [
         "construction_trades"
       ],
-      "rbq_required_note": "The Lavoie conflict (sos-plomberie-excavation-lavoie) is not a province-wide licence check. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only. 4:30 PM ET, first-hand to Argus: (1) 'Saguenay' means the whole Saguenay–Lac-Saint-Jean administrative region (Québec region 02), including Alma and Roberval, not only the city. (2) The Lavoie conflict stays plumbing or excavation and anywhere in that region; when another hold also applies, the record lists each reason separately. (3) 'Yes, keep a separate RBQ licence-check hold for construction firms everywhere.' Inside the region, selectors, keywords, or RBQ 15.5 / 2.5 hold this conflict. A genuine RBQ no-match still holds when the firm looks like plumbing or excavation. A generic construction_trades firm does not. Outside the region, this conflict does not hold. An unreadable town stays fail-closed for this conflict when the trade signals or the codes match. A town string that contains a listed municipality but does not normalise to one is unknown and held. Municipalities checked 2026-10-27 from the MAMH Répertoire des municipalités, https://donneesouvertes.affmunqc.net/repertoire/MUN.csv (region administrative Saguenay--Lac-Saint-Jean (02), 59 organisations, including Mashteuiatsh and the unorganized territories in that file), boroughs from https://donneesouvertes.affmunqc.net/repertoire/ARR.csv (Chicoutimi, Jonquière, La Baie), and former towns named in Order in Council 841-2001, Gazette officielle du Québec, https://www.publicationsduquebec.gouv.qc.ca/fileadmin/gazette/pdf_encrypte/lois_reglements/2001F/36499.pdf (Laterrière, Lac-Kénogami, Shipshaw, Canton de Tremblay; Canton-Tremblay is that same canton without the particle 'de'). Arvida and Kénogami are not in those sources. Chicoutimi-Nord is not either; because the name contains Chicoutimi it is unknown and held.",
+      "rbq_required_note": "The Lavoie conflict (sos-plomberie-excavation-lavoie) is not a province-wide licence check. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only. 4:30 PM ET, first-hand to Argus: (1) 'Saguenay' means the whole Saguenay–Lac-Saint-Jean administrative region (Québec region 02), including Alma and Roberval, not only the city. (2) The Lavoie conflict stays plumbing or excavation and anywhere in that region; when another hold also applies, the record lists each reason separately. (3) 'Yes, keep a separate RBQ licence-check hold for construction firms everywhere.' Inside the region, selectors, keywords, or RBQ 15.5 / 2.5 hold this conflict. A genuine RBQ no-match still holds when the firm looks like plumbing or excavation. A generic construction_trades firm does not. Outside the region, this conflict does not hold. An unreadable town stays fail-closed for this conflict when the trade signals or the codes match. A town string that contains a listed municipality but does not normalise to one is unknown and held. Municipalities checked 2026-10-27 from the MAMH Répertoire des municipalités, https://donneesouvertes.affmunqc.net/repertoire/MUN.csv (region administrative Saguenay--Lac-Saint-Jean (02), 59 organisations, including Mashteuiatsh and the unorganized territories in that file), boroughs from https://donneesouvertes.affmunqc.net/repertoire/ARR.csv (Chicoutimi, Jonquière, La Baie), and former towns named in Order in Council 841-2001, Gazette officielle du Québec, https://www.publicationsduquebec.gouv.qc.ca/fileadmin/gazette/pdf_encrypte/lois_reglements/2001F/36499.pdf (Laterrière, Lac-Kénogami, Shipshaw, Canton de Tremblay; Canton-Tremblay is that same canton without the particle 'de'). Former municipalities and sectors checked 2026-10-27 and listed as inside the region: Arvida, a sector of the Jonquière borough in Saguenay (Commission de toponymie, https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=72345), whose fiche also records the 1975 fusion of the cities of Arvida, Kénogami and Jonquière; Kénogami, the former city now part of Saguenay (https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=32311); Port-Alfred, a sector of Saguenay regrouped into La Baie in 1976 (https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=72508); Grande-Baie, the municipality that fused on 1 January 1975 with Port-Alfred and Bagotville into La Baie, now a borough of Saguenay (https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=26319); Bagotville, a sector of Saguenay (https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=72350); Delisle, a sector of Alma since 21 February 2001 (https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=96950); Isle-Maligne (1924), Naudville (1944) and Riverbend (1925), annexed to Alma (https://toponymie.gouv.qc.ca/ct/ToposWeb/Fiche.aspx?no_seq=1013); Dolbeau (code 92025) and Mistassini (code 92020), regrouped on 1997-12-17 into Dolbeau-Mistassini, and Métabetchouan, regrouped on 1998-12-30 with Lac-à-la-Croix into Métabetchouan–Lac-à-la-Croix (Commission de toponymie, https://toponymie.gouv.qc.ca/ct/pdf/modifications_municipalites.pdf, document updated 23 September 2026); Saint-Bruno, amalgamated with Hébertville and the village of Hébertville-Station into Municipalité d'Hébertville by Order in Council 1498-2025, in force 1 January 2026, in MRC Lac-Saint-Jean-Est (https://www.publicationsduquebec.gouv.qc.ca/fileadmin/gazette/pdf_encrypte/lois_reglements/2025A/107844.pdf). The plain name Lac-Saint-Jean is not a municipality or sector in those sources; it is in unresolved_place_names and is unknown, so it is held and never classified outside. A postal-code-only address whose FSA starts with G7 or G8 (postal_fsa_prefixes) is unknown and held, not treated as a municipality. Chicoutimi-Nord is not a listed municipality; because the name contains Chicoutimi it is unknown and held. A longer name that contains a listed name, such as Saint-Bruno-de-Montarville containing Saint-Bruno, is unknown and held.",
       "team_call_note": "Holding a region-02 paving firm whose name contains 'terrassement', and holding a paving firm that carries RBQ 2.5, is a cautious team call pending Martin, not his rule. The keyword terrassement and the code 2.5 stay, so real excavation firms are not dropped. Pavage or asphalt alone, with no excavation keyword and no 2.5, is not the Lavoie conflict."
     }
   ],
