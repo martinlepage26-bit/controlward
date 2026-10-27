@@ -216,7 +216,7 @@ private final class Once: @unchecked Sendable {
 }
 
 /// Holds the continuation so the connection queue can resume it without capturing a non-Sendable value.
-private final class LeadgenContinuationBox<T>: @unchecked Sendable {
+private final class LeadgenContinuationBox<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<T, Error>?
     init(_ continuation: CheckedContinuation<T, Error>) { self.continuation = continuation }
