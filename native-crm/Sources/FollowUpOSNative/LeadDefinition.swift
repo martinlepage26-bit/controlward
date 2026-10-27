@@ -88,27 +88,48 @@ enum LeadDefinition {
         return calendar.isDate(a, inSameDayAs: b)
     }
 
-    /// Argus must-fix 1 (fail closed): a segment listed in an area's `rbq_required_segments` is held unless the RBQ lookup ran and
-    /// matched a licence. No file, an unreadable file, a parse error or no match all go to conflict review, never to Ready.
+    /// Argus must-fix 1 (fail closed), scoped by Martin Lepage on 27 Oct 2026.
+    /// 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only.
+    /// Outside the area's municipalities this conflict does not hold. Inside them, a firm that looks like
+    /// plumbing or excavation (the area's selectors or keywords) is held when the RBQ lookup did not match
+    /// a licence. A firm in the area that does not look like either trade is not held. When the town cannot
+    /// be read, the previous behaviour stays: any segment in `rbq_required_segments` is held.
     static func rbqUnchecked(_ prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
         guard prospect.rbqCheck != "matched", let segment = prospect.segment else { return nil }
-        return config.conflictAreas.first { ($0.rbqRequiredSegments ?? []).contains(segment) }
+        return config.conflictAreas.first { area in
+            guard (area.rbqRequiredSegments ?? []).contains(segment) else { return false }
+            switch rbqAreaMatch(firmTown(prospect), area: area) {
+            case .outside:
+                return false
+            case .unknown:
+                return true
+            case .inside:
+                return tradeSignalsMatch(prospect, area: area)
+            }
+        }
     }
 
-    /// S3-R14 / S3-R17d: plumbing, excavation and related trades in the configured area (icp.json `municipalities`) are held
-    /// for Martin. RBQ licences hold on
-    /// exact sub-category codes from config (one JSON record per licence), never on words.
+    /// S3-R14 / S3-R17d: plumbing and excavation in the configured municipalities are held for Martin.
+    /// Martin Lepage, 27 Oct 2026, 3:55 PM ET: nothing outside those municipalities conflicts with SOS.
+    /// 3:56 PM ET: the firm must also be plumbing or excavation (selectors, keywords, or the area's RBQ codes).
+    /// A town that cannot be read stays fail-closed. RBQ licences hold on exact sub-category codes from config
+    /// (one JSON record per licence), never on words.
     static func conflictArea(for prospect: ProspectRecord, config: ICPConfig) -> ICPConfig.ConflictArea? {
-        let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
         // Water 9:02 AM ET: map tags, keywords and licence codes all hold only inside the area's municipalities, or when the
         // firm's town can't be read (fail closed). Outside the area none of them holds.
         let town = firmTown(prospect)
         return config.conflictAreas.first { area in
             guard rbqAreaMatch(town, area: area) != .outside else { return false }
-            return area.osmSelectors.contains { prospect.osmTags.contains($0) }
-                || area.keywords.contains { haystack.contains($0.lowercased()) }
+            return tradeSignalsMatch(prospect, area: area)
                 || !rbqHeldCodes(prospect.rbqCategories, area: area, municipality: town).isEmpty
         }
+    }
+
+    /// The area's selectors or keywords. RBQ codes are a separate signal (`rbqHeldCodes`).
+    static func tradeSignalsMatch(_ prospect: ProspectRecord, area: ICPConfig.ConflictArea) -> Bool {
+        let haystack = ([prospect.organisation] + prospect.osmTags + prospect.snapshots.prefix(1).map(\.text)).joined(separator: " ").lowercased()
+        return area.osmSelectors.contains { prospect.osmTags.contains($0) }
+            || area.keywords.contains { haystack.contains($0.lowercased()) }
     }
 
     /// The firm's town for the conflict area: the licence's Municipalité, else the map listing's town; nil when neither reads.

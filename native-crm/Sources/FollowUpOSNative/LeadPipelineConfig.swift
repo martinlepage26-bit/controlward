@@ -41,12 +41,15 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var rbqSubcategoryCodes: [String]?
         /// Where the codes were checked: RBQ's own sub-category list (URL and date).
         var rbqSubcategorySource: String?
-        /// Segments that are held unless the RBQ lookup matched a licence (fail closed: no file, no match or a parse error holds).
+        /// Segments the fail-closed RBQ hold can apply to. Martin Lepage, 27 Oct 2026: outside the area's
+        /// municipalities it does not hold; inside them it holds only a firm that looks like the area's trade
+        /// (selectors or keywords) when the lookup did not match; with no readable town, any firm in the segment stays held.
         var rbqRequiredSegments: [String]?
         /// Conditions under which a listed code does NOT hold a licence (Water 7:20 / 7:26 AM ET, Air's map 10c). A code without a
         /// condition always holds. All codes come from config; nothing about specific codes is hard-coded.
         var rbqCodeConditions: [RBQCodeCondition]?
-        /// Where the RBQ code hold applies (Martin 8:39 / Water 8:41 AM ET): whole-value matches on the licence's Municipalité,
+        /// Where this conflict applies (Martin 8:39 / Water 8:41 AM ET, and 27 Oct 2026 3:55 PM ET: unless in
+        /// Saguenay, nothing conflicts with SOS): whole-value matches on the licence's Municipalité,
         /// case- and accent-normalised, never a substring. A licence with no readable location is held (fail closed).
         var municipalities: [String]?
     }

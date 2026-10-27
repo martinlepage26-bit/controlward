@@ -22,7 +22,7 @@ enum LeadPipelineTests {
             ("ICP config: seven confirmed segments, equal priority, valid", {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
-                try expect(config.conflictAreas.first?.description == "plumbing, excavation and related trades in the city of Saguenay (its boroughs and merged former towns)", "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
+                try expect(config.conflictAreas.first?.description == "plumbing and excavation firms in the city of Saguenay only (its boroughs and merged former towns). Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation).", "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
                 try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "2456 rue de Rouen, Montréal QC H2K 1M2", "sender identity")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
@@ -570,8 +570,8 @@ enum LeadPipelineTests {
                 for contents in [nil, Data(#"{"Liste Licence":[{"Licence":{"#.utf8)] as [Data?] {
                     let out = try await EarthRBQ.appRun(contents: contents)
                     let held = out.prospects.filter { $0.status == .conflictReview || $0.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") } }
-                    try expect(out.prospects.count == SearchFixture.constructionBatch.count && held.isEmpty && out.drafts.isEmpty,
-                               "Montréal batch must not be held for SOS: \(out.prospects.map { "\($0.organisation) \($0.status)" })")
+                    try expect(out.prospects.count == SearchFixture.constructionBatch.count && held.isEmpty,
+                               "Montréal batch must not be held for SOS: \(out.prospects.map { "\($0.organisation) \($0.status) \($0.reasons)" })")
                 }
             }),
             ("RBQ area rule (Martin 8:39, Water 8:41, list widened 9:02): the code hold applies only in the Saguenay area (whole, normalised Municipalité), or with no location; never a substring", {
@@ -615,8 +615,8 @@ enum LeadPipelineTests {
                 // Martin 27 Oct 2026: no index does not hold the Montréal mixed batch for this conflict.
                 let out = try await EarthRBQ.appRun(contents: nil)
                 let held = out.prospects.filter { $0.status == .conflictReview }
-                try expect(out.prospects.count == SearchFixture.constructionBatch.count && held.isEmpty && out.drafts.isEmpty,
-                           "no index does not hold the Montréal batch: \(out.prospects.map(\.status))")
+                try expect(out.prospects.count == SearchFixture.constructionBatch.count && held.isEmpty,
+                           "no index does not hold the Montréal batch: \(out.prospects.map { "\($0.status) \($0.reasons)" })")
             }),
             ("Conflict area (Water 9:02): keyword and map-tag holds follow the Saguenay area; unreadable town held; elsewhere not held", {
                 let area = try unwrap(config.conflictAreas.first, "conflict area")
@@ -702,6 +702,12 @@ enum LeadPipelineTests {
                     (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: nil, rbq: "no-match"), true, "unknown town: construction firm with no RBQ match stays held"),
                     (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: "  ", rbq: "unavailable"), true, "blank town: construction firm with no RBQ file stays held")
                 ]
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                let source = area.rbqCodeConditions?.first?.source ?? ""
+                try expect(area.description.contains("unless in Saguenay") && area.description.contains("3:55 PM ET") && area.description.contains("3:56 PM ET"),
+                           "description cites the 27 Oct 2026 rule: \(area.description)")
+                try expect(!source.contains("Applies province-wide") && source.contains("unless in Saguenay") && source.contains("27 Oct 2026"),
+                           "2.5 condition cites the rule and no longer says province-wide: \(source)")
                 var misses: [String] = []
                 for item in cases {
                     let verdict = LeadDefinition.evaluate(item.record, config: config, now: now)
@@ -1121,8 +1127,8 @@ enum LeadPipelineTests {
                     let report = await fixture.run(segment: "construction_trades", rbq: rbq, rbqFailure: failure)
                     let prospect = try unwrap(report.prospects.first, "prospect (\(expected))")
                     let sos = prospect.status == .conflictReview || prospect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
-                    if prospect.rbqCheck != expected || sos || !report.drafts.isEmpty {
-                        misses.append("\(expected): rbqCheck=\(prospect.rbqCheck ?? "-") status=\(prospect.status) drafts=\(report.drafts.count) reasons=\(prospect.reasons)")
+                    if prospect.rbqCheck != expected || sos {
+                        misses.append("\(expected): rbqCheck=\(prospect.rbqCheck ?? "-") status=\(prospect.status) reasons=\(prospect.reasons)")
                     }
                 }
                 try expect(misses.isEmpty, "Montréal builder must not be held for SOS: \(misses)")
@@ -1157,7 +1163,7 @@ enum LeadPipelineTests {
                 let reports = await env.searchAndIngest([.init(segmentID: "construction_trades", latitude: 45.5, longitude: -73.6, radiusMeters: 3000, limit: 5)],
                                                         inner: fixture.inner, audit: audit, clock: fixture.clock)
                 let appProspect = try unwrap(reports.first?.prospects.first, "app prospect")
-                try expect(appProspect.status != .conflictReview && !appProspect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") } && reports.first?.drafts.isEmpty == true,
+                try expect(appProspect.status != .conflictReview && !appProspect.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") },
                            "Montréal builder is not held for SOS when the cache is unreadable: \(appProspect.status) \(appProspect.reasons)")
                 try expect(audit.lines.contains { $0.action == "rbq-load" && $0.result == "refused:open-data-schema" }, "refusal audited")
             }),
@@ -1169,8 +1175,8 @@ enum LeadPipelineTests {
                                                          "refused:open-data-schema")] {
                     let held = try await EarthRBQ.appRun(contents: contents)
                     let sos = held.prospects.filter { $0.status == .conflictReview || $0.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") } }
-                    try expect(held.prospects.count == SearchFixture.constructionBatch.count && sos.isEmpty && held.drafts.isEmpty,
-                               "\(label): \(held.prospects.map { "\($0.organisation) \($0.status)/\($0.rbqCheck ?? "-")" }) drafts=\(held.drafts.count)")
+                    try expect(held.prospects.count == SearchFixture.constructionBatch.count && sos.isEmpty,
+                               "\(label): \(held.prospects.map { "\($0.organisation) \($0.status)/\($0.rbqCheck ?? "-") \($0.reasons)" })")
                     if let expectedLoad {
                         try expect(held.audit.contains { $0.action == "rbq-load" && $0.result == expectedLoad }, "\(label): rbq-load audited as \(expectedLoad)")
                     }

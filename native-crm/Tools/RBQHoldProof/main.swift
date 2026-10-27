@@ -7,8 +7,8 @@ import FoundationNetworking
 // prints aggregate counts only: licences read, licences the conflict hold catches (by configured municipality and with no
 // location), and the count per held code. It never prints a firm name, licence number or any town other than the configured
 // ones, writes nothing and makes no network request.
-// If the file is not the real JSON shape the parser refuses it (refused:open-data-schema) and every construction/trades
-// firm is held in the app; this tool then exits 2 and says so.
+// If the file is not the real JSON shape the parser refuses it (refused:open-data-schema) and the app keeps the
+// fail-closed SOS hold where it still applies; this tool then exits 2 and says so.
 
 func fail(_ message: String, _ code: Int32 = 2) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -79,10 +79,10 @@ for path in files {
         print("  check: \(wanted.map { String(perCode[$0, default: 0]) }.joined(separator: " + ")) - \(overlap) = \(wanted.reduce(0) { $0 + perCode[$1, default: 0] } - overlap) (held=\(held))")
         print("  not held: \(licences - held)")
     } catch let refusal as LeadPipelineRefusal {
-        print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): every \((area.rbqRequiredSegments ?? []).joined(separator: ", ")) firm is held")
+        print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): the app keeps the fail-closed SOS hold where it still applies (plumbing or excavation in the listed municipalities, or a firm whose town cannot be read)")
         status = 2
     } catch {
-        print("\(url.lastPathComponent): unreadable (\(error.localizedDescription)): every construction/trades firm is held")
+        print("\(url.lastPathComponent): unreadable (\(error.localizedDescription)): the app keeps the fail-closed SOS hold where it still applies (plumbing or excavation in the listed municipalities, or a firm whose town cannot be read)")
         status = 2
     }
 }

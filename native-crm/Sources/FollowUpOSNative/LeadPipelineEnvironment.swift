@@ -69,8 +69,9 @@ struct LeadPipelineEnvironment: Sendable {
         var rbq: RBQIndex?
         var rbqFailure: String?
         do { rbq = try cachedRBQIndex() } catch {
-            // A cached RBQ file we cannot read must not switch the conflict hold off: the run goes on, and every prospect in a
-            // segment that needs the RBQ check is held for conflict review (fail closed). The refusal is audited.
+            // A cached RBQ file we cannot read must not switch the conflict hold off: the run goes on, and
+            // LeadDefinition keeps the fail-closed hold where the SOS rule still applies (a plumbing or excavation
+            // firm in Saguenay, or any required-segment firm whose town cannot be read). The refusal is audited.
             let code = (error as? LeadPipelineRefusal)?.code ?? "error:rbq-cache"
             rbqFailure = code
             audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "rbq-load", target: RBQOpenData.sourceID, source: "rbq_open_data",
