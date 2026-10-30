@@ -90,8 +90,8 @@ enum LeadPipelineTests {
         "Saint-Bruno",
     ]
 
-    /// The conflict-area description after Martin's 27 Oct 2026 rulings, including the 4:30 PM ET region ruling.
-    static let region02ConflictDescription = "plumbing and excavation firms anywhere in Québec administrative region 02 (Saguenay–Lac-Saint-Jean), including the city of Saguenay, its boroughs and the merged former towns. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 3:56 PM ET: same industry only (plumbing or excavation). 4:30 PM ET, first-hand to Argus: Saguenay means the whole region, not only the city."
+    /// The conflict-area description after Martin's 27 Oct 2026 rulings and his 30 Oct 2026 12:39 PM ET plumbing-only ruling.
+    static let region02ConflictDescription = "plumbing firms anywhere in Québec administrative region 02 (Saguenay–Lac-Saint-Jean), including the city of Saguenay, its boroughs and the merged former towns. Martin Lepage, 27 Oct 2026, 3:55 PM ET: unless in Saguenay, nothing conflicts with SOS. 4:30 PM ET, first-hand to Argus: Saguenay means the whole region, not only the city. 30 Oct 2026, 12:39 PM ET: 'Seulement la plomberie au Saguenay est un conflit, pas l'excavation.' Excavation, paving, asphalt and terrassement firms are not this conflict anywhere."
 
     static func run() async -> Bool {
         let config: ICPConfig
@@ -526,13 +526,13 @@ enum LeadPipelineTests {
                 try await RBQOpenData.refreshCache(config: config, transport: guarded, directory: directory, now: clock.now.addingTimeInterval(25 * 3600))
                 try expect(inner.requests.count == 2 && inner.urls.allSatisfy { $0 == source.downloadUrls[0] }, "daily re-download: \(inner.urls)")
             }),
-            ("RBQ config: holds on sub-category codes 15.5 and 2.5, each on RBQ's official list, source URL cited; construction trades fail closed", {
+            ("RBQ config (Martin 30 Oct 2026, 12:39 PM ET): holds on sub-category code 15.5 only, on RBQ's official list, source URL cited; construction trades fail closed", {
                 let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
                 let codes = area.rbqSubcategoryCodes ?? []
-                try expect(codes == ["15.5", "2.5"], "codes \(codes)")
+                try expect(codes == ["15.5"], "plumbing only, 2.5 (excavation) is not a Lavoie code: \(codes)")
                 for code in codes {
                     let title = try unwrap(RBQFixture.officialSubcategories[code], "\(code) is on RBQ's official list")
-                    try expect(title.contains("plomberie") || title.contains("excavation"), "\(code) is \(title)")
+                    try expect(title.contains("plomberie"), "\(code) is \(title)")
                 }
                 try expect((area.rbqSubcategorySource ?? "").contains("https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/"), "source URL cited")
                 try expect(area.rbqRequiredSegments == ["construction_trades"], "fail-closed segments \(String(describing: area.rbqRequiredSegments))")
@@ -568,11 +568,11 @@ enum LeadPipelineTests {
                 badMap.fields.append(.init(role: "email", label: "Courriel"))
                 try expect((try? RBQOpenData.parse(data: data, source: badMap)) == nil, "mapping Courriel is refused")
             }),
-            ("RBQ hold: a matched licence with 15.5 or 2.5 is held, a matched licence with none of the listed codes is not; the JSON has one record per licence", {
+            ("RBQ hold: a matched licence with 15.5 is held (2.5 is not, Martin 30 Oct 2026 12:39 PM ET), a matched licence with none of the listed codes is not; the JSON has one record per licence", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let held = "Rénovations Fictives inc.", clear = "Menuiserie Fictive Ouest"
                 let data = RBQFixture.json([
-                    RBQFixture.jsonRecord(licence: "0000-0000-05", name: held, town: "Saguenay", codes: [("Specialisee", "16"), (nil, "GPC"), (nil, "2.5")]),
+                    RBQFixture.jsonRecord(licence: "0000-0000-05", name: held, town: "Saguenay", codes: [("Specialisee", "16"), (nil, "GPC"), (nil, "15.5")]),
                     RBQFixture.jsonRecord(licence: "0000-0000-06", name: clear, town: "Montréal", codes: [("Specialisee", "6.2"), (nil, "11.2"), (nil, "GPC")])
                 ])
                 let index = RBQIndex(try RBQOpenData.parse(data: data, source: source))
@@ -588,9 +588,9 @@ enum LeadPipelineTests {
                 let route = heldProspect.route
                 try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held before any RBQ lookup (fail closed)")
                 index.enrich(&heldProspect, municipality: "Saguenay", source: source)
-                try expect(heldProspect.rbqCheck == "matched" && heldProspect.rbqCategories == ["16", "GPC", "2.5"], "codes \(heldProspect.rbqCategories) \(String(describing: heldProspect.rbqCheck))")
+                try expect(heldProspect.rbqCheck == "matched" && heldProspect.rbqCategories == ["16", "GPC", "15.5"], "codes \(heldProspect.rbqCategories) \(String(describing: heldProspect.rbqCheck))")
                 try expect(heldProspect.route == route && heldProspect.contact?.source == .ownSite, "enrich never touches contact data")
-                try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held on 2.5")
+                try expect(LeadDefinition.evaluate(heldProspect, config: config, now: now).status == .conflictReview, "held on 15.5")
                 try expect(ProspectDisplay.attribution(for: heldProspect, config: config) == "Source: RBQ / Données Québec, CC BY 4.0", "credit")
                 try expect(ProspectDisplay.lines(for: heldProspect, config: config).last == "Source: RBQ / Données Québec, CC BY 4.0", "credit shown on the row")
                 var clearProspect = prospect(clear)
@@ -601,7 +601,7 @@ enum LeadPipelineTests {
                 var stranger = prospect("Entreprise Inconnue")
                 index.enrich(&stranger, municipality: "Montréal", source: source)
                 try expect(stranger.rbqCheck == "no-match" && LeadDefinition.evaluate(stranger, config: config, now: now).status == .conflictReview, "no match holds")
-                for (codes, expected) in [(["15.5"], true), (["15.50"], false), (["2.55"], false), (["12.5"], false), (["GPC", "SEC"], false), ([" 2.5 "], true)] {
+                for (codes, expected) in [(["15.5"], true), (["15.50"], false), (["2.55"], false), (["12.5"], false), (["GPC", "SEC"], false), ([" 2.5 "], false), (["2.5"], false), ([" 15.5 "], true)] {
                     var record = prospect("Entreprise Fictive")
                     record.rbqCheck = "matched"
                     record.rbqCategories = codes
@@ -611,17 +611,17 @@ enum LeadPipelineTests {
                 try expect(LeadDefinition.evaluate(LeadKit.readyClinic(), config: config, now: now).status == .ready, "segments outside the list need no RBQ match")
                 try expect(ProspectDisplay.attribution(for: LeadKit.readyClinic(), config: config) == nil, "no credit without RBQ data")
             }),
-            ("RBQ bundle rule (Water 7:20/7:26, Air 10c): 15.5 always held; 2.5 held only without the full Annexe III bundle and without a 1.x code; the rule is config; an unreadable index still holds all", {
+            ("RBQ codes (Martin 30 Oct 2026, 12:39 PM ET): 15.5 always held in region 02; 2.5 (excavation et terrassement) never holds the Lavoie conflict, alone, partial, bundled or with 1.x; an unreadable index still holds all for the licence check", {
                 let area = try unwrap(config.conflictAreas.first { $0.rbqSubcategoryCodes != nil }, "conflict area with RBQ codes")
-                try expect(area.rbqSubcategoryCodes == ["15.5", "2.5"], "15.5 and 2.5 stay listed: \(String(describing: area.rbqSubcategoryCodes))")
+                try expect(area.rbqSubcategoryCodes == ["15.5"], "only 15.5 is listed: \(String(describing: area.rbqSubcategoryCodes))")
                 // One synthetic licence of each kind, through the real JSON parser, the index and LEAD_DEF.
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let bundle = RBQFixture.annexeIIIBundle.map { (nil as String?, $0) }
                 let partial = RBQFixture.annexeIIIBundle.filter { $0 != "17.2" }.map { (nil as String?, $0) }
                 let kinds: [(name: String, codes: [(String?, String)], held: Bool, why: String)] = [
-                    ("Excavation Fictive Seule", [("Specialisee", "2.5")], true, "2.5 alone"),
-                    ("Terrassement Fictif Inc.", [("Specialisee", "2.5"), (nil, "SEC")], true, "2.5 with an admin code only"),
-                    ("Ouvrages Fictifs Partiels", partial, true, "2.5 with 12 of the 13 bundle codes"),
+                    ("Excavation Fictive Seule", [("Specialisee", "2.5")], false, "2.5 alone"),
+                    ("Terrassement Fictif Inc.", [("Specialisee", "2.5"), (nil, "SEC")], false, "2.5 with an admin code only"),
+                    ("Ouvrages Fictifs Partiels", partial, false, "2.5 with 12 of the 13 bundle codes"),
                     ("Bâtiments Fictifs Groupés", bundle, false, "2.5 within the full bundle"),
                     ("Entreprise Générale Fictive", [("Generale", "1.3"), ("Specialisee", "2.5")], false, "2.5 with a 1.x code"),
                     ("Habitations Fictives Est", [("Generale", "1.1.1"), ("Specialisee", "2.5"), (nil, "4.2")], false, "2.5 with 1.1.1"),
@@ -642,17 +642,11 @@ enum LeadPipelineTests {
                     try expect(record.rbqCheck == "matched" && (status == .conflictReview) == kind.held,
                                "\(kind.why): expected \(kind.held ? "held" : "not held"), got \(status) (\(String(describing: record.rbqCheck)))")
                 }
-                // The rule is config (icp.json), cited.
-                let rules = area.rbqCodeConditions ?? []
-                try expect(rules.count == 1 && rules.first?.code == "2.5", "one condition, on 2.5 only (15.5 has none): \(rules.map(\.code))")
-                let rule = try unwrap(rules.first, "2.5 condition")
-                try expect(rule.notHeldIfAllOf == RBQFixture.annexeIIIBundle, "bundle is Air's 13 Annexe III codes: \(rule.notHeldIfAllOf)")
-                try expect(rule.notHeldIfAnyCodeStartsWith == ["1."], "general 1.x codes: \(rule.notHeldIfAnyCodeStartsWith)")
-                let cited = rule.source ?? ""
-                try expect(cited.contains("10c") && cited.contains("https://www.rbq.gouv.qc.ca/") && cited.contains("Annexe III"), "cites Air 10c and RBQ's list: \(cited)")
-                try expect(LeadDefinition.rbqHeldCodes(["2.5"], area: area) == ["2.5"], "proof predicate: 2.5 alone")
-                try expect(LeadDefinition.rbqHeldCodes(RBQFixture.annexeIIIBundle, area: area).isEmpty, "proof predicate: bundle")
-                try expect(LeadDefinition.rbqHeldCodes(["1.7G", "2.5"], area: area).isEmpty, "proof predicate: 1.x")
+                // Martin 30 Oct 2026, 12:39 PM ET: no 2.5 condition is left; 15.5 has none.
+                try expect((area.rbqCodeConditions ?? []).isEmpty, "no code conditions left: \((area.rbqCodeConditions ?? []).map(\.code))")
+                try expect(LeadDefinition.rbqHeldCodes(["2.5"], area: area).isEmpty, "proof predicate: 2.5 alone is clear")
+                try expect(LeadDefinition.rbqHeldCodes(["1.7G", "2.5"], area: area).isEmpty, "proof predicate: 1.x and 2.5")
+                try expect(LeadDefinition.rbqHeldCodes(["15.5"], area: area) == ["15.5"], "proof predicate: 15.5 alone")
                 try expect(LeadDefinition.rbqHeldCodes(RBQFixture.annexeIIIBundle + ["1.3", "15.5"], area: area) == ["15.5"], "proof predicate: 15.5")
                 // Martin 27 Oct 2026, 4:30 PM ET: a missing or truncated index holds every construction firm for the licence check, not for SOS.
                 for contents in [nil, Data(#"{"Liste Licence":[{"Licence":{"#.utf8)] as [Data?] {
@@ -678,7 +672,7 @@ enum LeadPipelineTests {
                     ("Services Fictifs Echo", "Saguenay", [("Specialisee", "15.5")], true, "15.5 in Saguenay"),
                     ("Services Fictifs Foxtrot", " SAGUENAY ", [("Specialisee", "15.5")], true, "15.5 in ' SAGUENAY ' (case and spaces)"),
                     ("Services Fictifs Golf", "Jonquiere", [("Specialisee", "15.5")], true, "15.5 in 'Jonquiere' (accent-normalised)"),
-                    ("Services Fictifs Hotel", "Saguenay", [("Specialisee", "2.5")], true, "2.5 alone in Saguenay"),
+                    ("Services Fictifs Hotel", "Saguenay", [("Specialisee", "2.5")], false, "2.5 alone in Saguenay (excavation is not the conflict)"),
                     ("Services Fictifs India", "Laval", [("Specialisee", "2.5")], false, "2.5 alone in Laval"),
                     ("Services Fictifs Juliett", "Saguenay", bundle, false, "2.5 within the full bundle in Saguenay"),
                     ("Services Fictifs Kilo", "Saguenay-Lac-Saint-Jean", [("Specialisee", "15.5")], true, "15.5 in a longer name containing Saguenay (unknown, fail closed)")
@@ -732,8 +726,11 @@ enum LeadPipelineTests {
                     (firm("Plomberie Fictive November", tags: ["craft=builder"], town: nil), true, "keyword firm with no town"),
                     (firm("Plomberie Fictive Oscar", tags: ["craft=builder"], town: "  "), true, "keyword firm with a blank town"),
                     (firm("Services Fictifs Papa", tags: ["craft=plumber"], town: "Petit-Saguenay"), true, "map-data plumber in Petit-Saguenay"),
-                    (firm("Excavation Fictive Quebec", tags: ["craft=builder"], town: "Laterrière"), true, "keyword firm in Laterrière"),
-                    (firm("Excavation Fictive Arvida", tags: ["craft=builder"], town: "Arvida"), true, "Arvida is a sector of Saguenay (Commission de toponymie)"),
+                    (firm("Plomberie Fictive Quebec", tags: ["craft=builder"], town: "Laterrière"), true, "plumbing keyword firm in Laterrière"),
+                    (firm("Plomberie Fictive Arvida", tags: ["craft=builder"], town: "Arvida"), true, "Arvida is a sector of Saguenay (Commission de toponymie)"),
+                    (firm("Excavation Fictive Quebec", tags: ["craft=builder"], town: "Laterrière"), false, "excavation keyword firm in Laterrière (Martin 30 Oct 12:39 PM ET)"),
+                    (firm("Terrassement Fictif Arvida", tags: ["craft=builder"], town: "Arvida"), false, "terrassement keyword firm in Arvida"),
+                    (firm("Services Fictifs Sierra", tags: ["craft=excavation"], town: "Chicoutimi"), false, "map-data excavation in Chicoutimi"),
                     (firm("Services Fictifs Romeo", tags: ["craft=excavation"], town: "Laval"), false, "map-data excavation in Laval")
                 ]
                 for item in cases {
@@ -761,8 +758,8 @@ enum LeadPipelineTests {
                 try expect(status == .conflictReview, "map-data plumber in Chicoutimi: expected held, got \(status)")
                 try expect(LeadDefinition.conflictArea(for: record, config: config) != nil, "outreach check: map-data plumber in Chicoutimi")
             }),
-            ("SOS conflict and RBQ licence hold (Martin Lepage, 27 Oct 2026, 3:55, 3:56 and 4:30 PM ET)", {
-                // Lavoie: plumbing or excavation AND in region 02 (or an unreadable town when the trade signals or codes match).
+            ("SOS conflict and RBQ licence hold (Martin Lepage, 27 Oct 2026, 3:55, 3:56 and 4:30 PM ET; 30 Oct 2026, 12:39 PM ET plumbing only)", {
+                // Lavoie (Martin 30 Oct 2026, 12:39 PM ET): plumbing only, AND in region 02 (or an unreadable town when the trade signals or codes match).
                 // Licence: any construction_trades firm, anywhere, when the RBQ check is not a verified match. Its reason id
                 // is rbq-licence-unverified, never sos-plomberie-excavation-lavoie. Both reasons are listed when both apply.
                 func firm(_ name: String, tags: [String], town: String?, rbq: String?, codes: [String] = [], segment: String = "construction_trades") -> ProspectRecord {
@@ -782,7 +779,9 @@ enum LeadPipelineTests {
                     (firm("Constructions Fictives Montréal", tags: ["craft=builder"], town: "Montréal", rbq: "unavailable"), false, true, "(c) Montréal construction-trade firm with no RBQ file"),
                     (firm("Services Fictifs Lima", tags: ["craft=plumber"], town: "Chicoutimi", rbq: "matched", codes: ["1.3"]), true, false, "(d) Chicoutimi plumber with a verified match"),
                     (firm("Services Fictifs Alpha", tags: ["craft=builder"], town: "Jonquière", rbq: "matched", codes: ["15.5"]), true, false, "(d) Jonquière 15.5 licence"),
-                    (firm("Services Fictifs Echo", tags: ["craft=excavation"], town: "Saguenay", rbq: "no-match"), true, true, "(e) Saguenay excavation firm with no RBQ match"),
+                    (firm("Services Fictifs Echo", tags: ["craft=excavation"], town: "Saguenay", rbq: "no-match"), false, true, "(e) Saguenay excavation firm with no RBQ match: licence hold only"),
+                    (firm("Excavation Fictive Alma", tags: ["craft=excavation"], town: "Alma", rbq: "matched", codes: ["2.5"]), false, false, "(e) Alma excavation with a verified 2.5 match is clear"),
+                    (firm("Asphalte Fictif Roberval", tags: ["craft=builder"], town: "Roberval", rbq: "matched", codes: ["2.5", "1.3"]), false, false, "(e) Roberval asphalt firm with a verified match is clear"),
                     (firm("Plomberie Fictive Saguenay", tags: ["craft=plumber"], town: "Saguenay", rbq: "unavailable"), true, true, "(e) Saguenay plumber with no RBQ file"),
                     (firm("Toitures Fictives", tags: ["craft=roofer"], town: "Chicoutimi", rbq: "no-match"), false, true, "(f) Chicoutimi roofing firm with no RBQ match"),
                     (firm("Peinture Fictive", tags: ["craft=painter"], town: "Chicoutimi", rbq: "no-match"), false, true, "(f) Chicoutimi painting firm with no RBQ match"),
@@ -792,8 +791,8 @@ enum LeadPipelineTests {
                     (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, true, "(2) Saguenay paving firm (pavage) with no RBQ match"),
                     (firm("Asphalt Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, true, "(2) Saguenay paving firm (asphalt) with no RBQ match"),
                     (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "matched", codes: ["1.3"]), false, false, "(2) Saguenay paving firm with a verified non-excavation licence"),
-                    (firm("Pavage et terrassement Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), true, true, "Saguenay paving name containing terrassement stays on the excavation keyword"),
-                    (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "matched", codes: ["2.5"]), true, false, "Saguenay paving firm carrying RBQ 2.5 stays on the excavation code"),
+                    (firm("Pavage et terrassement Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "no-match"), false, true, "Saguenay paving name containing terrassement: licence hold only"),
+                    (firm("Pavage Fictif", tags: ["craft=builder"], town: "Saguenay", rbq: "matched", codes: ["2.5"]), false, false, "Saguenay paving firm carrying RBQ 2.5 is clear"),
                     (firm("Plomberie Fictive Centre", tags: ["craft=plumber"], town: "Montréal", rbq: "no-match"), false, true, "(3) Montréal plumber with no RBQ match"),
                     (firm("Clinique Exemple Nord", tags: ["healthcare=clinic"], town: "Montréal", rbq: nil, segment: "clinic"), false, false, "(4) Montréal clinic"),
                     (firm("Constructions Fictives Inconnues", tags: ["craft=builder"], town: nil, rbq: "no-match"), false, true, "unknown town: generic construction firm is a licence hold, not a Lavoie conflict"),
@@ -801,16 +800,16 @@ enum LeadPipelineTests {
                     (firm("Plomberie Fictive Inconnue", tags: ["craft=plumber"], town: nil, rbq: "no-match"), true, true, "unknown town: a plumber with no match is both holds")
                 ]
                 let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
-                let source = area.rbqCodeConditions?.first?.source ?? ""
+                try expect((area.rbqCodeConditions ?? []).isEmpty, "no 2.5 condition left")
                 let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
                 try expect(area.description == region02ConflictDescription, "description cites 3:55, 3:56 and the 4:30 region ruling")
-                try expect(!source.contains("Applies province-wide") && source.contains("unless in Saguenay") && source.contains("27 Oct 2026") && source.contains("4:30 PM ET"),
-                           "2.5 condition cites the rulings and no longer says province-wide: \(source)")
+                try expect(area.rbqSubcategoryCodes == ["15.5"] && !area.keywords.contains("excavation") && !area.keywords.contains("terrassement") && !area.osmSelectors.contains("craft=excavation"),
+                           "no excavation signal left: \(area.keywords) \(area.osmSelectors)")
                 try expect(raw.contains("rbq-licence-unverified") && raw.contains("Yes, keep a separate RBQ licence-check hold for construction firms everywhere."),
                            "icp.json cites the separate licence-hold ruling")
                 try expect(raw.contains("Saguenay–Lac-Saint-Jean") && raw.contains("4:30 PM ET"), "icp.json cites the region-02 ruling")
                 try expect(raw.contains("donneesouvertes.affmunqc.net/repertoire/MUN.csv") && raw.contains("2026-10-27"), "icp.json cites the MAMH list and the date it was checked")
-                try expect(raw.contains("cautious team call pending Martin"), "paving and 2.5 pavers are labeled a team call, not Martin's rule")
+                try expect(raw.contains("Seulement la plomberie au Saguenay est un conflit, pas l'excavation.") && !raw.contains("cautious team call pending Martin"), "icp.json quotes the 30 Oct ruling and drops the old team call")
                 var misses: [String] = []
                 for item in cases {
                     let verdict = LeadDefinition.evaluate(item.record, config: config, now: now)
@@ -2074,7 +2073,7 @@ enum LeadPipelineTests {
                 record.rbqCategories = ["1.3"]
                 try expect(OutreachDraftGate.holds(record, config: config) == nil, "a verified Montréal builder is not blocked")
             }),
-            ("Region 02 (Martin 4:30 PM ET): Alma, Roberval and Dolbeau-Mistassini plumbing or excavation firms are Lavoie holds; an Alma clinic and a Québec City plumber with a verified licence are clear", {
+            ("Region 02 (Martin 4:30 PM ET): Alma, Roberval and Dolbeau-Mistassini plumbing firms are Lavoie holds; Roberval, Alma and Saguenay excavation, paving and terrassement firms, an Alma clinic and a Québec City plumber with a verified licence are clear", {
                 func firm(_ name: String, tags: [String], town: String, segment: String = "construction_trades", rbq: String? = "matched", codes: [String] = ["1.3"]) -> ProspectRecord {
                     var record = LeadKit.readyClinic()
                     record.segment = segment
@@ -2087,7 +2086,7 @@ enum LeadPipelineTests {
                 }
                 let held: [(ProspectRecord, String)] = [
                     (firm("Plomberie Fictive Alma", tags: ["craft=plumber"], town: "Alma"), "Alma plumber"),
-                    (firm("Excavation Fictive Roberval", tags: ["craft=excavation"], town: "Roberval", codes: ["2.5"]), "Roberval excavation"),
+                    (firm("Plomberie Fictive Roberval", tags: ["craft=plumber"], town: "Roberval", codes: ["15.5"]), "Roberval plumber"),
                     (firm("Plomberie Fictive Dolbeau", tags: ["craft=plumber"], town: "Dolbeau-Mistassini"), "Dolbeau-Mistassini plumber")
                 ]
                 var misses: [String] = []
@@ -2099,6 +2098,10 @@ enum LeadPipelineTests {
                 }
                 let clear: [(ProspectRecord, String)] = [
                     (firm("Clinique Exemple Alma", tags: ["healthcare=clinic"], town: "Alma", segment: "clinic", rbq: nil, codes: []), "Alma clinic"),
+                    (firm("Excavation Fictive Roberval", tags: ["craft=excavation"], town: "Roberval", codes: ["2.5"]), "Roberval excavation (Martin 30 Oct 12:39 PM ET)"),
+                    (firm("Pavage Fictif Alma", tags: ["craft=builder"], town: "Alma", codes: ["2.5"]), "Alma paving with 2.5"),
+                    (firm("Terrassement Fictif Saguenay", tags: ["craft=builder"], town: "Saguenay", codes: ["2.5"]), "Saguenay terrassement with 2.5"),
+                    (firm("Excavation Fictive G7", tags: ["craft=excavation"], town: "Chicoutimi, QC G7H 1A1", codes: ["2.5"]), "Chicoutimi G7 excavation"),
                     (firm("Plomberie Fictive Québec", tags: ["craft=plumber"], town: "Québec", codes: ["15.5"]), "Québec City plumber with a verified 15.5 match"),
                     (firm("Plomberie Fictive Québec", tags: ["craft=plumber"], town: "Ville de Québec", codes: ["15.5"]), "Ville de Québec plumber with a verified 15.5 match")
                 ]
@@ -2224,7 +2227,7 @@ struct SearchFixture {
         return fixture
     }
 
-    /// A Saguenay construction firm with no plumbing or excavation words. A missing or corrupt RBQ index holds it
+    /// A Saguenay construction firm with no plumbing words. A missing or corrupt RBQ index holds it
     /// for the licence check only.
     static func saguenayGenericBuilder(config: ICPConfig) -> SearchFixture {
         let fixture = SearchFixture(config: config)
@@ -2270,10 +2273,10 @@ struct SearchFixture {
         return fixture
     }
 
-    /// Plumbing and excavation firms inside the Saguenay municipalities. A missing RBQ index must still hold every one.
+    /// Plumbing (and drain) firms inside the Saguenay municipalities (Martin 30 Oct 2026, 12:39 PM ET: excavation is not the conflict). A missing RBQ index must still hold every one.
     static let saguenayConflictFirms: [(id: Int, name: String, tag: String, host: String, city: String)] = [
         (2201, "Plomberie Fictive Est", "\"craft\":\"builder\"", "www.plomberie-fictive-est.test", "Saguenay"),
-        (2202, "Excavation Fictive Nord", "\"craft\":\"builder\"", "www.excavation-fictive-nord.test", "Jonquière"),
+        (2202, "Plomberie Fictive Nord", "\"craft\":\"builder\"", "www.plomberie-fictive-nord.test", "Jonquière"),
         (2203, "Drainage Fictif", "\"craft\":\"builder\"", "www.drainage-fictif.test", "Chicoutimi")
     ]
 
