@@ -132,7 +132,12 @@ enum LeadgenPinnedHTTPS {
         var lines = head.components(separatedBy: "\r\n")
         guard let statusLine = lines.first else { return nil }
         let parts = statusLine.split(separator: " ")
-        guard parts.count >= 2, let status = Int(parts[1]) else { return nil }
+        guard parts.count >= 2 else { return nil }
+        // Exactly three ASCII digits ("+200", "0200", "20" and "2000" are malformed).
+        let token = parts[1].utf8
+        guard token.count == 3, token.allSatisfy({ $0 >= 48 && $0 <= 57 }), let status = Int(parts[1]) else {
+            throw refusal("malformed status")
+        }
         lines.removeFirst()
         var headers: [String: String] = [:]
         var sawContentLength = false
@@ -154,7 +159,10 @@ enum LeadgenPinnedHTTPS {
             headers[key] = value
         }
         if sawContentLength && sawTransferEncoding { throw refusal("transfer-encoding and content-length") }
-        guard (200..<300).contains(status) else { throw refusal("http status") }
+        // Only 1xx is refused. 3xx, 4xx and 5xx are returned with their status; the caller decides.
+        if (100..<200).contains(status) { throw refusal("http status") }
+        // 204 and 304 never carry a body (RFC 9110 15.3.5, 15.4.5).
+        if status == 204 || status == 304 { return (status, headers, Data()) }
         if body.count > maxBodyBytes { throw refusal("body exceeds 5 MB") }
         if let encoding = headers["transfer-encoding"] {
             guard encoding == "chunked" else { throw refusal("transfer-encoding") }

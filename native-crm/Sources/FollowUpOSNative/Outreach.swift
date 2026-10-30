@@ -258,6 +258,10 @@ enum OutreachDraftGate {
     static func antiSpam(_ draft: OutreachDraft, config: ICPConfig, suppression: SuppressionList) -> LeadPipelineRefusal? {
         let sender = config.sender
         if suppression.contains(draft.to) { return LeadPipelineRefusal(code: "refused:anti-spam:unsubscribed") }
+        let address = sender.mailingAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        if address.isEmpty || address.uppercased().contains("PLACEHOLDER") {
+            return LeadPipelineRefusal(code: "refused:anti-spam:placeholder-address", detail: "sender mailing address is empty or a placeholder")
+        }
         if !draft.body.contains(sender.organization) || !draft.body.contains(sender.name) {
             return LeadPipelineRefusal(code: "refused:anti-spam:identification")
         }
