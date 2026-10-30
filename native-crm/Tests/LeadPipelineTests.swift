@@ -97,7 +97,7 @@ enum LeadPipelineTests {
         let config: ICPConfig
         let confirmed: ICPConfirmed
         do {
-            config = try LeadKit.config()
+            config = try LeadKit.testConfig()
             confirmed = try LeadKit.confirmed()
         } catch {
             print("  FAIL lead pipeline: config did not load: \(error)")
@@ -111,7 +111,7 @@ enum LeadPipelineTests {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
                 try expect(config.conflictAreas.first?.description == region02ConflictDescription, "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
-                try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "PLACEHOLDER street, city, province, postal code", "sender identity keeps the street out of the repo")
+                try expect(config.sender.from == "ml@pharos-ai.ca" && (try LeadKit.config()).sender.mailingAddress == "PLACEHOLDER street, city, province, postal code", "sender identity keeps the street out of the repo")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
             ("ICP config: clinic and trades take named people from the own site only", {
@@ -1523,7 +1523,7 @@ enum LeadPipelineTests {
             ("Environment: a run from an empty folder fills the Leads list, saves the draft locally and passes the bar", {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-leads-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: root) }
-                let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
+                let env = try LeadKit.testEnvironment(root: root)
                 let fixture = SearchFixture(config: config)
                 let audit = env.audit
                 let launch = env.recordLaunch(audit: audit, now: fixture.clock.now)

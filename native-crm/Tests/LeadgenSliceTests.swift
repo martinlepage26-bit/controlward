@@ -1207,7 +1207,7 @@ enum LeadgenSliceTests {
             do {
                 let report = try await pinnedRunner(script, d1: d1, mailbox: mailbox).run(
                     candidates: [], paths: LeadgenFixture.paths, consent: LeadgenFixture.consent, postalAddress: LeadgenFixture.postal, directory: LeadgenFixture.directory)
-                try check(report.draft.body.contains("info@cliniqueexemple.ca"), "draft was empty of the role address")
+                try check(report.draft.to == "info@cliniqueexemple.ca", "draft recipient was not the role address")
                 try check(!report.fit.evidence.contains { $0.url.contains("/services") || $0.quote.contains("SECRET-SKIPPED") }, "skipped /services became evidence: \(report.fit.evidence.map(\.url))")
                 try check(script.requested.contains("\(www)/"), "www target was not fetched: \(script.requested)")
                 try check(!script.requested.contains(where: { $0.contains("dentistesproprietaires") }), "left the clinic site: \(script.requested)")
