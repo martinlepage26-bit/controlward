@@ -1,0 +1,48 @@
+name: pharos-core
+
+# PHAROS shared core, slice 1 (docs/pharos-core/DESIGN.md). Separate workflow so ci.yml jobs stay unchanged.
+# No secrets are used by any job here.
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pharos-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pharos-core:
+    name: pharos-core (service + SQLite, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+      - run: yarn install --immutable
+      - name: Secret scan self-test
+        run: bash pharos-core/scripts/check-secrets.sh --self-test
+      - name: Secret scan of the diff (fails on any suspected secret)
+        run: bash pharos-core/scripts/check-secrets.sh "origin/${{ github.base_ref || 'main' }}"
+      - name: Kairos / EMERAULD untouched (criterion 6)
+        run: bash pharos-core/scripts/check-untouched.sh "origin/${{ github.base_ref || 'main' }}"
+      - name: pharos-core tests (named, with counts)
+        run: yarn vitest run --config pharos-core/service/vitest.config.ts --reporter=verbose
+
+  pharos-core-swift:
+    name: pharos-core Swift adapter (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - name: Swift adapter tests (named, with counts)
+        run: zsh pharos-core/adapters/swift/test.sh
