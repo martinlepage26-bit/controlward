@@ -41,9 +41,11 @@ struct WorkspaceModuleView: View {
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 if let url = controller.module.website {
                     Link("Open in browser", destination: url).font(.caption)
                 }
+#endif
                 Button("Reload", systemImage: "arrow.clockwise") { controller.reload() }
                     .disabled(controller.loading)
             }

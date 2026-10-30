@@ -17,18 +17,24 @@ struct LeadPipelineEnvironment: Sendable {
     /// Place ids and normalized domains seen by discovery (no contact data), for the funnel.
     var discoveredURL: URL { root.appendingPathComponent("discovered.json") }
 
-    /// `CONTROLWARD_LEADS_DIR`, else `~/Library/Application Support/ControlWard/leads`.
+    /// `CONTROLWARD_LEADS_DIR` overrides the sandbox-aware Application Support path.
+    /// The installed app bundle ID is `com.pharos.contextward`; the Chrome host wrapper
+    /// supplies that same container-backed Leads path explicitly when running unsandboxed.
     static func defaultRoot() -> URL {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        return StorageLocation.directory.appendingPathComponent("leads", isDirectory: true)
+#else
         if let env = ProcessInfo.processInfo.environment["CONTROLWARD_LEADS_DIR"], !env.isEmpty { return URL(fileURLWithPath: env) }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("ControlWard/leads")
+#endif
     }
 
     /// Loads icp.json and refuses to start if it does not match the confirmed segment list (S3-R9).
     static func load(configDirectory: URL, root: URL = defaultRoot()) throws -> LeadPipelineEnvironment {
         let config = try ICPConfig.load(directory: configDirectory)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try SecureFiles.ensurePrivateDirectory(root)
         return LeadPipelineEnvironment(config: config, root: root)
     }
 

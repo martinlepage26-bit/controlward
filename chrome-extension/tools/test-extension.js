@@ -1,0 +1,32 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const root = path.resolve(__dirname, "..");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+assert.equal(manifest.manifest_version, 3);
+assert.deepEqual([...manifest.permissions].sort(), ["activeTab", "contextMenus", "nativeMessaging", "scripting", "sidePanel", "storage"].sort());
+assert.equal(manifest.host_permissions, undefined, "no broad host permissions");
+assert.equal(manifest.content_scripts, undefined, "no always-on page scripts");
+assert.match(manifest.content_security_policy.extension_pages, /script-src 'self'/);
+for (const name of ["service-worker.js", "sidepanel.js", "popup.js"]) {
+  assert.ok(fs.existsSync(path.join(root, "dist", name)), `missing generated ${name}`);
+  const generated = fs.readFileSync(path.join(root, "dist", name), "utf8");
+  assert.doesNotMatch(generated, /pharos-api|CONTROLWARD_SECRET|WORKER_PRIVATE_KEY/i, "no Worker key or API client");
+}
+const panelSource = fs.readFileSync(path.join(root, "src", "sidepanel.ts"), "utf8");
+assert.match(panelSource, /captureActivePage/);
+assert.match(panelSource, /evaluateCapture/);
+assert.match(panelSource, /saveReviewed/);
+assert.match(panelSource, /confirm: true/);
+assert.match(panelSource, /chrome\.scripting\.executeScript/);
+assert.match(panelSource, /storage\.local/);
+assert.doesNotMatch(panelSource, /fetch\s*\(/, "page extraction does not make web requests");
+const workerSource = fs.readFileSync(path.join(root, "src", "service-worker.ts"), "utf8");
+assert.match(workerSource, /controlward-capture-selection/);
+assert.match(workerSource, /controlward-capture-link/);
+assert.match(panelSource, /Untrusted \${context\.mode} selection/);
+assert.match(panelSource, /fr: \{/);
+const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
+assert.match(html, /I reviewed the business name, website/);
+assert.match(html, /I reviewed the evidence, qualification status/);
+console.log("Extension structural checks passed.");

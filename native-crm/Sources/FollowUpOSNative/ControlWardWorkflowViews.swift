@@ -209,7 +209,9 @@ struct MailWorkspaceView: View {
             HStack {
                 VStack(alignment: .leading) { Text("Email").font(.title2.bold()); Text("Review email, link people and create follow-ups.").foregroundStyle(.secondary) }
                 Spacer()
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 Button("Import metadata") { importMail() }.buttonStyle(.borderedProminent)
+#endif
             }.padding(.horizontal, 22).padding(.top, 20)
             Picker("Email workspace", selection: $tab) { Text("Local review inbox").tag(0); Text("Email Aggregator").tag(1) }.pickerStyle(.segmented).padding(.horizontal, 22)
             if tab == 0 { MailIntakeStatusBar().padding(.horizontal, 22) }
@@ -236,6 +238,9 @@ struct MailWorkspaceView: View {
         }.navigationTitle("Email")
     }
     private func importMail() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        message = "File import is disabled in the isolated preview."
+#else
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -243,6 +248,7 @@ struct MailWorkspaceView: View {
             guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 20_000_000 else { throw ControlWardError.invalid("Mail imports must be under 20 MB.") }
             message = "Imported \(try store.importMailMetadata(Data(contentsOf: url))) new messages. Existing records were refreshed by source identity."
         } catch { message = error.localizedDescription }
+#endif
     }
 }
 
@@ -265,7 +271,9 @@ private struct MailReviewDetail: View {
                 Label(mail.synthetic ? "Synthetic fixture" : "Imported metadata", systemImage: "info.circle").foregroundStyle(.secondary)
                 Text("From: \(mail.sender)\nTo: \(mail.recipient)\nReceived: \(mail.receivedAt)").textSelection(.enabled)
                 Text("Provider: \(mail.provider)").font(.caption)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 if let url = URL(string: mail.link), !mail.link.isEmpty { Link("Open source", destination: url) }
+#endif
                 if actions.loading { Text("Loading the message…").font(.caption).foregroundStyle(.secondary) }
                 if let body = actions.body {
                     Text("Full message. Loaded from the mailbox and not saved in this workspace.")
@@ -378,7 +386,9 @@ struct WorkspaceRecoveryControls: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Backup and recovery").font(.headline)
             Text("Back up local records, imported mail metadata, project links and evidence. Project Control register exports and hosted email sessions are managed in their own sections.").font(.caption).foregroundStyle(.secondary)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
             HStack { Button("Save local backup") { backup() }; Button("Review a backup to restore") { inspectBackup() } }
+#endif
             if let message { Text(message).font(.caption).textSelection(.enabled) }
         }.crmCard()
             .confirmationDialog("Restore this local workspace?", isPresented: $confirm, titleVisibility: .visible) {
@@ -392,11 +402,18 @@ struct WorkspaceRecoveryControls: View {
             } message: { Text(preview + "\nA rollback copy is saved first. Connector endpoints remain current; queued writes and imported sync cursors are cleared.") }
     }
     private func backup() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        message = "File export is disabled in the isolated preview."
+#else
         let panel = NSSavePanel(); panel.allowedContentTypes = [.json]; panel.nameFieldStringValue = "controlward-backup-\(CalendarCRM.dayString()).json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try store.exportControlWardBackup(to: url); message = "Owner-only backup saved." } catch { message = error.localizedDescription }
+#endif
     }
     private func inspectBackup() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        message = "File import is disabled in the isolated preview."
+#else
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -406,6 +423,7 @@ struct WorkspaceRecoveryControls: View {
             preview = "Backup from \(backup.createdAt): \(backup.workspace.contacts.count) contacts, \(backup.workspace.tasks.count) tasks, \(backup.workspace.controlWard.mail.count) messages."
             pending = data; confirm = true
         } catch { message = error.localizedDescription }
+#endif
     }
 }
 

@@ -25,6 +25,9 @@ final class GoogleWebAuthorizer: NSObject, ASWebAuthenticationPresentationContex
     var hasActiveSession: Bool { session != nil }
 
     func authorize(_ url: URL, callbackScheme: String) async throws -> URL {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        throw PreviewIsolationError.externalNetworkDisabled
+#endif
         let gate = GoogleWebAuthorizer.ResumeOnce()
         return try await withCheckedThrowingContinuation { continuation in
             gate.set(continuation)

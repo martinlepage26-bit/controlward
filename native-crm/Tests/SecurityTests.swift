@@ -102,7 +102,17 @@ enum SecurityTests {
 
     static func defaultLocation() throws {
         let path = StorageLocation.workspaceFile.path
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        // The acceptance preview has no Application Support fallback: its workspace sits in a fresh temporary directory.
+        let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            .map { $0.appendingPathComponent(StorageLocation.folderName, isDirectory: true).path + "/" }
+        try expect(path.hasPrefix(temporary), "preview workspace path is not inside the temporary directory")
+        try expect((applicationSupport.map { !path.hasPrefix($0) } ?? true) && !path.hasSuffix("/Library/Application Support/Contextward/workspace.json"),
+                   "preview workspace path falls back to Application Support")
+#else
         try expect(path.hasSuffix("/Library/Application Support/Contextward/workspace.json"), "default workspace path is not in Application Support/Contextward")
+#endif
     }
 
     static func loadTightensPermissions() throws {

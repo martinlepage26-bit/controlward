@@ -24,7 +24,21 @@ struct MailAccount: Identifiable, Hashable, Sendable {
     static let icloudAlias = MailAccount(email: "martinlepage26@me.com", provider: "icloud-forward", forwardsInto: personalGmail.email)
     static let pharosAlias = MailAccount(email: "ml@pharos-ai.ca", provider: "cloudflare-forward", forwardsInto: personalGmail.email)
 
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+    static let all: [MailAccount] = preview
+#else
     static let all: [MailAccount] = [personalGmail, infrafabric, icloudAlias, pharosAlias]
+#endif
+#if CONTEXTWARD_ACCEPTANCE
+    /// Fictional accounts on reserved `.test` names, shaped like the production list (two sign-ins,
+    /// two forwarding aliases). The isolated preview lists only these, so no Email surface shows a real identity.
+    static let preview: [MailAccount] = [
+        MailAccount(email: "owner@mail.example.test", provider: "gmail", forwardsInto: nil),
+        MailAccount(email: "team@workspace.example.test", provider: "google-workspace", forwardsInto: nil),
+        MailAccount(email: "alias@icloud.example.test", provider: "icloud-forward", forwardsInto: "owner@mail.example.test"),
+        MailAccount(email: "hello@forward.example.test", provider: "cloudflare-forward", forwardsInto: "owner@mail.example.test"),
+    ]
+#endif
     static var signIns: [MailAccount] { all.filter(\.isSignIn) }
     static func aliases(of email: String) -> [MailAccount] { all.filter { $0.forwardsInto == email } }
 }
@@ -357,6 +371,23 @@ extension AppStore {
 
 // MARK: - Controller
 
+/// The mail settings seam. Preview code injects an in-memory implementation;
+/// the installed app uses UserDefaults through an explicit adapter.
+@MainActor
+protocol MailPreferences {
+    func string(forKey key: String) -> String?
+    func set(_ value: String, forKey key: String)
+}
+
+@MainActor
+struct UserDefaultsMailPreferences: MailPreferences {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults) { self.defaults = defaults }
+    func string(forKey key: String) -> String? { defaults.string(forKey: key) }
+    func set(_ value: String, forKey key: String) { defaults.set(value, forKey: key) }
+}
+
 enum MailAccountState: Equatable, Sendable {
     case notConnected, idle, syncing, synced(at: Date, added: Int), failed(String)
     var label: String {
@@ -377,13 +408,29 @@ final class MailIntakeController: ObservableObject {
     @Published var clientID: String
     let tokens: MailTokenStore
     let transport: HTTPTransport
-    private let defaults: UserDefaults
+    private let preferences: any MailPreferences
     private var timer: Timer?
 
-    init(tokens: MailTokenStore = KeychainMailTokenStore(), transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard) {
-        self.tokens = tokens; self.transport = transport; self.defaults = defaults
-        clientID = defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID
-        for account in MailAccount.signIns { states[account.email] = tokens.exists(account.email) ? .idle : .notConnected }
+    init(tokens: MailTokenStore? = nil, transport: HTTPTransport? = nil, preferences: (any MailPreferences)? = nil) {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        let selectedTokens: any MailTokenStore = tokens ?? InMemoryMailTokenStore()
+        let selectedTransport: any HTTPTransport = transport ?? PreviewNoNetworkHTTPTransport()
+        let selectedPreferences: any MailPreferences = preferences ?? InMemoryPreviewPreferences()
+#else
+        let selectedTokens: any MailTokenStore = tokens ?? KeychainMailTokenStore()
+        let selectedTransport: any HTTPTransport = transport ?? URLSessionTransport()
+        let selectedPreferences: any MailPreferences = preferences ?? UserDefaultsMailPreferences(defaults: .standard)
+#endif
+        self.tokens = selectedTokens
+        self.transport = selectedTransport
+        self.preferences = selectedPreferences
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        // No production OAuth client in the preview: an unset ID stays empty, so sign-in cannot be configured from it.
+        clientID = selectedPreferences.string(forKey: GoogleOAuthConfig.defaultsKey) ?? ""
+#else
+        clientID = selectedPreferences.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID
+#endif
+        for account in MailAccount.signIns { states[account.email] = selectedTokens.exists(account.email) ? .idle : .notConnected }
     }
 
     func state(_ account: MailAccount) -> MailAccountState { states[account.forwardsInto ?? account.email] ?? .notConnected }
@@ -391,7 +438,7 @@ final class MailIntakeController: ObservableObject {
 
     func saveClientID(_ raw: String) throws {
         let config = try GoogleOAuthConfig(clientID: raw)
-        defaults.set(config.clientID, forKey: GoogleOAuthConfig.defaultsKey); clientID = config.clientID
+        preferences.set(config.clientID, forKey: GoogleOAuthConfig.defaultsKey); clientID = config.clientID
     }
     func config() throws -> GoogleOAuthConfig {
         guard !clientID.isEmpty else { throw MailIntakeError.missingClientID }

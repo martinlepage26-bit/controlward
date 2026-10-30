@@ -134,7 +134,11 @@ struct ProspectLeadsView: View {
         running = true
         defer { running = false }
         let request = ProspectSearchRun.Request(segmentID: segmentID, latitude: lat, longitude: lon, radiusMeters: radius, limit: limit)
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        let reports = await environment.searchAndIngest([request], inner: PreviewNoNetworkLeadTransport(), audit: environment.audit)
+#else
         let reports = await environment.searchAndIngest([request], audit: environment.audit)
+#endif
         let found = reports.reduce(0) { $0 + $1.candidates }
         let kept = reports.reduce(0) { $0 + $1.prospects.count }
         let refused = reports.reduce(0) { $0 + $1.refusals.count }

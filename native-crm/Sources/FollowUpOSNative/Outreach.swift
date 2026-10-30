@@ -18,6 +18,20 @@ struct OutreachDraft: Codable, Equatable, Identifiable, Sendable {
     var id: String { messageID }
 }
 
+enum SuppressionFileError: Error, Equatable, CustomStringConvertible {
+    case missing(String)
+    case unreadable(String)
+    case unparseable(String)
+
+    var description: String {
+        switch self {
+        case .missing(let path): "missing \(path)"
+        case .unreadable(let path): "unreadable \(path)"
+        case .unparseable(let path): "unparseable \(path)"
+        }
+    }
+}
+
 /// Addresses that unsubscribed. Every later draft or send to them is refused (S3-R6).
 final class SuppressionList: @unchecked Sendable {
     struct Entry: Codable, Equatable, Sendable {
@@ -33,7 +47,31 @@ final class SuppressionList: @unchecked Sendable {
         self.storageURL = storageURL
         if let storageURL, let data = try? Data(contentsOf: storageURL),
            let stored = try? JSONDecoder.iso.decode([Entry].self, from: data) {
-            entries = Dictionary(stored.map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
+            replace(stored)
+        }
+    }
+
+    /// Lead-gen refuses the draft unless this file exists and parses. Keys are trimmed and lowercased.
+    static func requireFile(at url: URL) throws -> SuppressionList {
+        guard FileManager.default.fileExists(atPath: url.path) else { throw SuppressionFileError.missing(url.path) }
+        let data: Data
+        do { data = try Data(contentsOf: url) } catch { throw SuppressionFileError.unreadable(url.path) }
+        let stored: [Entry]
+        do { stored = try JSONDecoder.iso.decode([Entry].self, from: data) } catch { throw SuppressionFileError.unparseable(url.path) }
+        let list = SuppressionList()
+        list.replace(stored)
+        return list
+    }
+
+    func replace(_ stored: [Entry]) {
+        lock.withLock {
+            var next: [String: Entry] = [:]
+            for entry in stored {
+                let key = MailAddress.bare(entry.address)
+                guard !key.isEmpty, next[key] == nil else { continue }
+                next[key] = Entry(address: key, at: entry.at, via: entry.via)
+            }
+            entries = next
         }
     }
 
@@ -223,6 +261,10 @@ enum OutreachDraftGate {
         if !draft.body.contains(sender.organization) || !draft.body.contains(sender.name) {
             return LeadPipelineRefusal(code: "refused:anti-spam:identification")
         }
+        // Checked before the body match: an empty address is trivially "contained", and the placeholder is in every footer.
+        if isPlaceholderAddress(sender.mailingAddress) {
+            return LeadPipelineRefusal(code: "refused:anti-spam:placeholder-address", detail: "sender mailing address is empty or a placeholder")
+        }
         if !draft.body.contains(sender.mailingAddress) { return LeadPipelineRefusal(code: "refused:anti-spam:address") }
         let mailto = "mailto:\(sender.unsubscribeMailto)"
         if !draft.body.contains(mailto) || draft.listUnsubscribe?.contains(mailto) != true {
@@ -230,6 +272,12 @@ enum OutreachDraftGate {
         }
         if draft.consent == nil { return LeadPipelineRefusal(code: "refused:anti-spam:consent") }
         return nil
+    }
+
+    /// Blank, or the checked-in `PLACEHOLDER …` value: not a real CASL mailing address.
+    static func isPlaceholderAddress(_ address: String) -> Bool {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.range(of: "placeholder", options: .caseInsensitive) != nil
     }
 
     /// `draft_forbidden` rules from config, checked on subject and body.

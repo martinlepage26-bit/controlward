@@ -120,11 +120,15 @@ struct URLSessionTransport: HTTPTransport {
     }()
 
     func send(_ request: URLRequest) async throws -> HTTPResponse {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        throw PreviewIsolationError.externalNetworkDisabled
+#else
         let (data, response) = try await Self.session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw IntegrationError.unexpected("response was not HTTP") }
         var headers: [String: String] = [:]
         for (key, value) in http.allHeaderFields { headers[String(describing: key).lowercased()] = String(describing: value) }
         return HTTPResponse(status: http.statusCode, headers: headers, body: data)
+#endif
     }
 }
 
@@ -520,6 +524,26 @@ enum ConnectorStatus: Equatable {
         return health.ok ? .active(health.detail) : .error(health.detail)
     }
 }
+
+#if CONTEXTWARD_ACCEPTANCE
+/// Connector configuration the isolated preview may show: reserved test names only
+/// (RFC 2606 / RFC 6761). Nothing falls back to a production connector default.
+enum PreviewIsolation {
+    static func isReservedTestHost(_ host: String) -> Bool {
+        let host = host.lowercased()
+        return host.hasSuffix(".test") || host.hasSuffix(".example") || host.hasSuffix(".invalid")
+    }
+
+    /// A saved endpoint on a reserved test host, otherwise empty (not configured).
+    static func endpoint(stored: String?) -> String {
+        guard let stored, let host = URL(string: stored)?.host, isReservedTestHost(host) else { return "" }
+        return stored
+    }
+
+    /// Endpoint field placeholder without an example URL.
+    static func endpointLabel(_ target: SyncTarget) -> String { "\(target.label) endpoint" }
+}
+#endif
 
 // MARK: - JSON values
 

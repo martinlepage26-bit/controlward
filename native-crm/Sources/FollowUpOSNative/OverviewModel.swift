@@ -179,3 +179,12 @@ enum PipelineRowLayout {
         return [amount, status, date.isEmpty ? nil : date].compactMap { $0 }.joined(separator: " · ")
     }
 }
+
+/// The Overview "Preview data" badge outside acceptance builds: a synthetic preview launch
+/// (`CONTROLWARD_PREVIEW=synthetic`) or any synthetic mail in the store. Acceptance builds
+/// always show it (`PreviewData.isShowing`, OverviewView.swift).
+enum PreviewBadge {
+    static func isShowing(environment: [String: String], mail: [MailMetadata]) -> Bool {
+        environment["CONTROLWARD_PREVIEW"] == "synthetic" || mail.contains { $0.synthetic }
+    }
+}

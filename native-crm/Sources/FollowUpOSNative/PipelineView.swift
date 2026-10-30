@@ -36,11 +36,13 @@ struct PipelineView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                     Button {
                         importCSV()
                     } label: {
                         Label("Import CSV", systemImage: "square.and.arrow.down")
                     }
+#endif
                     Button { showDiscovery = true } label: {
                         Label("Find prospects", systemImage: "globe.americas")
                     }
@@ -177,6 +179,9 @@ struct PipelineView: View {
     }
 
     private func importCSV() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        importError = "File import is disabled in the isolated preview."
+#else
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
@@ -186,6 +191,7 @@ struct PipelineView: View {
             do { _ = try store.importCSV(from: url) }
             catch { importError = error.localizedDescription }
         }
+#endif
     }
 
     private var greeting: String {

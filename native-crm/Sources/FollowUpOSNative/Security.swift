@@ -10,8 +10,10 @@ enum StorageLocation {
     /// `~/Library/Application Support/Contextward/`. Under the App Sandbox the
     /// system resolves this inside `~/Library/Containers/com.pharos.contextward/Data/`.
     static var directory: URL {
-        #if DEBUG
-        // Debug-only test hook. Release builds never read the environment for storage.
+        #if DEBUG && CONTEXTWARD_ACCEPTANCE
+        return isolatedPreviewDirectory
+        #elseif DEBUG
+        // Debug-only test hook. Release and isolated preview builds never read this override.
         if let override = ProcessInfo.processInfo.environment["FOLLOWUPOS_DATA_DIR"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
@@ -20,6 +22,30 @@ enum StorageLocation {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent(folderName, isDirectory: true)
     }
+
+    #if DEBUG && CONTEXTWARD_ACCEPTANCE
+    /// Created internally for each preview process. There is no environment or Application Support fallback.
+    private static let isolatedPreviewDirectory: URL = {
+        let manager = FileManager.default
+        let base = manager.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+        let candidate = base.appendingPathComponent("controlward-preview-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try manager.createDirectory(at: candidate, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let attributes = try manager.attributesOfItem(atPath: candidate.path)
+            guard candidate.deletingLastPathComponent() == base,
+                  candidate.resolvingSymlinksInPath().standardizedFileURL == candidate,
+                  attributes[.type] as? FileAttributeType == .typeDirectory,
+                  let permissions = attributes[.posixPermissions] as? NSNumber,
+                  permissions.intValue & 0o777 == 0o700 else {
+                try? manager.removeItem(at: candidate)
+                fatalError("Could not verify the isolated preview storage directory.")
+            }
+            return candidate
+        } catch {
+            fatalError("Could not create isolated preview storage: \(error.localizedDescription)")
+        }
+    }()
+    #endif
 
     static var workspaceFile: URL { directory.appendingPathComponent("workspace.json") }
 

@@ -1,24 +1,23 @@
 import AppKit
 import SwiftUI
 
-@main
-struct FollowUpOSApp: App {
-    @StateObject private var store = makeStore()
-    @StateObject private var mail = MailIntakeController()
-
-    @MainActor private static func makeStore() -> AppStore {
+struct ControlWardApplication: App {
 #if DEBUG && CONTEXTWARD_ACCEPTANCE
-        PreviewFixture.prepareIfRequested()
+    @StateObject private var store = PreviewFixture.makeStore()
+    @StateObject private var mail = PreviewFixture.makeMailController()
+#else
+    @StateObject private var store = AppStore()
+    @StateObject private var mail = MailIntakeController()
 #endif
-        return AppStore()
-    }
 
     var body: some Scene {
         WindowGroup("ControlWard") {
             RootView()
                 .environmentObject(store)
                 .environmentObject(mail)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 .task { mail.startPeriodic(store: store) }
+#endif
                 .frame(minWidth: 940, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)

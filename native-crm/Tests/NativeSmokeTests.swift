@@ -14,6 +14,14 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        let asked = PortableSuiteFilter.names
+        if !asked.isEmpty {
+            for name in asked {
+                let ok = try await runNamedSuite(name)
+                if !ok { throw SmokeTestFailure.failed("\(name) failed") }
+            }
+            return
+        }
         guard WorkspaceModuleTests.run() else { throw SmokeTestFailure.failed("Workspace module policy tests failed") }
         guard OverviewModelTests.run() else { throw SmokeTestFailure.failed("Overview model tests failed") }
         guard ControlWardTests.run() else { throw SmokeTestFailure.failed("ControlWard workflow tests failed") }
@@ -30,6 +38,7 @@ struct NativeSmokeTests {
         let mailControlPassed = await MailControlTests.run()
         let projectControlPassed = await ProjectControlTests.run()
         let mailPlantedRedsPassed = await MailControlPlantedReds.run()
+        let leadgenSlicePassed = await LeadgenSliceTests.run()
         let buildInfoPassed = BuildInfoTests.run()
         let discoveryPassed = await DiscoveryTests.run()
         let gtmPassed = GTMTests.run()
@@ -163,20 +172,18 @@ struct NativeSmokeTests {
 
         let xlsxRoot = directory.appendingPathComponent("xlsx-fixture", isDirectory: true)
         try FileManager.default.createDirectory(at: xlsxRoot.appendingPathComponent("xl/worksheets", isDirectory: true), withIntermediateDirectories: true)
-        let sharedXML = "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><si><t>audit</t></si><si><t>client</t></si><si><t>language</t></si><si><t>escalation</t></si><si><t>sample_size</t></si><si><t>Workbook audit</t></si><si><t>Demo Co</t></si><si><t>FR</t></si><si><t>70</t></si><si><t>20</t></si></sst>"
-        let sheetXML = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c><c r=\"C1\" t=\"s\"><v>2</v></c><c r=\"D1\" t=\"s\"><v>3</v></c><c r=\"E1\" t=\"s\"><v>4</v></c></row><row r=\"2\"><c r=\"A2\" t=\"s\"><v>5</v></c><c r=\"B2\" t=\"s\"><v>6</v></c><c r=\"C2\" t=\"s\"><v>7</v></c><c r=\"D2\" t=\"s\"><v>8</v></c><c r=\"E2\" t=\"s\"><v>9</v></c></row></sheetData></worksheet>"
+        let sharedXML = "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><si><t>audit</t></si><si><t>client</t></si><si><t>language</t></si><si><t>escalation</t></si><si><t>sample_size</t></si><si><t>Workbook audit</t></si><si><t>Demo Co</t></si><si><t>FR</t></si><si><t>70</t></si><si><t>20</t></si><si><t>EN</t></si><si><t>90</t></si></sst>"
+        let sheetXML = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c><c r=\"C1\" t=\"s\"><v>2</v></c><c r=\"D1\" t=\"s\"><v>3</v></c><c r=\"E1\" t=\"s\"><v>4</v></c></row><row r=\"2\"><c r=\"A2\" t=\"s\"><v>5</v></c><c r=\"B2\" t=\"s\"><v>6</v></c><c r=\"C2\" t=\"s\"><v>7</v></c><c r=\"D2\" t=\"s\"><v>8</v></c><c r=\"E2\" t=\"s\"><v>9</v></c></row><row r=\"3\"><c r=\"A3\" t=\"s\"><v>5</v></c><c r=\"B3\" t=\"s\"><v>6</v></c><c r=\"C3\" t=\"s\"><v>10</v></c><c r=\"D3\" t=\"s\"><v>11</v></c><c r=\"E3\" t=\"s\"><v>9</v></c></row></sheetData></worksheet>"
         try sharedXML.write(to: xlsxRoot.appendingPathComponent("xl/sharedStrings.xml"), atomically: true, encoding: .utf8)
         try sheetXML.write(to: xlsxRoot.appendingPathComponent("xl/worksheets/sheet1.xml"), atomically: true, encoding: .utf8)
         let xlsxURL = directory.appendingPathComponent("baea-fixture.xlsx")
         let zip = Process(); zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip"); zip.arguments = ["-qr", xlsxURL.path, "xl"]; zip.currentDirectoryURL = xlsxRoot; try zip.run(); zip.waitUntilExit()
         try expect(try store.importBAEAXLSX(from: xlsxURL) == 1, "BAEA XLSX import count is incorrect")
-        try expect(store.audits.contains { $0.name == "Workbook audit" && $0.sampleSizeFR == 20 }, "BAEA XLSX scores were not imported")
-        try expect(store.audits.contains { $0.transcripts.contains { $0.language == .french } }, "BAEA transcript evidence was not retained")
-        let canonicalWorkbook = URL(fileURLWithPath: "/Users/pharos_ai/Downloads/BAEA/PHAROS-BAEA-WKBK-v1.0_Scoring_Workbook.xlsx")
-        if FileManager.default.fileExists(atPath: canonicalWorkbook.path) {
-            try expect(try store.importBAEAXLSX(from: canonicalWorkbook) == 1, "canonical BAEA workbook was not imported")
-            try expect(store.audits.contains { $0.sampleSizeFR > 0 && $0.sampleSizeEN > 0 }, "canonical BAEA workbook did not yield both languages")
-        }
+        let workbookAudit = store.audits.first { $0.name == "Workbook audit" }
+        try expect(workbookAudit?.sampleSizeFR == 20 && workbookAudit?.sampleSizeEN == 20, "BAEA XLSX did not populate both language sample sizes")
+        try expect(workbookAudit?.transcripts.contains { $0.language == .french } == true
+                   && workbookAudit?.transcripts.contains { $0.language == .english } == true,
+                   "BAEA XLSX transcript evidence was not retained for both languages")
 
         let exchangeURL = directory.appendingPathComponent("contextward-exchange.json")
         try store.exportExchange(to: exchangeURL)
@@ -228,10 +235,40 @@ struct NativeSmokeTests {
         try expect(mailControlPassed, "Mail control tests failed (slices 1 and 4)")
         try expect(projectControlPassed, "Project Control write tests failed (slice 2)")
         try expect(mailPlantedRedsPassed, "Slice 1/2/4 planted reds did not print 7/5/3 OK")
+        try expect(leadgenSlicePassed, "Lead-gen slice 1 tests failed")
         try expect(buildInfoPassed, "Build info tests failed")
         try expect(discoveryPassed, "discovery tests failed")
         try expect(csvPassed, "CSV import tests failed")
         try expect(gtmPassed, "account intelligence tests failed")
+    }
+
+    /// One suite at this SHA. Names match the test types. No argument runs every suite, including the app smoke below.
+    private static func runNamedSuite(_ name: String) async throws -> Bool {
+        switch name {
+        case "WorkspaceModuleTests": return WorkspaceModuleTests.run()
+        case "OverviewModelTests": return OverviewModelTests.run()
+        case "ControlWardTests": return ControlWardTests.run()
+        case "SecurityTests": return SecurityTests.run()
+        case "IntegrationTests": return await IntegrationTests.run()
+        case "LeadInboxTests": return await LeadInboxTests.run()
+        case "GapAnalysisTests": return await GapAnalysisTests.run()
+        case "KairosTests": return await KairosTests.run()
+        case "MailIntakeTests": return await MailIntakeTests.run()
+        case "MailboxTests": return await MailboxTests.run()
+        case "MailActionOutcomeTests": return await MailActionOutcomeTests.run()
+        case "LeadPipelineTests": return await LeadPipelineTests.run()
+        case "LeadPipelinePlantedReds": return await LeadPipelinePlantedReds.run()
+        case "MailControlTests": return await MailControlTests.run()
+        case "ProjectControlTests": return await ProjectControlTests.run()
+        case "MailControlPlantedReds": return await MailControlPlantedReds.run()
+        case "LeadgenSliceTests": return await LeadgenSliceTests.run()
+        case "BuildInfoTests": return BuildInfoTests.run()
+        case "DiscoveryTests": return await DiscoveryTests.run()
+        case "GTMTests": return GTMTests.run()
+        case "CSVImportTests": return CSVImportTests.run()
+        default:
+            throw SmokeTestFailure.failed("unknown suite \(name)")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {

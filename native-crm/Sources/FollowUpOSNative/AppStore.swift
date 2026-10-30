@@ -90,7 +90,11 @@ final class AppStore: ObservableObject {
     var syncJobs: [SyncJob] { workspace.syncJobs }
     var exposureFindings: [ExposureFinding] { workspace.exposureFindings }
     func endpoint(for target: SyncTarget) -> String {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        PreviewIsolation.endpoint(stored: workspace.connectorEndpoints[target.rawValue])
+#else
         workspace.connectorEndpoints[target.rawValue] ?? (target == .kairos ? KairosClient.defaultEndpoint : "")
+#endif
     }
 
     /// Saves an endpoint without its secret parts. `user:pass@` and token-like
@@ -117,6 +121,10 @@ final class AppStore: ObservableObject {
     }
 
     func probeEndpoint(_ target: SyncTarget) async {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        showNotice("Network access is disabled in the isolated preview.")
+        return
+#endif
         let raw = endpoint(for: target)
         guard let result = EndpointPolicy.sanitize(raw), let url = URL(string: result.url) else {
             showNotice("\(target.label) endpoint is not a valid HTTP URL.")
@@ -1173,7 +1181,10 @@ final class AppStore: ObservableObject {
     /// Schedules local macOS notifications for upcoming follow-ups.
     /// It never sends email, SMS, or CRM messages.
     func scheduleDueFollowUpReminders() async -> Int {
-#if CONTEXTWARD_ACCEPTANCE
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        showNotice("Notifications are disabled in the isolated preview.")
+        return 0
+#elseif CONTEXTWARD_ACCEPTANCE
         if Bundle.main.bundleURL.pathExtension == "app" {
             return await scheduleDueFollowUpRemindersInApp()
         }
@@ -1218,7 +1229,10 @@ final class AppStore: ObservableObject {
     }
 
     func scheduleTaskReminder(for task: CRMTask) async {
-#if CONTEXTWARD_ACCEPTANCE
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        // The preview never registers notifications with the user's macOS account.
+        return
+#elseif CONTEXTWARD_ACCEPTANCE
         if Bundle.main.bundleURL.pathExtension == "app" {
             await scheduleTaskReminderInApp(for: task)
         }

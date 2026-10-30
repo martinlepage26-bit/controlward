@@ -67,6 +67,15 @@ enum OverviewModelTests {
             try expect(OverviewSnapshot.middleRowSplit == 0.45, "middle row split is 45/55")
             let single = OverviewSnapshot.make(opportunities: [Opportunity(name: "One", amount: 10, stage: .lead)], tasks: [], leads: [], companies: [], today: today, now: now)
             try expect(single.openOpportunities.trend.isEmpty && single.estimatedValue.trend.isEmpty, "fewer than 2 records draws a flat sparkline, not a trend")
+
+            // Preview badge outside acceptance builds; the environment is passed in, the process environment is untouched.
+            let realMail = MailMetadata(sourceID: "m1", subject: "Real", sender: "a@example.test", recipient: "b@example.test",
+                                        receivedAt: "2026-10-17T10:00:00Z", provider: "gmail", accountID: "b@example.test", synthetic: false)
+            var syntheticMail = realMail; syntheticMail.synthetic = true
+            try expect(PreviewBadge.isShowing(environment: ["CONTROLWARD_PREVIEW": "synthetic"], mail: [realMail]), "CONTROLWARD_PREVIEW=synthetic alone shows the preview badge")
+            try expect(PreviewBadge.isShowing(environment: [:], mail: [realMail, syntheticMail]), "synthetic mail alone shows the preview badge")
+            try expect(!PreviewBadge.isShowing(environment: [:], mail: [realMail]) && !PreviewBadge.isShowing(environment: ["CONTROLWARD_PREVIEW": "empty"], mail: [realMail]),
+                       "real mail without the synthetic preview hides the badge")
             print("Overview model tests: \(count)/\(count) passed")
             return true
         } catch {

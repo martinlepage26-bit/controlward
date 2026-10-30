@@ -348,7 +348,13 @@ struct LeadEditorView: View {
             URLQueryItem(name: "subject", value: "Following up\(draft.service.isEmpty ? "" : " - \(draft.service)")"),
             URLQueryItem(name: "body", value: message),
         ]
-        if let url = components.url { NSWorkspace.shared.open(url) }
+        if let url = components.url {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+            writerNote = "External apps are disabled in the isolated preview."
+#else
+            NSWorkspace.shared.open(url)
+#endif
+        }
     }
 
     private func markSent() {

@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ControlWard — Business Capture",
+  "version": "0.1.0",
+  "description": "Explicitly capture a business page, review ControlWard’s native qualification, and save only after confirmation.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel", "contextMenus", "nativeMessaging"],
+  "background": { "service_worker": "dist/service-worker.js" },
+  "action": { "default_title": "Open ControlWard capture", "default_popup": "popup.html" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+  }
+}

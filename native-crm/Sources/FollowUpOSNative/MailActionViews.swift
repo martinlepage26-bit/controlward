@@ -44,8 +44,12 @@ final class MailActionModel: ObservableObject {
     @Published var loading = false
     private var connector: (any MailboxConnecting)?
 
-    /// Test mode (S1-R2): set CONTROLWARD_MAIL_TEST_ALLOWLIST to the allowlisted addresses before a live check.
+    /// Preview sends are always refused; normal builds retain the opt-in environment policy.
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+    private let policy = MailSendPolicy.testMode([])
+#else
     private let policy = MailSendPolicy.fromEnvironment()
+#endif
 
     func load(message: MailMetadata, intake: MailIntakeController, store: AppStore) async {
         loading = true

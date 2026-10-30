@@ -106,12 +106,13 @@ enum LeadPipelineTests {
         let now = LeadKit.now
         let expect = PortableCheck.expect
 
-        return await PortableCheck.suite("Lead pipeline", [
+        let caseGroup1: [(String, () async throws -> Void)] = [
             ("ICP config: seven confirmed segments, equal priority, valid", {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
                 try expect(config.conflictAreas.first?.description == region02ConflictDescription, "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
-                try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "2456 rue de Rouen, Montréal QC H2K 1M2", "sender identity")
+                let raw = try ICPConfig.load(directory: LeadKit.configDirectory) // the checked-in file, not LeadKit's synthetic street
+                try expect(raw.sender.from == "ml@pharos-ai.ca" && raw.sender.mailingAddress == "PLACEHOLDER street, city, province, postal code", "sender identity keeps the street out of the repo")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
             ("ICP config: clinic and trades take named people from the own site only", {
@@ -288,6 +289,8 @@ enum LeadPipelineTests {
                 }
                 try expect(skips.contains { $0.target == "osm:node/1002" && $0.result == "skipped:no-own-website-on-the-listing" }, "no-website skip: \(skips.map(\.text))")
             }),
+        ]
+        let caseGroup2: [(String, () async throws -> Void)] = [
             ("Wait time (Earth 8:20): each Overpass host attempt logs how long the query actually waited, in ms", {
                 let inner = FakeLeadTransport()
                 inner.enqueue(LeadDiscovery.overpass.absoluteString, status: 504, body: "gateway timeout")
@@ -339,7 +342,10 @@ enum LeadPipelineTests {
                 let found = await LeadDiscovery(transport: guarded, jitter: { 0 }).search(selectors: ["healthcare=clinic"], latitude: lat, longitude: lon, radiusMeters: 3000, limit: 5)
                 try expect(found.map(\.osmID) == ["osm:node/3001"], "only the hit inside 3 km is kept: \(found.map(\.osmID))")
                 let posts = inner.requests.filter { $0.httpMethod == "POST" }
-                try expect(posts.count == tiles.count, "one Overpass query per cell until the limit: \(posts.count) for \(tiles.count) cells")
+                let postCount: Int = posts.count
+                let tileCount: Int = tiles.count
+                let queryCountMessage: String = "one Overpass query per cell until the limit: \(postCount) for \(tileCount) cells"
+                try expect(postCount == tileCount, queryCountMessage)
                 let bodies = posts.compactMap { $0.httpBody.map { String(decoding: $0, as: UTF8.self).removingPercentEncoding ?? "" } }
                 try expect(bodies.allSatisfy { $0.contains("around:\(shape.tileRadiusMeters),") }, "each query asks for a \(shape.tileRadiusMeters) m cell")
             }),
@@ -413,6 +419,8 @@ enum LeadPipelineTests {
                 let lines = ProspectDisplay.lines(for: LeadKit.readyClinic(), config: config)
                 try expect(lines.contains { $0.hasPrefix("Trigger (live)") } && lines.contains { $0.hasPrefix("Risk: ") }, "\(lines)")
             }),
+        ]
+        let caseGroup3: [(String, () async throws -> Void)] = [
             ("Recall fixture: an award notice turns a tender trigger gone (synthetic, SAAQ-like)", {
                 let open = WatchItem(id: "t-1", title: "Services-conseils IA", link: "https://www.seao.ca/avis/t-1", organisation: "Société Fictive de l'Assurance",
                                      deadline: now.addingTimeInterval(10 * 86_400), status: "Ouvert")
@@ -428,7 +436,8 @@ enum LeadPipelineTests {
                 var after = before
                 after.deadline = ISO8601DateFormatter().date(from: "2026-11-05T21:00:00Z")
                 try expect(TenderWatcher.state(previous: before, current: after) == .changed, "deadline moved = changed")
-                try expect(TenderWatcher.state(previous: before, current: before) == .live, "unchanged = live")
+                let unchangedState: TriggerState = TenderWatcher.state(previous: before, current: before)
+                try expect(unchangedState == .live, "unchanged = live")
                 try expect(TenderWatcher.state(previous: before, current: nil) == .gone, "no longer listed = gone")
             }),
             ("Recall fixture: an inferred-only institutional prospect is rejected (synthetic, Fonds-FTQ-like)", {
@@ -466,6 +475,58 @@ enum LeadPipelineTests {
                 try expect(triggers.first?.kind == "ai_tool_on_own_site" && triggers.first?.origin == .pageFetch, "\(triggers)")
                 try expect(SiteExtractor.read(html: "<p>Aucune sollicitation svp</p>", url: URL(string: LeadKit.homePage)!, fetchedAt: now).refusesSolicitation, "no-solicitation notice")
             }),
+            ("Site extractor: tender trigger needs procurement-specific language", {
+                let segment = try unwrap(config.segment("ai_governance_need"), "ai_governance_need")
+                let pageURL = URL(string: "https://fixture.example.test/")!
+                func kinds(_ html: String, segment: ICPConfig.Segment) -> [String] {
+                    let page = SiteExtractor.read(html: html, url: pageURL, fetchedAt: now)
+                    return SiteExtractor.triggers(in: page, segment: segment, config: config).map(\.kind)
+                }
+                try expect(!kinds("<title>governance</title>", segment: segment).contains("tender"), "generic English governance is not a tender")
+                try expect(!kinds("<title>gouvernance</title>", segment: segment).contains("tender"), "generic French gouvernance is not a tender")
+                try expect(kinds("<title>Avis d'appel d'offres</title>", segment: segment).contains("tender"), "French call for tenders remains a trigger")
+                try expect(kinds("<title>Request for Proposals</title>", segment: segment).contains("tender"), "English request for proposals remains a trigger")
+                try expect(kinds("<title>Operations</title>", segment: segment).isEmpty, "neutral page has no trigger")
+                let aiGovernance = kinds("<title>AI governance</title>", segment: segment)
+                try expect(aiGovernance.contains("newsroom") && !aiGovernance.contains("tender"), "newsroom trigger remains without tender false positive: \(aiGovernance)")
+                let englishAI = kinds("<title>Artificial intelligence</title>", segment: segment)
+                try expect(englishAI.contains("newsroom") && !englishAI.contains("tender"), "English newsroom signal remains: \(englishAI)")
+                let frenchAI = kinds("<title>Intelligence artificielle</title>", segment: segment)
+                try expect(frenchAI.contains("newsroom") && !frenchAI.contains("tender"), "French newsroom signal remains: \(frenchAI)")
+                let clinic = try unwrap(config.segment("clinic"), "clinic")
+                try expect(kinds("<p>Prendre rendez-vous en ligne</p>", segment: clinic).contains("ai_tool_on_own_site"), "clinic online-booking trigger remains")
+                var openTenderLead = LeadKit.readyClinic()
+                openTenderLead.openTenderURL = "https://www.seao.ca/avis/fictif"
+                let verdict = LeadDefinition.evaluate(openTenderLead, config: config, now: now)
+                try expect(verdict.status == .fix && verdict.reasons.contains("open tender"), "open-tender exclusion remains: \(verdict)")
+            }),
+            ("Site extractor: each configured tender phrase matches body text", {
+                let segment = try unwrap(config.segment("ai_governance_need"), "ai_governance_need")
+                let pageURL = URL(string: "https://fixture.example.test/")!
+                let tenderPhrases = [
+                    "appel d'offres",
+                    "appel d’offre",
+                    "demande de propositions",
+                    "request for proposals",
+                    "request for proposal",
+                    "request for tender",
+                    "invitation to tender",
+                    "public tender"
+                ]
+                try expect(Set(config.triggerSignals["tender"] ?? []) == Set(tenderPhrases), "configured tender phrases: \(config.triggerSignals["tender"] ?? [])")
+                for phrase in tenderPhrases {
+                    let html = "<html><body><p>\(phrase)</p></body></html>"
+                    let page = SiteExtractor.read(html: html, url: pageURL, fetchedAt: now)
+                    let kinds = SiteExtractor.triggers(in: page, segment: segment, config: config).map(\.kind)
+                    try expect(kinds.contains("tender"), "body phrase '\(phrase)' produces tender: \(kinds)")
+                }
+                for genericPhrase in ["governance", "gouvernance"] {
+                    let html = "<html><body><p>\(genericPhrase)</p></body></html>"
+                    let page = SiteExtractor.read(html: html, url: pageURL, fetchedAt: now)
+                    let kinds = SiteExtractor.triggers(in: page, segment: segment, config: config).map(\.kind)
+                    try expect(!kinds.contains("tender"), "generic body phrase '\(genericPhrase)' is not tender: \(kinds)")
+                }
+            }),
             ("Guard: per-host rate limit waits 10 s between own-site requests", {
                 let inner = FakeLeadTransport()
                 inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n")
@@ -502,6 +563,8 @@ enum LeadPipelineTests {
                 }
                 try expect(inner.requests.isEmpty, "0 requests")
             }),
+        ]
+        let caseGroup4: [(String, () async throws -> Void)] = [
             ("Guard: RBQ only through the one fixed JSON link; never /api/, /recherche/api/ or a query string", {
                 let source = try unwrap(RBQOpenData.source(config), "rbq")
                 let inner = FakeLeadTransport()
@@ -851,6 +914,8 @@ enum LeadPipelineTests {
                 let two = try unwrap(checks.first { $0.number == 2 }, "check 2")
                 try expect(two.passed, "check 2 after save and read back: \(two.detail)")
             }),
+        ]
+        let caseGroup5: [(String, () async throws -> Void)] = [
             ("Live proof cause 1 (Water 10:13, 0 contacts): the crawl follows the home page's own links to its team and contact pages when the guessed paths are missing", {
                 let fixture = SearchFixture(config: config)
                 let site = "https://www.clinique-exemple.test"
@@ -994,6 +1059,8 @@ enum LeadPipelineTests {
                 let empty = try unwrap(none.first { $0.number == 3 }, "check 3")
                 try expect(!empty.passed && empty.detail.contains("ready=0") && empty.detail.contains("drafted=0"), "zero Ready is counted: \(empty.detail)")
             }),
+        ]
+        let caseGroup6: [(String, () async throws -> Void)] = [
             ("LIVE-R6 (cross-record merge): two prospects on different own domains that share a phone line stay two records, each with only its own evidence", {
                 let first = LeadR6.record(LeadKit.readyClinic(), phone: "514 555 0100")
                 let second = try LeadR6.moved(LeadKit.readyClinic(id: "cw:osm:way/3003"), to: "universite-fictive.test", phone: "514 555 0100")
@@ -1154,6 +1221,8 @@ enum LeadPipelineTests {
                 try expect(!result.lines.contains { $0.hasPrefix("expected \(total) failures, got") && $0.hasSuffix(": OK") }, "no OK line when a red slips")
                 try expect(LeadPipelinePlantedReds.tallyMessage(expected: total, got: result.failures) == "Slice 3 planted reds: expected \(total) failures, got \(slippedTotal): MISMATCH", "fatal text carries \(slippedTotal)")
             }),
+        ]
+        let caseGroup7: [(String, () async throws -> Void)] = [
             ("Planted-red tally (CI 9:45): a missing pharos-api vitest report reads NOT-RUN, never 'accepted'; the failure text carries the real counts", {
                 let missing = FileManager.default.temporaryDirectory.appendingPathComponent("cw-no-report-\(UUID().uuidString).json").path
                 for path in [nil, "", missing] as [String?] {
@@ -1323,6 +1392,36 @@ enum LeadPipelineTests {
                 try expect(report.skipped["osm:node/3001"] == "website host not fetchable" && !fixture.inner.urls.contains { $0.contains("192.168") },
                            "listing with an internal website: \(report.skipped)")
             }),
+            ("Own-site SSRF after DNS: a name that resolves to loopback, private, link-local, IPv6 non-public, or nothing is refused before the network; a same-domain redirect to such an address is refused too", {
+                let inner = FakeLeadTransport()
+                inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                inner.respond(LeadKit.homePage, body: "<p>Bonjour</p>", headers: ["content-type": "text/html"])
+                inner.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://cdn.clinique-exemple.test/secret"])
+                for addresses in [["127.0.0.1"], ["10.1.2.3"], ["192.168.0.9"], ["172.16.0.4"], ["169.254.169.254"], ["::1"], ["fe80::1"], ["fd00::1"], []] as [[String]] {
+                    let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { _ in addresses })
+                    do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "admitted \(addresses)") }
+                    catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", "\(addresses): \(refusal)") }
+                }
+                try expect(inner.requests.isEmpty, "DNS refusals reached the network: \(inner.urls)")
+                let redirected = FakeLeadTransport()
+                redirected.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                redirected.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://cdn.clinique-exemple.test/secret"])
+                redirected.respond("https://cdn.clinique-exemple.test/secret", body: "<p>secret</p>")
+                let guardRedirect = GuardedLeadTransport(config: config, inner: redirected, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { host in
+                    host == "cdn.clinique-exemple.test" ? ["10.0.0.1"] : ["1.1.1.1"]
+                })
+                do { _ = try await guardRedirect.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "followed private redirect") }
+                catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", refusal.code) }
+                try expect(!redirected.urls.contains { $0.contains("cdn.clinique-exemple") }, "private redirect was fetched: \(redirected.urls)")
+                let openInner = FakeLeadTransport()
+                openInner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                openInner.respond(LeadKit.homePage, body: "<p>Bonjour</p>", headers: ["content-type": "text/html"])
+                let open = GuardedLeadTransport(config: config, inner: openInner, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { _ in ["1.1.1.1"] })
+                let response = try await open.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain))
+                try expect(response.status == 200, "public DNS refused: \(response.status)")
+                let localhost = SystemHostLookup.addresses("localhost")
+                try expect(!localhost.isEmpty && localhost.allSatisfy(HostSafety.isNonPublic), "localhost resolves non-public: \(localhost)")
+            }),
             ("Redirects: an off-site hop is refused with no snapshot; a same-domain hop is re-admitted and robots-checked; at most 3 hops", {
                 let inner = FakeLeadTransport()
                 inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
@@ -1342,7 +1441,7 @@ enum LeadPipelineTests {
                     catch let refusal as LeadPipelineRefusal { return refusal.code } catch { return "error" }
                 }
                 for (raw, expected, label) in [(LeadKit.homePage, "refused:redirect-off-site", "off-site"),
-                                               ("https://www.clinique-exemple.test/ip", "refused:redirect-off-site", "redirect to an IP literal"),
+                                               ("https://www.clinique-exemple.test/ip", "refused:own-site-host", "redirect to an IP literal"),
                                                (LeadKit.teamPage, "refused:robots", "same-domain hop is robots-checked"),
                                                ("https://www.clinique-exemple.test/a-propos", "ok:200:\(LeadKit.contactPage)", "same-site hop followed, final URL kept"),
                                                ("https://www.clinique-exemple.test/r1", "refused:redirect-limit", "more than 3 hops")] {
@@ -1405,6 +1504,8 @@ enum LeadPipelineTests {
                 legacy.contentHash = ""
                 try expect(OutreachSendGate.check(draft, approval: legacy, config: cfg, suppression: SuppressionList())?.code == "refused:approval-content-mismatch", "an approval without a hash")
             }),
+        ]
+        let caseGroup8: [(String, () async throws -> Void)] = [
             ("Push policy: Swift LeadPushPolicy refuses a blank form source and a test flag that is not a real boolean, like pharos-api", {
                 let refused: [[String: Any]] = [["provenance": ["kind": "inbound_form", "form_source": "   "]], ["provenance": ["kind": "inbound_form", "form_source": "\n\t"]],
                                                 ["test": "true"], ["test": 1], ["test": NSNumber(value: 1)], ["provenance": ["kind": "inbound_form"]], [:]]
@@ -1429,7 +1530,7 @@ enum LeadPipelineTests {
                 let prospect = LeadKit.readyClinic()
                 for language in ["fr", "en"] {
                     let draft = LeadKit.draft(for: prospect, config: config, language: language)
-                    try expect(draft.body.contains("PHAROS AI") && draft.body.contains("2456 rue de Rouen, Montréal QC H2K 1M2") && draft.from == "ml@pharos-ai.ca", language)
+                    try expect(draft.body.contains("PHAROS AI") && draft.body.contains(config.sender.mailingAddress) && draft.from == "ml@pharos-ai.ca", language)
                     let refusal = OutreachDraftGate.check(draft, prospect: prospect, config: config, suppression: SuppressionList(), now: now)
                     try expect(refusal == nil, "\(language): \(String(describing: refusal))")
                 }
@@ -1469,6 +1570,26 @@ enum LeadPipelineTests {
                 try expect(LeadDefinition.realLeadCount(store.records, config: config, now: now) == 1, "test lead excluded")
                 try expect(audit.lines.count == 1 && audit.lines[0].action == "ingest" && audit.lines[0].surface == "leads", "one ingest line")
             }),
+            ("Ingest: disk transaction preserves the register and requires explicit duplicate approval", {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-transaction-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: root) }
+                let file = root.appendingPathComponent("prospects.json")
+                let store = ProspectLeadsStore(fileURL: file)
+                let original = LeadKit.readyClinic(id: "cw:chrome:one", email: "info@clinique-exemple.test")
+                try store.transaction { $0.append(original) }
+                let incoming = LeadKit.readyClinic(id: "cw:chrome:two", email: "info@clinique-exemple.test")
+                let audit = MemoryAuditSink()
+                let denied = await ProspectIngest.ingest([incoming], into: store, config: config, now: now, audit: audit,
+                    duplicateApproval: .init(action: "create", expectedID: nil))
+                try expect(denied.storageError == "refused:duplicate-changed", "unreviewed match refused: \(String(describing: denied.storageError))")
+                try expect(try store.snapshot().map(\.id) == [original.id], "denied duplicate leaves register unchanged")
+                let approved = await ProspectIngest.ingest([incoming], into: store, config: config, now: now, audit: audit,
+                    duplicateApproval: .init(action: "update", expectedID: original.id))
+                try expect(approved.merged == [original.id] && approved.storageError == nil, "explicit update accepted")
+                try expect(try store.snapshot().count == 1, "safe retry remains one record")
+                let mode = (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue
+                try expect(mode == SecureFiles.fileMode, "lead register permissions are 600: \(String(describing: mode))")
+            }),
             ("CW-AUDIT: lines round-trip and registers drop query strings", {
                 let line = CWAuditLine(ts: now, surface: "leads", action: "fetch", register: CWAuditLine.register(for: URL(string: "https://a.test/p?email=x%40y.test#f")),
                                        target: "a.test", source: "own-site", result: "ok")
@@ -1493,8 +1614,14 @@ enum LeadPipelineTests {
             ("Environment: a run from an empty folder fills the Leads list, saves the draft locally and passes the bar", {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-leads-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: root) }
-                let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
-                let fixture = SearchFixture(config: config)
+                let loaded = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
+                try expect(loaded.config.sender.mailingAddress == "PLACEHOLDER street, city, province, postal code",
+                           "the environment loads the checked-in placeholder: \(loaded.config.sender.mailingAddress)")
+                // Only the sender street changes, so the draft clears the generic placeholder-address rule.
+                var addressed = loaded.config
+                addressed.sender.mailingAddress = LeadKit.senderMailingAddress
+                let env = LeadPipelineEnvironment(config: addressed, root: loaded.root)
+                let fixture = SearchFixture(config: addressed)
                 let audit = env.audit
                 let launch = env.recordLaunch(audit: audit, now: fixture.clock.now)
                 try expect(launch == 0, "store empty at launch")
@@ -1503,11 +1630,13 @@ enum LeadPipelineTests {
                 try expect(reports.count == 1 && reports[0].drafts.count == 1, "one draft")
                 let inputs = env.proofInputs()
                 try expect(inputs.launchCount == 0 && inputs.prospects.count == 1 && inputs.drafts.count == 1, "read back \(inputs.launchCount) \(inputs.prospects.count) \(inputs.drafts.count)")
-                let checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, auditLines: inputs.lines, prospects: inputs.prospects, drafts: inputs.drafts, config: config)
+                let checks = LeadProofVerifier.verify(storeCountAtLaunch: inputs.launchCount, auditLines: inputs.lines, prospects: inputs.prospects, drafts: inputs.drafts, config: addressed)
                 for check in checks { try expect(check.passed, "bar \(check.number) \(check.name): \(check.detail)") }
                 try expect(inputs.lines.contains { $0.contains("surface=leads action=ingest") }, "ingest line")
                 try expect(env.recordLaunch(audit: MemoryAuditSink()) == 1, "second launch sees one stored prospect")
             }),
+        ]
+        let caseGroup9: [(String, () async throws -> Void)] = [
             ("Research: observed_facts and assessment come from the own site, every fact with verbatim evidence", {
                 let fixture = SearchFixture(config: config)
                 let report = await fixture.run()
@@ -1678,9 +1807,10 @@ enum LeadPipelineTests {
                 if lacVerdict.status != .conflictReview || !lacVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
                     misses.append("Lac-Saint-Jean: \(lacVerdict.status) \(lacVerdict.reasons)")
                 }
-                // A longer name that only contains Saint-Bruno is unknown and held, the same rule as Chicoutimi-Nord.
+                // Saint-Bruno-de-Montarville is its own municipality outside region 02. An exact MAMH
+                // name is outside; it is not held just because it contains Saint-Bruno.
                 let montarville = LeadDefinition.rbqAreaMatch("Saint-Bruno-de-Montarville", area: area)
-                if montarville != .unknown { misses.append("Saint-Bruno-de-Montarville match \(montarville), expected unknown") }
+                if montarville != .outside { misses.append("Saint-Bruno-de-Montarville match \(montarville), expected outside") }
                 try expect(misses.isEmpty, misses.joined(separator: " | "))
                 let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
                 let citations = [
@@ -1735,6 +1865,327 @@ enum LeadPipelineTests {
                     if verdict.status == .conflictReview || verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
                         misses.append("\(town) must stay clear: \(verdict.status) \(verdict.reasons)")
                     }
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("G7/G8 anywhere is unknown, and another Québec municipality is outside before containment (Argus follow-up)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                func stored(_ town: String) -> (record: ProspectRecord, verdict: LeadDefinition.Verdict) {
+                    var record = plumber(town)
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    record.status = verdict.status
+                    record.reasons = verdict.reasons
+                    return (record, verdict)
+                }
+                var misses: [String] = []
+                let stillInside = ["Alma", "Roberval", "Saint-Bruno", "Saint-Ambroise", "Saint-Honoré", "Saint-Gédéon",
+                                   "Saint-Nazaire", "Saint-Stanislas", "Delisle", "La Baie", "Saguenay", "Arvida"]
+                var heldRecords: [ProspectRecord] = []
+                for town in stillInside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .inside(town) { misses.append("\(town) match \(match), expected inside") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status != .conflictReview || !lavoie { misses.append("\(town) dropped: \(verdict.status) \(verdict.reasons)") }
+                    heldRecords.append(record)
+                }
+                let postalUnknown = ["Montréal G7H 1A1", "Laval G7S", "Alma G8B 1A1"]
+                for town in postalUnknown {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .unknown { misses.append("\(town) match \(match), expected unknown") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) came out \(verdict.status) \(verdict.reasons)")
+                    }
+                    heldRecords.append(record)
+                }
+                let outside = ["Saint-Augustin-de-Desmaures", "Saint-Bruno-de-Montarville", "Saint-Bruno-de-Guigues",
+                               "Saint-Ambroise-de-Kildare", "Saint-Gédéon-de-Beauce", "Saint-Honoré-de-Shenley",
+                               "Saint-Nazaire-d'Acton", "Saint-Stanislas-de-Kostka", "La Baie-James",
+                               "Rue Alma, Montréal"]
+                var outsideRecords: [ProspectRecord] = []
+                for town in outside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .outside { misses.append("\(town) match \(match), expected outside") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status == .conflictReview || lavoie || verdict.status == .ready && lavoie {
+                        misses.append("\(town) held: \(verdict.status) \(verdict.reasons)")
+                    }
+                    if verdict.status == .conflictReview { misses.append("\(town) is conflictReview") }
+                    outsideRecords.append(record)
+                }
+                let queued = ProspectIngest.heldForMartin(heldRecords + outsideRecords)
+                let queuedIDs = Set(queued.map(\.town))
+                for record in heldRecords where !queuedIDs.contains(record.town) {
+                    misses.append("held queue dropped \(record.town ?? "-")")
+                }
+                for record in outsideRecords where queuedIDs.contains(record.town) {
+                    misses.append("held queue includes outside town \(record.town ?? "-")")
+                }
+                let conflictCount = (heldRecords + outsideRecords).filter { $0.status == .conflictReview }.count
+                if queued.count != conflictCount { misses.append("held queue \(queued.count) != conflictReview \(conflictCount)") }
+                for record in queued {
+                    let lines = ProspectDisplay.lines(for: record, config: config).joined(separator: "\n")
+                    if !lines.contains("sos-plomberie-excavation-lavoie") {
+                        misses.append("held row has no reason: \(record.town ?? "-") \(lines)")
+                    }
+                }
+                let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
+                if !raw.contains("column munnom") || !raw.contains("Eeyou Istchee Baie-James") || !raw.contains("before partial-name containment") {
+                    misses.append("icp.json does not cite the full MAMH munnom list checked before containment")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+        ]
+        let caseGroup10: [(String, () async throws -> Void)] = [
+            ("Shared MAMH names are unknown, never outside or Ready (Argus follow-up)", {
+                // MAMH Répertoire des municipalités, https://donneesouvertes.affmunqc.net/repertoire/MUN.csv,
+                // columns munnom and regadm only, 1281 organisations, checked 2026-10-27.
+                // A name on the region-02 list that also has an organisation outside region 02 is ambiguous.
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                let listed = try unwrap(area.municipalities, "region-02 municipalities")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                func stored(_ town: String) -> (record: ProspectRecord, verdict: LeadDefinition.Verdict) {
+                    var record = plumber(town)
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    record.status = verdict.status
+                    record.reasons = verdict.reasons
+                    return (record, verdict)
+                }
+                func sharedNames(from rows: [(name: String, region: String)], list: [String]) -> [String] {
+                    let outside = Set(rows.compactMap { row -> String? in
+                        row.region == "02" ? nil : LeadDefinition.placeKey(row.name)
+                    })
+                    return list.filter { outside.contains(LeadDefinition.placeKey($0)) }
+                }
+                let fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/mamh-mun-regions.tsv")
+                let fixtureText = try String(contentsOf: fixtureURL, encoding: .utf8)
+                var fixtureRows: [(name: String, region: String)] = []
+                var misses: [String] = []
+                if !fixtureText.contains("https://donneesouvertes.affmunqc.net/repertoire/MUN.csv") || !fixtureText.contains("regadm") || !fixtureText.contains("1281 organisations") {
+                    misses.append("MAMH fixture does not cite munnom/regadm, 1281 organisations, checked 2026-10-27")
+                }
+                for line in fixtureText.split(whereSeparator: \.isNewline) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                    let cols = trimmed.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                    guard cols.count >= 2 else { misses.append("bad MAMH row \(trimmed)"); continue }
+                    fixtureRows.append((name: cols[0], region: cols[1]))
+                }
+                if fixtureRows.count != 1281 { misses.append("MAMH fixture has \(fixtureRows.count) organisations, expected 1281") }
+                let shared = sharedNames(from: fixtureRows, list: listed)
+                if shared.isEmpty { misses.append("no shared MAMH names on the region-02 list") }
+                var heldRecords: [ProspectRecord] = []
+                for town in shared {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if match == .outside || verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) came out \(verdict.status) \(verdict.reasons) match \(match)")
+                    }
+                    heldRecords.append(record)
+                }
+                let augustin = LeadDefinition.rbqAreaMatch("Saint-Augustin", area: area)
+                if augustin == .outside { misses.append("Saint-Augustin match \(augustin), expected held") }
+                let desmaures = LeadDefinition.rbqAreaMatch("Saint-Augustin-de-Desmaures", area: area)
+                if desmaures != .outside { misses.append("Saint-Augustin-de-Desmaures match \(desmaures), expected outside") }
+                // A non-G7/G8 postal code must not clear a shared name. G7/G8 stays unknown too.
+                let postalHeld = ["Sainte-Monique H2X 1Y4", "Saint-Stanislas G0X 1A1", "Sainte-Monique G7H 1A1", "Saint-Augustin G8B 2C3"]
+                for town in postalHeld {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .unknown { misses.append("\(town) match \(match), expected unknown") }
+                    let (record, verdict) = stored(town)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) came out \(verdict.status) \(verdict.reasons)")
+                    }
+                    heldRecords.append(record)
+                }
+                let outside = ["Saint-Augustin-de-Desmaures", "Saint-Bruno-de-Montarville", "Saint-Bruno-de-Guigues",
+                               "Saint-Ambroise-de-Kildare", "Saint-Gédéon-de-Beauce", "Saint-Honoré-de-Shenley",
+                               "Saint-Nazaire-d'Acton", "Saint-Stanislas-de-Kostka", "La Baie-James",
+                               "Rue Alma, Montréal"]
+                var outsideRecords: [ProspectRecord] = []
+                for town in outside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .outside { misses.append("\(town) match \(match), expected outside") }
+                    let (record, verdict) = stored(town)
+                    if verdict.status == .conflictReview || verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                        misses.append("\(town) held: \(verdict.status) \(verdict.reasons)")
+                    }
+                    outsideRecords.append(record)
+                }
+                let keepInside = listed.filter { !shared.contains($0) }
+                for town in keepInside {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    if match != .inside(town) { misses.append("\(town) match \(match), expected inside") }
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    if verdict.status != .conflictReview || !verdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) || verdict.status == .ready {
+                        misses.append("\(town) dropped: \(verdict.status) \(verdict.reasons)")
+                    }
+                }
+                let queued = ProspectIngest.heldForMartin(heldRecords + outsideRecords)
+                let queuedTowns = Set(queued.map(\.town))
+                for record in heldRecords where !queuedTowns.contains(record.town) {
+                    misses.append("held queue dropped \(record.town ?? "-")")
+                }
+                for record in outsideRecords where queuedTowns.contains(record.town) {
+                    misses.append("held queue includes outside town \(record.town ?? "-")")
+                }
+                for record in queued {
+                    let lines = ProspectDisplay.lines(for: record, config: config).joined(separator: "\n")
+                    if !lines.contains("sos-plomberie-excavation-lavoie") {
+                        misses.append("held row has no reason: \(record.town ?? "-")")
+                    }
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Comma locality is outside only for an exact MAMH municipality outside region 02 (Earth and Argus)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                let held = ["Alma, Lac-Saint-Jean", "Roberval, Lac-St-Jean", "Chambord, Lac-Saint-Jean",
+                            "123 rue Racine, Chicoutimi-Nord", "123 rue X, Chicoutimii",
+                            "Saguenay, Canada", "Alma, Canada", "Alma, Québec, Canada",
+                            "123 rue Racine, Chicoutimi, QC, Canada", "Jonquière, Saguenay–Lac-Saint-Jean",
+                            "Roberval, Lac-Saint-Jean", "Roberval, Lac St-Jean", "Dolbeau, Lac-Saint-Jean",
+                            "Alma, Lac-Saint-Jean-Est", "Saint-Félicien, Domaine-du-Roy",
+                            "Saint-Stanislas, G0X 1A1", "Alma, Michigan", "Delisle, Saskatchewan"]
+                var misses: [String] = []
+                for town in held {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if match == .outside || verdict.status == .ready || verdict.status != .conflictReview || !lavoie {
+                        misses.append("\(town) match \(match) \(verdict.status)")
+                    }
+                }
+                let desmaures = "123 rue Y, Saint-Augustin-de-Desmaures"
+                let outsideMatch = LeadDefinition.rbqAreaMatch(desmaures, area: area)
+                let outsideVerdict = LeadDefinition.evaluate(plumber(desmaures), config: config, now: now)
+                if outsideMatch != .outside || outsideVerdict.status == .conflictReview
+                    || outsideVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("\(desmaures) match \(outsideMatch) \(outsideVerdict.status)")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("MRC names stay unknown, and a G7/G8 code in any address field is held (Argus should-fix)", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                func plumber(_ town: String) -> ProspectRecord {
+                    var record = LeadKit.readyClinic()
+                    record.segment = "construction_trades"
+                    record.organisation = "Plomberie Fictive \(town)"
+                    record.osmTags = ["craft=plumber"]
+                    record.rbqCheck = "matched"
+                    record.rbqCategories = ["1.3"]
+                    record.town = town
+                    return record
+                }
+                var misses: [String] = []
+                for town in ["Domaine-du-Roy", "Maria-Chapdelaine", "Lac-Saint-Jean-Est"] {
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let verdict = LeadDefinition.evaluate(plumber(town), config: config, now: now)
+                    let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                    if match != .unknown || verdict.status != .conflictReview || !lavoie || verdict.status == .ready {
+                        misses.append("\(town) match \(match) \(verdict.status)")
+                    }
+                }
+                var licenceTown = plumber("Montréal")
+                licenceTown.rbqMunicipality = "Montréal"
+                licenceTown.town = "G7H 1A1"
+                let licenceVerdict = LeadDefinition.evaluate(licenceTown, config: config, now: now)
+                if licenceVerdict.status != .conflictReview || !licenceVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("RBQ Montréal with town G7H 1A1 \(licenceVerdict.status) \(licenceVerdict.reasons)")
+                }
+                var street = plumber("Montréal")
+                street.town = "Montréal"
+                street.address = "123 rue Racine G7H 1A1"
+                let streetVerdict = LeadDefinition.evaluate(street, config: config, now: now)
+                if streetVerdict.status != .conflictReview || !streetVerdict.reasons.contains(where: { $0.contains("sos-plomberie-excavation-lavoie") }) {
+                    misses.append("Montréal town with G7H street \(streetVerdict.status) \(streetVerdict.reasons)")
+                }
+                let raw = try String(contentsOf: LeadKit.configDirectory.appendingPathComponent("icp.json"), encoding: .utf8)
+                if raw.contains("Saint-Bruno-de-Montarville containing Saint-Bruno, is unknown and held")
+                    || !raw.contains("Saint-Bruno-de-Montarville is outside and not held") {
+                    misses.append("icp.json still describes Saint-Bruno-de-Montarville as held")
+                }
+                try expect(misses.isEmpty, misses.joined(separator: " | "))
+            }),
+            ("Comma-branch mutation (3f33dd1): restoring outside-for-any-last-part is caught", {
+                let area = try unwrap(config.conflictAreas.first { $0.id == "sos-plomberie-excavation-lavoie" }, "sos area")
+                let places = try unwrap(area.municipalities, "region-02 municipalities")
+                // The comma branch at 3f33dd1: the last part is the town, and anything that is not an exact region-02 name is outside.
+                func outsideAt3f33dd1(_ text: String) -> Bool {
+                    var parts = text.split(separator: ",", omittingEmptySubsequences: true).map {
+                        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }.filter { !$0.isEmpty }
+                    while let last = parts.last {
+                        let key = LeadDefinition.placeKey(last)
+                        if key == "qc" || key == "quebec" { parts.removeLast(); continue }
+                        break
+                    }
+                    guard parts.count >= 2, let locality = parts.last else { return false }
+                    let loc = LeadDefinition.placeKey(locality)
+                    let region = places.contains { LeadDefinition.placeKey($0) == loc }
+                    return !loc.isEmpty && !region
+                }
+                let held = ["Alma, Lac-Saint-Jean", "Roberval, Lac-St-Jean", "Chambord, Lac-Saint-Jean",
+                            "123 rue Racine, Chicoutimi-Nord", "123 rue X, Chicoutimii",
+                            "Saguenay, Canada", "Alma, Canada", "Alma, Québec, Canada",
+                            "123 rue Racine, Chicoutimi, QC, Canada", "Jonquière, Saguenay–Lac-Saint-Jean",
+                            "Roberval, Lac-Saint-Jean", "Roberval, Lac St-Jean", "Dolbeau, Lac-Saint-Jean",
+                            "Alma, Lac-Saint-Jean-Est", "Saint-Félicien, Domaine-du-Roy"]
+                var misses: [String] = []
+                for town in held {
+                    if !outsideAt3f33dd1(town) { misses.append("3f33dd1 branch would not mark \(town) outside") }
+                    let match = LeadDefinition.rbqAreaMatch(town, area: area)
+                    let verdict = LeadDefinition.evaluate({
+                        var record = LeadKit.readyClinic()
+                        record.segment = "construction_trades"
+                        record.organisation = "Plomberie Fictive \(town)"
+                        record.osmTags = ["craft=plumber"]
+                        record.rbqCheck = "matched"
+                        record.rbqCategories = ["1.3"]
+                        record.town = town
+                        return record
+                    }(), config: config, now: now)
+                    if match == .outside || verdict.status == .ready {
+                        misses.append("live matcher still uses the 3f33dd1 comma branch: \(town) match \(match) \(verdict.status)")
+                    }
+                }
+                let sourceURL = LeadKit.sourcesDirectory.appendingPathComponent("LeadDefinition.swift")
+                let source = try String(contentsOf: sourceURL, encoding: .utf8)
+                if source.contains("if !loc.isEmpty { return .outside }") {
+                    misses.append("LeadDefinition.swift still has the 3f33dd1 comma return")
                 }
                 try expect(misses.isEmpty, misses.joined(separator: " | "))
             }),
@@ -1846,7 +2297,18 @@ enum LeadPipelineTests {
                 let checks = LeadProofVerifier.verify(storeCountAtLaunch: 3, auditLines: lines, prospects: report.prospects, drafts: report.drafts, config: config)
                 try expect(checks.first { $0.number == 1 }?.passed == false && checks.first { $0.number == 5 }?.passed == false, "\(checks)")
             })
-        ])
+        ]
+        var cases = caseGroup1
+        cases.append(contentsOf: caseGroup2)
+        cases.append(contentsOf: caseGroup3)
+        cases.append(contentsOf: caseGroup4)
+        cases.append(contentsOf: caseGroup5)
+        cases.append(contentsOf: caseGroup6)
+        cases.append(contentsOf: caseGroup7)
+        cases.append(contentsOf: caseGroup8)
+        cases.append(contentsOf: caseGroup9)
+        cases.append(contentsOf: caseGroup10)
+        return await PortableCheck.suite("Lead pipeline", cases)
     }
 
     static func unwrap<T>(_ value: T?, _ label: String) throws -> T {

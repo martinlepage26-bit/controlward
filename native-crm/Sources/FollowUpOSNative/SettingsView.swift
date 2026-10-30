@@ -109,9 +109,11 @@ struct SettingsView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                         Button("Import legacy workspace.json…") { importLegacyWorkspace() }
                             .buttonStyle(.bordered)
                             .help("One-time copy of native-crm/data/workspace.json from an earlier build. The original is kept.")
+#endif
                     }
                 } icon: {
                     Image(systemName: "internaldrive.fill").foregroundStyle(CRMTheme.moss)
@@ -149,6 +151,9 @@ struct SettingsView: View {
     }
 
     private func importLegacyWorkspace() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        store.notice = "File import is disabled in the isolated preview."
+#else
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
@@ -158,5 +163,6 @@ struct SettingsView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try store.importLegacyWorkspace(from: url) }
         catch { store.notice = "Legacy import failed: \(error.localizedDescription)" }
+#endif
     }
 }

@@ -186,10 +186,12 @@ struct MainWorkspaceView: View {
         .background(CWPalette.canvas)
         .environmentObject(modules)
         .environmentObject(navigation)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
         .task {
             await store.pullLeadsOnLaunch()
             await store.scheduleTaskReminders()
         }
+#endif
     }
 
     private func directory(_ kind: DirectoryKind) -> some View {
