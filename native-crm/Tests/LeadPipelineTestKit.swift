@@ -192,7 +192,7 @@ enum RBQFixture {
 
     /// Excerpt of RBQ's official sub-category list (annexes II and III), copied from
     /// https://www.rbq.gouv.qc.ca/licence/determiner-vos-sous-categories-de-licence/entrepreneur-specialise/sous-categories-dentrepreneur-specialise/
-    /// on 2026-10-23 06:50 EDT. Every code the config holds on must appear here with a plumbing or excavation title.
+    /// on 2026-10-23 06:50 EDT. Every code the config holds on must appear here with a plumbing title (2.5 stays listed as RBQ reference only).
     static let officialSubcategories: [String: String] = [
         "2.4": "Entrepreneur en systèmes d’assainissement autonome",
         "2.5": "Entrepreneur en excavation et terrassement",

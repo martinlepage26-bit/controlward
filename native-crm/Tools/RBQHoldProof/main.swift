@@ -79,10 +79,10 @@ for path in files {
         print("  check: \(wanted.map { String(perCode[$0, default: 0]) }.joined(separator: " + ")) - \(overlap) = \(wanted.reduce(0) { $0 + perCode[$1, default: 0] } - overlap) (held=\(held))")
         print("  not held: \(licences - held)")
     } catch let refusal as LeadPipelineRefusal {
-        print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): the app holds every construction_trades firm for rbq-licence-unverified, and keeps the SOS conflict for plumbing or excavation in region 02")
+        print("\(url.lastPathComponent) (\(bytes) bytes): \(refusal.code) (\(refusal.detail.isEmpty ? "-" : refusal.detail)): the app holds every construction_trades firm for rbq-licence-unverified, and keeps the SOS conflict for plumbing in region 02")
         status = 2
     } catch {
-        print("\(url.lastPathComponent): unreadable (\(error.localizedDescription)): the app holds every construction_trades firm for rbq-licence-unverified, and keeps the SOS conflict for plumbing or excavation in region 02")
+        print("\(url.lastPathComponent): unreadable (\(error.localizedDescription)): the app holds every construction_trades firm for rbq-licence-unverified, and keeps the SOS conflict for plumbing in region 02")
         status = 2
     }
 }
