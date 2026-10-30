@@ -43,7 +43,7 @@ struct ICPConfig: Codable, Equatable, Sendable {
         var rbqSubcategorySource: String?
         /// Segments named on this conflict for the old fail-closed note. The province-wide licence hold is
         /// `rbqLicenceHold`, not this field. Martin Lepage, 27 Oct 2026, 3:56 and 4:30 PM ET: this conflict
-        /// holds only plumbing or excavation inside region 02 (or an unreadable town when the trade matches).
+        /// holds only plumbing inside region 02 (30 Oct 2026, 12:39 PM ET: not excavation) (or an unreadable town when the trade matches).
         var rbqRequiredSegments: [String]?
         /// Conditions under which a listed code does NOT hold a licence (Water 7:20 / 7:26 AM ET, Air's map 10c). A code without a
         /// condition always holds. All codes come from config; nothing about specific codes is hard-coded.

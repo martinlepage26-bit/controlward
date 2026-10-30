@@ -69,8 +69,8 @@ another segment, area or a higher `--limit`.
 - RBQ open data (Source: RBQ / Données Québec, CC BY 4.0): only the two fixed download links in icp.json, used for
   discovery and for the conflict hold by licence category. Courriel, phone, Mandataire, address and NEQ are never stored.
   The field names are taken from the published field sheet; confirm them against the first real download.
-  The conflict hold (map tags such as `craft=plumber`, name keywords such as "plomberie", and the licence codes 15.5 and
-  2.5 under the bundle/1.x rule) applies only where the firm's town is exactly one of the conflict area's `municipalities`
+  The conflict hold (map tags such as `craft=plumber`, name keywords such as "plomberie", and the licence code 15.5;
+  plumbing only since Martin's 30 Oct 2026 12:39 PM ET ruling, so excavation and 2.5 no longer hold) applies only where the firm's town is exactly one of the conflict area's `municipalities`
   (the city of Saguenay, its boroughs and merged former towns; trimmed, case- and accent-insensitive, never a substring, so
   Petit-Saguenay is outside), or where no town is readable (held). The town is the licence's Municipalité, else the map
   listing's `addr:city`. `bin/prove-rbq-hold` prints the held total split by municipality, no-location and code.

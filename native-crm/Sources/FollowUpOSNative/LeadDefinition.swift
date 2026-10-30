@@ -102,9 +102,11 @@ enum LeadDefinition {
         return hold.segments.contains(segment)
     }
 
-    /// S3-R14 / S3-R17d: plumbing and excavation in the configured municipalities are held for Martin.
+    /// S3-R14 / S3-R17d: plumbing firms in the configured municipalities are held for Martin.
+    /// Martin Lepage, 30 Oct 2026, 12:39 PM ET: "Seulement la plomberie au Saguenay est un conflit, pas l'excavation."
+    /// Excavation, paving and terrassement are not this conflict anywhere; the trade lists live in icp.json.
     /// Martin Lepage, 27 Oct 2026, 3:55 PM ET: nothing outside those municipalities conflicts with SOS.
-    /// 3:56 PM ET: the firm must also be plumbing or excavation (selectors, keywords, or the area's RBQ codes).
+    /// 3:56 PM ET: the firm must also be in the area's trade (selectors, keywords, or the area's RBQ codes).
     /// 4:30 PM ET: the municipalities are Québec region 02. A town that cannot be read stays fail-closed when
     /// the trade signals or the codes match. RBQ licences hold on exact sub-category codes from config
     /// (one JSON record per licence), never on words.
