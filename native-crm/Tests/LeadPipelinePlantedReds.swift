@@ -110,7 +110,7 @@ enum LeadPipelinePlantedReds {
     // MARK: - Cases
 
     static func makeCases() throws -> [Case] {
-        let config = try LeadKit.config()
+        let config = try LeadKit.testConfig()
         let confirmed = try LeadKit.confirmed()
         let now = LeadKit.now
         var cases: [Case] = []

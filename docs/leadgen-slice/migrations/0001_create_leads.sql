@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS leads (id TEXT PRIMARY KEY, organization TEXT NOT NULL, segment TEXT NOT NULL, site TEXT NOT NULL, fit_reason TEXT NOT NULL, fit_evidence TEXT NOT NULL, draft_ref TEXT NOT NULL, consent_basis TEXT NOT NULL, status TEXT NOT NULL, next_action TEXT NOT NULL, origin TEXT NOT NULL, created TEXT NOT NULL)

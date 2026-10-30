@@ -2,8 +2,18 @@ import Foundation
 
 /// Failure type and runner shared by the portable test files.
 /// These files compile without SwiftUI or AppKit, so they run on Linux as well as on the Mac.
-struct PortableCheckFailure: Error, CustomStringConvertible {
+struct PortableCheckFailure: Error, CustomStringConvertible, Sendable {
     var description: String
+}
+
+/// Command-line suite names. No names means every suite.
+/// `./bin/test-portable LeadgenSliceTests` and `./bin/test-native-app LeadgenSliceTests` run one suite at that SHA.
+enum PortableSuiteFilter {
+    static var names: [String] {
+        CommandLine.arguments.dropFirst()
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
 }
 
 enum PortableCheck {

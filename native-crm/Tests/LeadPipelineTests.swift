@@ -97,7 +97,7 @@ enum LeadPipelineTests {
         let config: ICPConfig
         let confirmed: ICPConfirmed
         do {
-            config = try LeadKit.config()
+            config = try LeadKit.testConfig()
             confirmed = try LeadKit.confirmed()
         } catch {
             print("  FAIL lead pipeline: config did not load: \(error)")
@@ -111,7 +111,7 @@ enum LeadPipelineTests {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
                 try expect(config.conflictAreas.first?.description == region02ConflictDescription, "default conflict area: \(String(describing: config.conflictAreas.first?.description))")
-                try expect(config.sender.from == "ml@pharos-ai.ca" && config.sender.mailingAddress == "2456 rue de Rouen, Montréal QC H2K 1M2", "sender identity")
+                try expect(config.sender.from == "ml@pharos-ai.ca" && (try LeadKit.config()).sender.mailingAddress == "PLACEHOLDER street, city, province, postal code", "sender identity keeps the street out of the repo")
                 try expect(config.loi25Gate.open == false, "Loi 25 gate starts closed")
             }),
             ("ICP config: clinic and trades take named people from the own site only", {
@@ -1323,6 +1323,36 @@ enum LeadPipelineTests {
                 try expect(report.skipped["osm:node/3001"] == "website host not fetchable" && !fixture.inner.urls.contains { $0.contains("192.168") },
                            "listing with an internal website: \(report.skipped)")
             }),
+            ("Own-site SSRF after DNS: a name that resolves to loopback, private, link-local, IPv6 non-public, or nothing is refused before the network; a same-domain redirect to such an address is refused too", {
+                let inner = FakeLeadTransport()
+                inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                inner.respond(LeadKit.homePage, body: "<p>Bonjour</p>", headers: ["content-type": "text/html"])
+                inner.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://cdn.clinique-exemple.test/secret"])
+                for addresses in [["127.0.0.1"], ["10.1.2.3"], ["192.168.0.9"], ["172.16.0.4"], ["169.254.169.254"], ["::1"], ["fe80::1"], ["fd00::1"], []] as [[String]] {
+                    let guarded = GuardedLeadTransport(config: config, inner: inner, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { _ in addresses })
+                    do { _ = try await guarded.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "admitted \(addresses)") }
+                    catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", "\(addresses): \(refusal)") }
+                }
+                try expect(inner.requests.isEmpty, "DNS refusals reached the network: \(inner.urls)")
+                let redirected = FakeLeadTransport()
+                redirected.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                redirected.respond(LeadKit.homePage, status: 302, body: "", headers: ["location": "https://cdn.clinique-exemple.test/secret"])
+                redirected.respond("https://cdn.clinique-exemple.test/secret", body: "<p>secret</p>")
+                let guardRedirect = GuardedLeadTransport(config: config, inner: redirected, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { host in
+                    host == "cdn.clinique-exemple.test" ? ["10.0.0.1"] : ["1.1.1.1"]
+                })
+                do { _ = try await guardRedirect.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain)); try expect(false, "followed private redirect") }
+                catch let refusal as LeadPipelineRefusal { try expect(refusal.code == "refused:own-site-host", refusal.code) }
+                try expect(!redirected.urls.contains { $0.contains("cdn.clinique-exemple") }, "private redirect was fetched: \(redirected.urls)")
+                let openInner = FakeLeadTransport()
+                openInner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
+                openInner.respond(LeadKit.homePage, body: "<p>Bonjour</p>", headers: ["content-type": "text/html"])
+                let open = GuardedLeadTransport(config: config, inner: openInner, audit: MemoryAuditSink(), clock: FakeLeadClock(), resolveHost: { _ in ["1.1.1.1"] })
+                let response = try await open.fetch(URL(string: LeadKit.homePage)!, purpose: .ownSite(domain: LeadKit.clinicDomain))
+                try expect(response.status == 200, "public DNS refused: \(response.status)")
+                let localhost = SystemHostLookup.addresses("localhost")
+                try expect(!localhost.isEmpty && localhost.allSatisfy(HostSafety.isNonPublic), "localhost resolves non-public: \(localhost)")
+            }),
             ("Redirects: an off-site hop is refused with no snapshot; a same-domain hop is re-admitted and robots-checked; at most 3 hops", {
                 let inner = FakeLeadTransport()
                 inner.respond("https://www.clinique-exemple.test/robots.txt", body: "User-agent: *\nAllow: /\n", headers: ["content-type": "text/plain"])
@@ -1342,7 +1372,7 @@ enum LeadPipelineTests {
                     catch let refusal as LeadPipelineRefusal { return refusal.code } catch { return "error" }
                 }
                 for (raw, expected, label) in [(LeadKit.homePage, "refused:redirect-off-site", "off-site"),
-                                               ("https://www.clinique-exemple.test/ip", "refused:redirect-off-site", "redirect to an IP literal"),
+                                               ("https://www.clinique-exemple.test/ip", "refused:own-site-host", "redirect to an IP literal"),
                                                (LeadKit.teamPage, "refused:robots", "same-domain hop is robots-checked"),
                                                ("https://www.clinique-exemple.test/a-propos", "ok:200:\(LeadKit.contactPage)", "same-site hop followed, final URL kept"),
                                                ("https://www.clinique-exemple.test/r1", "refused:redirect-limit", "more than 3 hops")] {
@@ -1429,7 +1459,7 @@ enum LeadPipelineTests {
                 let prospect = LeadKit.readyClinic()
                 for language in ["fr", "en"] {
                     let draft = LeadKit.draft(for: prospect, config: config, language: language)
-                    try expect(draft.body.contains("PHAROS AI") && draft.body.contains("2456 rue de Rouen, Montréal QC H2K 1M2") && draft.from == "ml@pharos-ai.ca", language)
+                    try expect(draft.body.contains("PHAROS AI") && draft.body.contains(config.sender.mailingAddress) && draft.from == "ml@pharos-ai.ca", language)
                     let refusal = OutreachDraftGate.check(draft, prospect: prospect, config: config, suppression: SuppressionList(), now: now)
                     try expect(refusal == nil, "\(language): \(String(describing: refusal))")
                 }
@@ -1493,7 +1523,7 @@ enum LeadPipelineTests {
             ("Environment: a run from an empty folder fills the Leads list, saves the draft locally and passes the bar", {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-leads-\(UUID().uuidString)")
                 defer { try? FileManager.default.removeItem(at: root) }
-                let env = try LeadPipelineEnvironment.load(configDirectory: LeadKit.configDirectory, root: root)
+                let env = try LeadKit.testEnvironment(root: root)
                 let fixture = SearchFixture(config: config)
                 let audit = env.audit
                 let launch = env.recordLaunch(audit: audit, now: fixture.clock.now)

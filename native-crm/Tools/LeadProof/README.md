@@ -25,7 +25,7 @@ writes a `launch` audit line with the store count (0), runs the search, ingests 
 2. `action=search source=controlward`, `action=fetch source=own-site` and `action=score` lines whose register and
    `ts` match each record's source URL and fetch time.
 3. The drafted record's address appears verbatim in its own-site snapshot.
-4. Each draft carries the sender ID, the rue de Rouen mailing address, an unsubscribe and a consent basis.
+4. Each draft carries the sender ID, the configured mailing address, an unsubscribe and a consent basis.
 5. No `action=send` line and no request to a host outside icp.json's allowlist or the prospect's own domain.
 
 It prints PASS or FAIL for each check, then `LEAD PIPELINE PROOF PASSED` (exit 0) or `FAILED` (exit 1). The log is

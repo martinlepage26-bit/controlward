@@ -21,6 +21,24 @@ enum LeadKit {
 
     static func config() throws -> ICPConfig { try ICPConfig.load(directory: configDirectory) }
 
+    /// A fake, test-only CASL mailing address. The shipped config keeps its PLACEHOLDER so real sends stay blocked.
+    static let testMailingAddress = "1 rue Fictive, Ville-Test (Québec) H0H 0H0"
+
+    /// The shipped config with the test-only mailing address, so dry-run draft and send gates can pass in tests.
+    static func testConfig() throws -> ICPConfig {
+        var config = try config()
+        config.sender.mailingAddress = testMailingAddress
+        return config
+    }
+
+    /// A pipeline environment over the shipped config folder, with the test-only mailing address.
+    static func testEnvironment(root: URL) throws -> LeadPipelineEnvironment {
+        let loaded = try LeadPipelineEnvironment.load(configDirectory: configDirectory, root: root)
+        var config = loaded.config
+        config.sender.mailingAddress = testMailingAddress
+        return LeadPipelineEnvironment(config: config, root: loaded.root)
+    }
+
     static func confirmed() throws -> ICPConfirmed {
         try ICPConfirmed.decode(Data(contentsOf: configDirectory.appendingPathComponent("icp.confirmed.json")))
     }
