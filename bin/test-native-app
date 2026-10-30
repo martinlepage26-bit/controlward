@@ -1,8 +1,10 @@
 #!/bin/zsh
+# Prints the full git SHA first. One suite: ./bin/test-native-app LeadgenSliceTests
 set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
+echo "git rev-parse HEAD: $(git -C "${PROJECT_ROOT}" rev-parse HEAD)"
 SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
 BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/native-smoke-tests"
 TEST_BINARY="${BUILD_ROOT}/FollowUpOSNativeSmokeTests"
@@ -35,6 +37,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/LeadDefinition.swift" \
   "${SOURCE_ROOT}/Outreach.swift" \
   "${SOURCE_ROOT}/LeadTransport.swift" \
+  "${SOURCE_ROOT}/LeadgenPinnedHTTPS.swift" \
   "${SOURCE_ROOT}/RBQOpenData.swift" \
   "${SOURCE_ROOT}/SiteExtractor.swift" \
   "${SOURCE_ROOT}/LeadDiscovery.swift" \
@@ -45,6 +48,8 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/LeadPipelineEnvironment.swift" \
   "${SOURCE_ROOT}/ProspectResearch.swift" \
   "${SOURCE_ROOT}/BuildInfo.swift" \
+  "${SOURCE_ROOT}/LeadgenSlice.swift" \
+  "${SOURCE_ROOT}/LeadgenLive.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \
@@ -68,9 +73,12 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ProjectControlTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlPlantedReds.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/LeadgenSliceTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
 source "${SCRIPT_DIR}/pharos-planted-reds.sh"
-"${TEST_BINARY}"
-"${SCRIPT_DIR}/test-build-stamp"
+"${TEST_BINARY}" "$@"
+if (( ${#@} == 0 )); then
+  "${SCRIPT_DIR}/test-build-stamp"
+fi

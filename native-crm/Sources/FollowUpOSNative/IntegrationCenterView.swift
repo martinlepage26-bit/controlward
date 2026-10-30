@@ -225,8 +225,10 @@ struct IntegrationCenterView: View {
                 HStack {
                     Text("Portable workspace").font(.headline)
                     Spacer()
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                     Button("Merge exchange JSON", systemImage: "square.and.arrow.down") { showExchangeImporter = true }
                         .buttonStyle(.bordered)
+#endif
                 }
                 .padding(.horizontal, 28)
 
@@ -256,6 +258,7 @@ struct IntegrationCenterView: View {
             .frame(maxWidth: 980, alignment: .leading)
         }
         .navigationTitle("Integrations")
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
         .fileImporter(isPresented: $showExchangeImporter, allowedContentTypes: [.json], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             for url in urls {
@@ -265,6 +268,7 @@ struct IntegrationCenterView: View {
                 catch { store.notice = "Could not merge \(url.lastPathComponent): \(error.localizedDescription)" }
             }
         }
+#endif
         .onAppear {
             twentyEndpoint = store.endpoint(for: .twenty)
             leadgenEndpoint = store.endpoint(for: .leadgen)
@@ -276,7 +280,11 @@ struct IntegrationCenterView: View {
 
     @ViewBuilder private func endpointField(_ label: String, text: Binding<String>, target: SyncTarget) -> some View {
         HStack {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+            TextField(PreviewIsolation.endpointLabel(target), text: text).textFieldStyle(.roundedBorder)
+#else
             TextField(label, text: text).textFieldStyle(.roundedBorder)
+#endif
             Button("Save") {
                 store.setEndpoint(text.wrappedValue, for: target)
                 text.wrappedValue = store.endpoint(for: target)

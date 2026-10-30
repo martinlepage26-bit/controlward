@@ -187,7 +187,7 @@ enum MailIntakeTests {
         let fake = FakeGoogle([message("a", to: "martinlepage.ai@gmail.com"), message("b", to: "ml@pharos-ai.ca")])
         let tokens = InMemoryMailTokenStore(); try tokens.write("synthetic-refresh", for: MailAccount.personalGmail.email)
         let suite = UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!
-        let mail = MailIntakeController(tokens: tokens, transport: fake, defaults: suite)
+        let mail = MailIntakeController(tokens: tokens, transport: fake, preferences: UserDefaultsMailPreferences(defaults: suite))
         try mail.saveClientID(clientID)
         await mail.refresh(.personalGmail, store: store)
         try expect(store.mail.count == 2, "first pull \(store.mail.count) \(mail.state(.personalGmail))")
@@ -244,7 +244,7 @@ enum MailIntakeTests {
     }
     static func disconnect() throws {
         let tokens = InMemoryMailTokenStore(); try tokens.write("synthetic-refresh", for: MailAccount.infrafabric.email)
-        let mail = MailIntakeController(tokens: tokens, transport: FakeGoogle([]), defaults: UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!)
+        let mail = MailIntakeController(tokens: tokens, transport: FakeGoogle([]), preferences: UserDefaultsMailPreferences(defaults: UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!))
         try expect(mail.state(.infrafabric) == .idle, "connected")
         mail.disconnect(.infrafabric)
         try expect(!tokens.exists(MailAccount.infrafabric.email) && mail.state(.infrafabric) == .notConnected, "disconnect")
@@ -253,7 +253,7 @@ enum MailIntakeTests {
     }
     static func shippedClient() throws {
         let suite = UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!
-        let mail = MailIntakeController(tokens: InMemoryMailTokenStore(), transport: FakeGoogle([]), defaults: suite)
+        let mail = MailIntakeController(tokens: InMemoryMailTokenStore(), transport: FakeGoogle([]), preferences: UserDefaultsMailPreferences(defaults: suite))
         let c = try mail.config()
         try expect(c.clientID == "522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1.apps.googleusercontent.com", "default id")
         try expect(c.callbackScheme == "com.googleusercontent.apps.522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1", "reversed scheme")

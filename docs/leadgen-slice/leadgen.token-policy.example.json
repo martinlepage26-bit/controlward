@@ -1,0 +1,26 @@
+{
+  "tokens": [
+    {
+      "id": "62c2378b0d4a7897d34406cee8a5beca",
+      "env": "LEADGEN_CF_TOKEN_MECOM_READ",
+      "permissions": [
+        {
+          "id": "192192df92ee43ac90f2aeeffce67e35",
+          "name": "D1 Read",
+          "accountID": "PLACEHOLDER Cloudflare account id, same as credentials.meComAccountID"
+        }
+      ]
+    },
+    {
+      "id": "eb5707869afdc0844b5810b314efc58c",
+      "env": "LEADGEN_CF_TOKEN_PHAROS_READ",
+      "permissions": [
+        {
+          "id": "192192df92ee43ac90f2aeeffce67e35",
+          "name": "D1 Read",
+          "accountID": "PLACEHOLDER Cloudflare account id, same as credentials.pharosAccountID"
+        }
+      ]
+    }
+  ]
+}

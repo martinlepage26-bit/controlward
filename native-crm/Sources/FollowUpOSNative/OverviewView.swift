@@ -556,7 +556,11 @@ struct SettingsPanel: View {
     @EnvironmentObject private var navigation: WorkspaceNavigation
     @State private var name = ""
     @State private var industry = ""
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+    @State private var autoPilot = false
+#else
     @AppStorage(AutoPilot.storageKey) private var autoPilot = AutoPilot.defaultEnabled
+#endif
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             PanelHeader(title: "Settings")
@@ -605,7 +609,11 @@ struct SettingsPanel: View {
 /// True when the Overview is showing synthetic records (preview build or synthetic mail import).
 enum PreviewData {
     @MainActor static func isShowing(_ store: AppStore) -> Bool {
-        ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"] == "synthetic" || store.mail.contains { $0.synthetic }
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        true
+#else
+        PreviewBadge.isShowing(environment: ProcessInfo.processInfo.environment, mail: store.mail)
+#endif
     }
 }
 

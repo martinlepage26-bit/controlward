@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <title>ControlWard capture</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="dist/sidepanel.js"></script>
+</head>
+<body>
+  <header>
+    <div class="eyebrow" data-cw-i18n="brand">CONTROLWARD · CHROME COMPANION</div>
+    <div class="language-row"><h1 data-cw-i18n="title">Business capture</h1><label for="language" class="language-label" data-cw-i18n="language">Language</label><select id="language" aria-label="Interface language"><option value="en">English</option><option value="fr">Français</option></select></div>
+    <p class="muted" data-cw-i18n="intro">Capture, qualify, review, then save. Nothing is read or sent until you choose an action.</p>
+  </header>
+  <section class="connection card">
+    <div id="connection-status" class="status">Not connected</div>
+    <div class="button-row">
+      <button id="connect" class="secondary" data-cw-i18n="check">Check connection</button>
+      <button id="pair" class="secondary" data-cw-i18n="pair">Pair this extension</button>
+      <button id="unpair" class="quiet" disabled data-cw-i18n="unpair">Unpair</button>
+    </div>
+  </section>
+  <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+  <section class="workflow card">
+    <div class="step"><span>1</span><b data-cw-i18n="capture">Capture</b></div>
+    <p data-cw-i18n="captureIntro">Only the current page’s basic business metadata is read after you click.</p>
+    <button id="capture" class="primary" disabled data-cw-i18n="capturePage">Capture current page</button>
+    <div id="page-hints" class="hints" hidden></div>
+    <form id="capture-form" hidden>
+      <label for="business-name" data-cw-i18n="businessName">Business name</label>
+      <input id="business-name" maxlength="180" autocomplete="organization" required>
+      <label for="website-url" data-cw-i18n="website">Business website to fetch</label>
+      <input id="website-url" maxlength="2048" inputmode="url" required>
+      <label for="municipality" data-cw-i18n="municipality">Municipality hint (unverified; not used for location/RBQ rules)</label>
+      <input id="municipality" maxlength="120" autocomplete="address-level2">
+      <label for="segment" data-cw-i18n="segment">ControlWard segment</label>
+      <select id="segment" required><option value="" data-cw-i18n="chooseSegment">Choose a ControlWard segment</option></select>
+      <label class="check"><input id="allow-fetch" type="checkbox"><span data-cw-i18n="fetchConsent">I reviewed the business name, website, municipality and segment, and authorize ControlWard to fetch this public business website under its existing safeguards.</span></label>
+      <button id="evaluate" class="primary" type="button" data-cw-i18n="evaluate">Evaluate with ControlWard</button>
+    </form>
+  </section>
+  <section id="preview" class="card" hidden>
+    <div class="step"><span>2</span><b data-cw-i18n="review">Qualification and review</b></div>
+    <div id="verdict" class="verdict"></div>
+    <p id="capture-time" class="muted"></p>
+    <p class="muted" data-cw-i18n="reviewCaution">The existing ControlWard rules produce this status; it is not marketing approval.</p>
+    <ul id="reasons"></ul>
+    <div id="evidence-fields" class="evidence"></div>
+    <p id="qualification-note" class="note"></p>
+    <div id="duplicate-choice" class="duplicate" hidden>
+      <strong data-cw-i18n="possibleDuplicate">Possible duplicate</strong>
+      <p id="duplicate-summary"></p>
+      <label for="save-decision" data-cw-i18n="decision">Decision</label>
+      <select id="save-decision">
+        <option value="" data-cw-i18n="chooseDecision">Choose one; no automatic update</option>
+        <option value="update" data-cw-i18n="update">Update the existing record after this review</option>
+        <option value="skip" data-cw-i18n="skip">Skip — do not change the register</option>
+      </select>
+    </div>
+    <div class="step"><span>3</span><b data-cw-i18n="saveStep">Save</b></div>
+    <label class="check"><input id="confirm-save" type="checkbox"><span data-cw-i18n="saveConsent">I reviewed the evidence, qualification status and duplicate result. I explicitly authorize this local ControlWard Leads change.</span></label>
+    <button id="save" class="primary" disabled data-cw-i18n="save">Save to ControlWard</button>
+  </section>
+  <footer><p data-cw-i18n="footer">No Worker key is stored here. This extension does not contact the PHAROS Worker, create outreach, or send messages.</p></footer>
+</body>
+</html>

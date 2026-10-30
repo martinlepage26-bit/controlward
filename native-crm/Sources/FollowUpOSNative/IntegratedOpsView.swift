@@ -21,16 +21,20 @@ struct IntegratedOpsView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .leading)], alignment: .leading, spacing: 8) {
                 Button("Capture signal", systemImage: "dot.radiowaves.left.and.right") { showSignal = true }
                     .buttonStyle(.borderedProminent)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 Button("Import LeadGen", systemImage: "arrow.down.doc") { showImporter = true }
                     .buttonStyle(.bordered)
+#endif
                 Button("New Lantern audit", systemImage: "checkmark.seal") { showAudit = true }
                     .buttonStyle(.bordered)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 Button("Import Lantern CSV", systemImage: "tablecells") { showBAEAImporter = true }
                     .buttonStyle(.bordered)
                 Button("Import Lantern workbook", systemImage: "tablecells.fill") { showBAEAWorkbookImporter = true }
                     .buttonStyle(.bordered)
                 Button("Export exchange", systemImage: "square.and.arrow.up") { showExporter = true }
                     .buttonStyle(.bordered)
+#endif
                 }
             }
             .padding(28)
@@ -47,6 +51,7 @@ struct IntegratedOpsView: View {
         }
         .sheet(isPresented: $showSignal) { SignalEditor(signal: nil).environmentObject(store) }
         .sheet(isPresented: $showAudit) { BilingualAuditEditor(audit: nil).environmentObject(store) }
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             for url in urls {
@@ -79,6 +84,7 @@ struct IntegratedOpsView: View {
             do { try store.exportExchange(to: url) }
             catch { store.notice = "Could not export exchange: \(error.localizedDescription)" }
         }
+#endif
         .navigationTitle("Operations")
     }
 }

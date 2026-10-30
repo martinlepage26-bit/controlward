@@ -6,6 +6,9 @@ import WebKit
 @MainActor
 extension WorkspaceWebController {
     private func projectCall<T: Decodable>(_ body: String, arguments: [String: Any] = [:], as type: T.Type) async throws -> T {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        throw PreviewIsolationError.externalNetworkDisabled
+#endif
         guard module == .projects else { throw ControlWardError.invalid("This action belongs to Project Control.") }
         start()
         // Bounded readiness wait; the page may already be retained from another section.

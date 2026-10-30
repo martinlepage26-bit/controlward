@@ -6,8 +6,9 @@ import FoundationNetworking
 /// Slice 3 planted reds (wind-acceptance-tests.md §3, slice total amended 6:11 AM ET): 41 bad inputs, plus Argus's 13
 /// (gate file controlward-18-2026-10-23.md; total amended to 54 by Water, 6:53 AM ET), plus Earth's 2 RBQ fail-closed
 /// reds (6:59 AM ET findings on 75285c4: missing and unreadable index through the app path; 54 -> 56, reported to Earth),
-/// plus 14 former-place reds and 4 Saint/Sainte abbreviation reds (Argus on f02a8e7: 56 -> 74). A case "fails" when the code refuses
-/// it, so a healthy build prints `expected 74 failures, got 74: OK`. Any other count exits non-zero.
+/// plus 14 former-place reds and 4 Saint/Sainte abbreviation reds (Argus on f02a8e7: 56 -> 74),
+/// plus 15 comma-locality reds (Earth and Argus on 3f33dd1: 74 -> 89). A case "fails" when the code refuses
+/// it, so a healthy build prints `expected 89 failures, got 89: OK`. Any other count exits non-zero.
 /// Argus reds 9 and 10 live in pharos-api's vitest suite; they count only when CW_PHAROS_PLANTED_REDS points at that
 /// run's JSON report and the matching tests passed. Without the report they print RED-NOT-RUN with the reason (never "accepted")
 /// and the total is a MISMATCH.
@@ -23,10 +24,10 @@ enum LeadPipelinePlantedReds {
         var probe: Probe
     }
 
-    static let expectedTotal = 74
+    static let expectedTotal = 89
 
     /// Printed ahead of the expected/got counts. The slip test matches this text.
-    static let summaryLead = "Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth + 14 place + 4 abbreviation)"
+    static let summaryLead = "Slice 3 planted reds (41 Wind + 13 Argus + 2 Earth + 14 place + 4 abbreviation + 15 comma)"
 
     /// The line for a red that did not fail as planted.
     static func missedLine(group: String, label: String, report: PharosPlantedReds.Status? = nil) -> String {
@@ -50,7 +51,7 @@ enum LeadPipelinePlantedReds {
         ("S3-RED (original)", 4), ("S3-RED-PC", 1), ("S3-RED-SRC", 2), ("S3-RED-SPAM", 5), ("S3-RED-SEQ", 2), ("S3-RED-FROM", 1),
         ("S3-RED-ICP", 3), ("S3-RED-ADDR", 3), ("S3-RED-LOI25", 3), ("S3-RED-LEADREC", 5), ("S3-RED-FRESH", 3), ("S3-RED-HOLD", 2),
         ("S3-RED-CRAWL", 2), ("S3-RED-DRAFT", 4), ("S3-RED-PUSH", 1), ("ARGUS-RED", 13), ("EARTH-RED", 2),
-        ("ARGUS-RED-PLACE", 14), ("ARGUS-RED-ABBR", 4)
+        ("ARGUS-RED-PLACE", 14), ("ARGUS-RED-ABBR", 4), ("EARTH-RED-COMMA", 15)
     ]
 
     /// Result of counting a set of planted reds: overall verdict, failures caught and the printed lines.
@@ -532,6 +533,32 @@ enum LeadPipelinePlantedReds {
         for (offset, town) in formerPlaces.enumerated() {
             let place = town
             add("ARGUS-RED-PLACE", "\(offset + 1) \(place): a verified plumber comes out READY") {
+                var record = LeadKit.readyClinic()
+                record.segment = "construction_trades"
+                record.organisation = "Plomberie Fictive \(place)"
+                record.osmTags = ["craft=plumber"]
+                record.rbqCheck = "matched"
+                record.rbqCategories = ["1.3"]
+                record.town = place
+                let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                let lavoie = verdict.reasons.contains { $0.contains("sos-plomberie-excavation-lavoie") }
+                let licence = verdict.reasons.contains { $0.contains("rbq-licence-unverified") }
+                return verdict.status == .conflictReview && lavoie && !licence ? "held, not READY: \(place)" : nil
+            }
+        }
+        // Earth and Argus on 3f33dd1: the comma branch returned outside for any last part that was not an exact
+        // region-02 name. Restoring `if !loc.isEmpty { return .outside }` lets these verified plumbers come out READY.
+        let commaHolds = [
+            "Alma, Lac-Saint-Jean", "Roberval, Lac-St-Jean", "Chambord, Lac-Saint-Jean",
+            "123 rue Racine, Chicoutimi-Nord", "123 rue X, Chicoutimii",
+            "Saguenay, Canada", "Alma, Canada", "Alma, Québec, Canada",
+            "123 rue Racine, Chicoutimi, QC, Canada", "Jonquière, Saguenay–Lac-Saint-Jean",
+            "Roberval, Lac-Saint-Jean", "Roberval, Lac St-Jean", "Dolbeau, Lac-Saint-Jean",
+            "Alma, Lac-Saint-Jean-Est", "Saint-Félicien, Domaine-du-Roy"
+        ]
+        for (offset, town) in commaHolds.enumerated() {
+            let place = town
+            add("EARTH-RED-COMMA", "\(offset + 1) \(place): a verified plumber comes out READY") {
                 var record = LeadKit.readyClinic()
                 record.segment = "construction_trades"
                 record.organisation = "Plomberie Fictive \(place)"

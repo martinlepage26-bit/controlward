@@ -56,8 +56,13 @@ struct ICPConfig: Codable, Equatable, Sendable {
         /// Readable names with no official municipality or sector citation. Exact, or contained in a longer town,
         /// they are unknown and held, never outside and never Ready for a matching trade.
         var unresolvedPlaceNames: [String]?
-        /// Canadian FSA prefixes. A postal-code-only town whose FSA starts with one of these is unknown and held.
+        /// Canadian FSA prefixes. A postal code or FSA anywhere in the address whose FSA starts with one of these is unknown and held.
         var postalFsaPrefixes: [String]?
+        /// Every current Québec municipality name (MAMH `munnom`). An exact match that is not one of `municipalities`
+        /// is outside the conflict area, and that check runs before partial-name containment.
+        var provinceMunicipalities: [String]?
+        /// Where `provinceMunicipalities` was checked.
+        var provinceMunicipalitySource: String?
     }
     /// Martin Lepage, 27 Oct 2026, 4:30 PM ET: any firm in `segments` is held, everywhere, unless `rbqCheck` is "matched".
     /// The reason id is this hold's id, never a conflict-area id.
@@ -221,10 +226,14 @@ struct ICPConfig: Codable, Equatable, Sendable {
 
     /// The bundled config directory in the app, or `CONTROLWARD_CONFIG_DIR` when set (used by the scripted proof).
     static func defaultDirectory(bundle: Bundle? = nil) -> URL? {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        return bundle?.url(forResource: "config", withExtension: nil)
+#else
         if let override = ProcessInfo.processInfo.environment["CONTROLWARD_CONFIG_DIR"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return bundle?.url(forResource: "config", withExtension: nil)
+#endif
     }
 
     /// S3-R9: the configured segments must equal the confirmed list, each with the same priority.

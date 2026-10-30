@@ -858,7 +858,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       guesses:"Flagged guesses", needsCheck:"Needs check", noAction:"No next action", stale:"Undecided ≥ {n} days", deferred:"Deferred {n}+ times", later:"Later, within 30 days",
       recent:"Recently changed", thisWeek:"This week", none:"Nothing in this group.", untitled:"Untitled",
       acceptSuggestion:"Accept suggestion", skip:"Skip", suggestedHome:"Suggested home", noHome:"No suggested home on this row.",
-      acceptQueue:"Accept into the queue", dismiss:"Dismiss", proposedBy:"proposed by {who}", expiresIn:"expires in", day:"day", days:"days",
+      acceptQueue:"Accept into the queue", dismiss:"Dismiss", approve:"Approve", reject:"Reject", candidateDecision:"Candidate decision", candidateApproved:"Approved. The candidate is now active.", candidateRejected:"Rejected. The candidate is marked abandoned.", proposedBy:"proposed by {who}", expiresIn:"expires in", day:"day", days:"days",
       anAssistant:"an assistant", quickAdd:"Add “{q}”", conflictTitle:"Changed on another device",
       field:"Field", youLoaded:"You loaded", otherDevice:"Other device saved", youAreSaving:"You are saving",
       activeLane:"Active", waitingLane:"Waiting", blockedLane:"Blocked", doneLane:"Done",
@@ -960,7 +960,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       guesses:"Hypothèses à confirmer", needsCheck:"À vérifier", noAction:"Sans prochaine action", stale:"Indécis depuis ≥ {n} jours", deferred:"Reporté {n} fois ou plus",
       later:"Plus tard, sous 30 jours", recent:"Modifiés récemment", thisWeek:"Cette semaine", none:"Rien dans ce groupe.", untitled:"Sans titre",
       acceptSuggestion:"Accepter la suggestion", skip:"Passer", suggestedHome:"Domicile suggéré", noHome:"Pas de domicile suggéré.",
-      acceptQueue:"Accepter dans le registre", dismiss:"Écarter", proposedBy:"proposé par {who}", expiresIn:"expire dans", day:"jour", days:"jours",
+      acceptQueue:"Accepter dans le registre", dismiss:"Écarter", approve:"Approuver", reject:"Rejeter", candidateDecision:"Décision sur le candidat", candidateApproved:"Approuvé. Le candidat est maintenant actif.", candidateRejected:"Rejeté. Le candidat est marqué abandonné.", proposedBy:"proposé par {who}", expiresIn:"expire dans", day:"jour", days:"jours",
       anAssistant:"un assistant", quickAdd:"Ajouter « {q} »", conflictTitle:"Modifié sur un autre appareil",
       field:"Champ", youLoaded:"Vous aviez", otherDevice:"L'autre appareil a enregistré", youAreSaving:"Vous enregistrez",
       activeLane:"Actif", waitingLane:"En attente", blockedLane:"Bloqué", doneLane:"Terminé",
@@ -2068,6 +2068,11 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       '<label class="field">'+esc(t("next"))+na+'</label>'+
       '<label class="field">'+esc(t("due"))+'<input type="date" data-f="deadline" value="'+esc(p.deadline||"")+'"></label>'+
       '<label class="field">'+esc(t("review"))+'<input type="date" data-f="review" value="'+esc(p.review||"")+'"></label>'+
+      (p.status==="Candidate" && !isSuggestion(p)
+        ? '<div class="toolbar candidate-decision" role="group" aria-label="'+esc(t("candidateDecision"))+'">'+
+          '<button type="button" class="tiny" data-act="approve-candidate">'+esc(t("approve"))+'</button>'+
+          '<button type="button" class="tiny" data-act="reject-candidate">'+esc(t("reject"))+'</button></div>'
+        : '')+
       '<div class="toolbar"><button type="button" class="tiny" data-act="defer">'+esc(t("defer"))+'</button>'+
       '<button type="button" class="tiny" data-act="del">'+esc(t("delete"))+'</button></div>';
     var exceptions = brKeys.length
@@ -2768,6 +2773,13 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     if (!p) return;
     if (btn.dataset.act==="del") deleteProject(p);
     else if (btn.dataset.act==="defer") defer(p);
+    else if (btn.dataset.act==="approve-candidate" || btn.dataset.act==="reject-candidate") {
+      if (p.status!=="Candidate" || isSuggestion(p)) return;
+      var approve = btn.dataset.act==="approve-candidate";
+      patchProject(p, { status: approve ? "Active" : "Abandoned" }).then(function(){
+        renderAll(); alertBox(t(approve ? "candidateApproved" : "candidateRejected"), true);
+      }).catch(function(){});
+    }
     else if (btn.dataset.act==="add-note") {
       var body = el("noteBody").value.trim(); if (!body) return;
       var n = { id:uid(), project_id:p.id, body:body, kind:"note", connection:"Dashboard-Martin", created:nowISO() };

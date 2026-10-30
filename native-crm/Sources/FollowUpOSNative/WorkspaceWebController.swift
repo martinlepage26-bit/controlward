@@ -17,7 +17,13 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
         self.module = module
         self.document = document
         let configuration = WKWebViewConfiguration()
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        // Ignore even an explicitly supplied persistent data store in the isolated preview.
+        _ = dataStore
+        configuration.websiteDataStore = .nonPersistent()
+#else
         configuration.websiteDataStore = dataStore ?? WKWebsiteDataStore(forIdentifier: module.dataStoreID)
+#endif
         // No script-message handlers, injected scripts or native credential bridge.
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
@@ -33,6 +39,11 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
     }
 
     func reload() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        loading = false
+        failure = "Web modules are disabled in the isolated offline preview."
+        return
+#endif
         failure = nil
         loading = true
         if module == .projects, let document,
@@ -48,6 +59,10 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        decisionHandler(.cancel)
+        return
+#else
         guard let url = action.request.url else { decisionHandler(.cancel); return }
         let policy = WorkspaceModulePolicy(module: module, projectDocument: document)
         let decision = policy.navigation(to: url, userInitiated: action.navigationType == .linkActivated,
@@ -58,7 +73,9 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
         case .download: decisionHandler(.download)
         case .external:
             decisionHandler(.cancel)
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
             NSWorkspace.shared.open(url)
+#endif
         case .blocked:
             decisionHandler(.cancel)
             // A rejected iframe does not replace the state of its parent page.
@@ -67,6 +84,7 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
                 failure = "This navigation is outside the module. Use an ordinary link or open Email Aggregator in your browser."
             }
         }
+#endif
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -88,22 +106,30 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        return nil
+#else
         if navigationAction.targetFrame == nil, let url = navigationAction.request.url,
            WorkspaceModulePolicy(module: module, projectDocument: document)
             .navigation(to: url, userInitiated: true, mainFrame: true) == .embedded {
             webView.load(navigationAction.request)
         }
         return nil
+#endif
     }
 
     // File access is owner-selected and stays inside the existing App Sandbox.
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void) {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        completionHandler(nil)
+#else
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         if module == .projects { panel.allowedContentTypes = [.json] }
         panel.begin { response in completionHandler(response == .OK ? panel.urls : nil) }
+#endif
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
@@ -123,6 +149,9 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
     }
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
                   suggestedFilename: String, completionHandler: @escaping @MainActor @Sendable (URL?) -> Void) {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        completionHandler(nil)
+#else
         let panel = NSSavePanel()
         panel.nameFieldStringValue = URL(fileURLWithPath: suggestedFilename).lastPathComponent
         if module == .projects { panel.allowedContentTypes = [.json] }
@@ -131,6 +160,7 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
             self?.downloadDestinations[ObjectIdentifier(download)] = destination
             completionHandler(destination)
         }
+#endif
     }
     func downloadDidFinish(_ download: WKDownload) {
         // A Project Control export can contain private register data.

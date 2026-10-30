@@ -19,7 +19,16 @@ enum LeadKit {
     {"elements":[{"type":"node","id":2001,"lat":45.5,"lon":-73.6,"tags":{"name":"Clinique Exemple Sud","healthcare":"clinic","website":"https://www.clinique-sud.test"}}]}
     """
 
-    static func config() throws -> ICPConfig { try ICPConfig.load(directory: configDirectory) }
+    /// A made-up sender street. icp.json keeps PLACEHOLDER (the real street stays out of the repo).
+    static let senderMailingAddress = "100, rue Fictive, Montréal (Québec) H0H 0H0"
+
+    /// The checked-in config with `senderMailingAddress`, so general tests clear the generic placeholder-address rule.
+    /// Tests about the checked-in file itself load it with `ICPConfig.load(directory: configDirectory)`.
+    static func config() throws -> ICPConfig {
+        var loaded = try ICPConfig.load(directory: configDirectory)
+        loaded.sender.mailingAddress = senderMailingAddress
+        return loaded
+    }
 
     static func confirmed() throws -> ICPConfirmed {
         try ICPConfirmed.decode(Data(contentsOf: configDirectory.appendingPathComponent("icp.confirmed.json")))

@@ -1,0 +1,13 @@
+{
+  "name": "controlward-chrome-extension",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node tools/test-extension.js"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.304",
+    "typescript": "^5.7.3"
+  }
+}

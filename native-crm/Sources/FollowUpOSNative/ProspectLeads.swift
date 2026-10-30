@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -18,6 +19,36 @@ final class ProspectLeadsStore: @unchecked Sendable {
 
     var records: [ProspectRecord] { lock.withLock { stored } }
 
+    func snapshot() throws -> [ProspectRecord] {
+        try lock.withLock {
+            guard let fileURL else { return stored }
+            return try withFileLock(fileURL) {
+                guard FileManager.default.fileExists(atPath: fileURL.path) else { return stored }
+                let data = try Data(contentsOf: fileURL)
+                return try JSONDecoder.iso.decode([ProspectRecord].self, from: data)
+            }
+        }
+    }
+
+    /// Reloads disk under a per-store cross-process lock, mutates, and atomically persists. A malformed existing file or a
+    /// failed write is an error; it is never replaced with an empty register.
+    @discardableResult
+    func transaction<T>(_ mutation: (inout [ProspectRecord]) throws -> T) throws -> T {
+        try lock.withLock {
+            guard let fileURL else { return try mutation(&stored) }
+            return try withFileLock(fileURL) {
+                var fresh = stored
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    fresh = try JSONDecoder.iso.decode([ProspectRecord].self, from: Data(contentsOf: fileURL))
+                }
+                let result = try mutation(&fresh)
+                try SecureFiles.writePrivate(JSONEncoder.iso.encode(fresh), to: fileURL)
+                stored = fresh
+                return result
+            }
+        }
+    }
+
     func replace(_ records: [ProspectRecord]) {
         lock.withLock {
             stored = records
@@ -27,15 +58,32 @@ final class ProspectLeadsStore: @unchecked Sendable {
             }
         }
     }
+
+    private func withFileLock<T>(_ fileURL: URL, _ body: () throws -> T) throws -> T {
+        try SecureFiles.ensurePrivateDirectory(fileURL.deletingLastPathComponent())
+        let lockURL = fileURL.appendingPathExtension("lock")
+        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
+        defer { _ = Darwin.close(descriptor) }
+        guard Darwin.lockf(descriptor, F_LOCK, 0) == 0 else { throw CocoaError(.fileWriteNoPermission) }
+        defer { _ = Darwin.lockf(descriptor, F_ULOCK, 0) }
+        return try body()
+    }
 }
 
 /// Pulls prospects into the Leads list (S3-R2, S3-R4, S3-R5).
 enum ProspectIngest {
+    struct DuplicateApproval: Sendable {
+        var action: String
+        var expectedID: String?
+    }
+
     struct Result: Equatable, Sendable {
         var added: [String] = []
         var merged: [String] = []
         var rejected: [String: String] = [:]
         var held: [String] = []
+        var storageError: String?
     }
 
     /// Dedupe key order is source id, then email, then phone (the existing lead rule).
@@ -66,35 +114,47 @@ enum ProspectIngest {
     /// Local only. `egress` exists so tests can prove ingest sends nothing: production passes nil, and tests
     /// pass a recording transport that must see 0 requests (no `/api/items`, no other host).
     static func ingest(_ incoming: [ProspectRecord], into store: ProspectLeadsStore, config: ICPConfig, now: Date,
-                       audit: any CWAuditSink, egress: (any LeadTransport)? = nil) async -> Result {
+                       audit: any CWAuditSink, egress: (any LeadTransport)? = nil,
+                       duplicateApproval: DuplicateApproval? = nil) async -> Result {
         var result = Result()
-        var records = store.records
-        for var record in incoming {
-            let missing = LeadDefinition.sourceEvidence(record)
-            if !missing.isEmpty { result.rejected[record.id] = missing.joined(separator: ", "); continue }
-            // LIVE-R6: a record with an evidence URL off its own domain is refused outright and audited.
-            if let offending = EvidenceDomain.offDomain(record, config: config).first {
-                result.rejected[record.id] = "refused:cross-domain-evidence"
-                audit.write(CWAuditLine(ts: now, surface: "leads", action: "ingest", register: URLCanonical.register(offending), target: record.id,
-                                        source: "controlward", result: "refused:cross-domain-evidence"))
-                continue
+        do {
+            try store.transaction { records in
+                if let duplicateApproval {
+                    guard incoming.count == 1 else { throw LeadPipelineRefusal(code: "refused:batch-approval") }
+                    let current = duplicate(of: incoming[0], in: records)?.id
+                    guard current == duplicateApproval.expectedID else { throw LeadPipelineRefusal(code: "refused:duplicate-changed") }
+                    let permitted = current == nil ? duplicateApproval.action == "create" : duplicateApproval.action == "update"
+                    guard permitted else { throw LeadPipelineRefusal(code: "refused:duplicate-approval") }
+                }
+                for var record in incoming {
+                    let missing = LeadDefinition.sourceEvidence(record)
+                    if !missing.isEmpty { result.rejected[record.id] = missing.joined(separator: ", "); continue }
+                    // LIVE-R6: a record with an evidence URL off its own domain is refused outright and audited.
+                    if let offending = EvidenceDomain.offDomain(record, config: config).first {
+                        result.rejected[record.id] = "refused:cross-domain-evidence"
+                        audit.write(CWAuditLine(ts: now, surface: "leads", action: "ingest", register: URLCanonical.register(offending), target: record.id,
+                                                source: "controlward", result: "refused:cross-domain-evidence"))
+                        continue
+                    }
+                    let verdict = LeadDefinition.evaluate(record, config: config, now: now)
+                    record.status = verdict.status
+                    record.reasons = verdict.reasons
+                    record.risk = LeadDefinition.riskLine(record)
+                    if verdict.status == .conflictReview { result.held.append(record.id) }
+                    if let existing = duplicate(of: record, in: records), let index = records.firstIndex(of: existing) {
+                        records[index] = merge(existing, record)
+                        result.merged.append(existing.id)
+                    } else {
+                        records.append(record)
+                        result.added.append(record.id)
+                    }
+                }
             }
-            let verdict = LeadDefinition.evaluate(record, config: config, now: now)
-            record.status = verdict.status
-            record.reasons = verdict.reasons
-            record.risk = LeadDefinition.riskLine(record)
-            if verdict.status == .conflictReview { result.held.append(record.id) }
-            if let existing = duplicate(of: record, in: records), let index = records.firstIndex(of: existing) {
-                records[index] = merge(existing, record)
-                result.merged.append(existing.id)
-            } else {
-                records.append(record)
-                result.added.append(record.id)
-            }
+        } catch {
+            result.storageError = (error as? LeadPipelineRefusal)?.code ?? "storage-failed"
         }
-        store.replace(records)
         audit.write(CWAuditLine(ts: now, surface: "leads", action: "ingest", register: "-", target: "leads-list", source: "controlward",
-                                result: result.rejected.isEmpty ? "ok" : "partial:rejected-\(result.rejected.count)",
+                                result: result.storageError ?? (result.rejected.isEmpty ? "ok" : "partial:rejected-\(result.rejected.count)"),
                                 receipt: "added-\(result.added.count)-merged-\(result.merged.count)"))
         _ = egress
         return result

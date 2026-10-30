@@ -24,7 +24,9 @@ struct AccountIntelligenceView: View {
                 }.frame(maxWidth: 420)
                 Button("New offer") { newProfile = true }
                 Spacer()
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 Button("Import evidence JSON") { importEvidence() }.disabled(profile == nil)
+#endif
             }
             if let message { Text(message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
             TextField("Find an account by name or domain", text: $search).textFieldStyle(.roundedBorder)
@@ -74,7 +76,9 @@ struct AccountIntelligenceView: View {
             HStack {
                 Toggle("Eligible accounts only", isOn: $eligibleOnly)
                 Spacer()
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
                 Button("Export visible segment") { exportSegment(previews, profile: profile, now: now) }
+#endif
             }
             HStack {
                 Text("\(previews.filter { $0.queue.eligible }.count) eligible · \(links.count) reviews created · \(completed) completed").font(.headline)
@@ -108,6 +112,9 @@ struct AccountIntelligenceView: View {
     }
 
     private func exportSegment(_ snapshots: [GTMScoreSnapshot], profile: GTMProfile, now: Date) {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        message = "File export is disabled in the isolated preview."
+#else
         let panel = NSSavePanel(); panel.allowedContentTypes = [.json]; panel.nameFieldStringValue = "controlward-account-segment.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         perform {
@@ -115,9 +122,13 @@ struct AccountIntelligenceView: View {
             try encoder.encode(snapshots).write(to: url, options: .atomic); try SecureFiles.restrict(url)
             return "Exported \(snapshots.count) visible rules-based assessments for \(profile.name). These scores are not predictive probabilities."
         }
+#endif
     }
 
     private func importEvidence() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        message = "File import is disabled in the isolated preview."
+#else
         guard let profileID else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
@@ -132,6 +143,7 @@ struct AccountIntelligenceView: View {
             if companyID == nil { companyID = store.companies.first?.id }
             return "Imported \(count) new events. Validate their account and buyer action in Evidence inbox before they affect scores."
         }
+#endif
     }
 }
 

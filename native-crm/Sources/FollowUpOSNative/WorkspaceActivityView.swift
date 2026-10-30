@@ -14,7 +14,10 @@ struct WorkspaceActivityView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading) { Text("Activity").font(.title2.bold()); Text("Local actions and confirmed project capture receipts.").foregroundStyle(.secondary) }
-                Spacer(); Button("Export visible activity") { export() }
+                Spacer()
+#if !DEBUG || !CONTEXTWARD_ACCEPTANCE
+                Button("Export visible activity") { export() }
+#endif
             }
             HStack {
                 TextField("Search activity", text: $search).textFieldStyle(.roundedBorder)
@@ -44,6 +47,9 @@ struct WorkspaceActivityView: View {
         }.padding(24).navigationTitle("Activity")
     }
     private func export() {
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        message = "File export is disabled in the isolated preview."
+#else
         let panel = NSSavePanel(); panel.allowedContentTypes = [.json]; panel.nameFieldStringValue = "controlward-activity.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -51,6 +57,7 @@ struct WorkspaceActivityView: View {
             try encoder.encode(events).write(to: url, options: .atomic); try SecureFiles.restrict(url)
             message = "Exported \(events.count) visible events."
         } catch { message = error.localizedDescription }
+#endif
     }
 }
 
