@@ -1,5 +1,29 @@
 import Foundation
 
+/// Shared by the native workspace and the portable research store, including release builds.
+enum ReviewWorkspace {
+    private enum Failure: Error { case invalidID }
+    static let id: UUID? = {
+        do { return try parseID(ProcessInfo.processInfo.environment["CONTROLWARD_REVIEW_ID"]) }
+        catch { fatalError("CONTROLWARD_REVIEW_ID must be a UUID v4. No workspace was opened.") }
+    }()
+    static func parseID(_ raw: String?) throws -> UUID? {
+        guard let raw else { return nil }
+        guard let id = UUID(uuidString: raw), id.uuidString == raw.uppercased(),
+              Array(id.uuidString)[14] == "4", "89AB".contains(Array(id.uuidString)[19]) else {
+            throw Failure.invalidID
+        }
+        return id
+    }
+    static var directory: URL? {
+        guard let id else { return nil }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("ControlWard Reviews", isDirectory: true)
+            .appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+}
+
 /// A refusal from any lead-pipeline gate. `code` is the CW-AUDIT `result=` value, e.g. `refused:loi25-gate`.
 struct LeadPipelineRefusal: Error, Equatable, CustomStringConvertible, Sendable {
     var code: String

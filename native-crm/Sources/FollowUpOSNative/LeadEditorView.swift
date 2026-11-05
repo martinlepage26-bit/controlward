@@ -19,8 +19,9 @@ struct LeadEditorView: View {
 
     init(lead: Lead, isNew: Bool) {
         _draft = State(initialValue: lead)
-        _message = State(initialValue: lead.lastMessage)
-        _showWriter = State(initialValue: !lead.lastMessage.isEmpty)
+        _message = State(initialValue: lead.outreachDraft ?? lead.lastMessage)
+        _showWriter = State(initialValue: lead.outreachDraft != nil || !lead.lastMessage.isEmpty)
+        _writerNote = State(initialValue: lead.outreachDraft == nil ? nil : "Saved unsent draft. Review against the current record before sending.")
         self.isNew = isNew
     }
 
@@ -253,6 +254,7 @@ struct LeadEditorView: View {
                         .foregroundStyle(.secondary)
                 }
                 TextEditor(text: $message)
+                    .onChange(of: message) { _, value in draft.outreachDraft = value }
                     .font(.body)
                     .frame(minHeight: 130)
                     .padding(6)
@@ -345,6 +347,7 @@ struct LeadEditorView: View {
             return
         }
         draft.name = trimmed
+        if showWriter && (draft.outreachDraft != nil || message != draft.lastMessage) { draft.outreachDraft = message }
         if isNew ? store.add(draft) : store.update(draft) { dismiss() }
         else { validationMessage = store.saveFailure }
     }
@@ -378,6 +381,7 @@ struct LeadEditorView: View {
         Task {
             let result = await store.generateMessage(for: draft)
             message = result.text
+            draft.outreachDraft = result.text
             draftUsedAI = result.usedIntelligence
             groundedDraft = result.grounded
             writerNote = result.usedIntelligence

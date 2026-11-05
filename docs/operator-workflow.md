@@ -6,7 +6,7 @@ Start in **Pipeline**. Import an existing lead CSV, add a lead by hand, or use *
 
 Open a lead and check its name, source evidence, contact details, service or ask, and next follow-up date. Enter a value only when you have one. Choose **Review conversion…**, check the proposed company, contact, opportunity and follow-up task, then confirm. A business without a named person creates no invented contact. A second conversion reuses its links.
 
-Choose **Write follow-up message**. Read the draft and its recorded facts/unknowns. Apple Intelligence may rephrase it; unsupported output falls back to the grounded draft. Email opens a draft in Mail.app when an address exists. Review recipients and text there before sending. Record the actual follow-up in ControlWard only after it happened.
+Choose **Write follow-up message**. Read the draft and its recorded facts/unknowns. Apple Intelligence may rephrase it; unsupported output falls back to the grounded draft. **Save & close** retains the unsent text separately from contact history. Reopen the lead to continue editing it. Email opens a draft in Mail.app when an address exists. Review recipients and text there before sending. Record the actual follow-up in ControlWard only after it happened; this moves the draft into sent history.
 
 Use **Tasks** or the lead's next follow-up date to maintain the next action. The converted lead and its follow-up task share the date. Operations → **Schedule reminders** requests notification permission explicitly and reports the result. Until macOS authorization and delivery are confirmed, use the visible Pipeline due list and Tasks list; they work without notifications.
 

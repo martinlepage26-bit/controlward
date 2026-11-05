@@ -60,6 +60,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var sequenceStage = 0
     var notes = ""
     var lastMessage = ""
+    /// Unsent work, kept separate from recorded contact and sent-message history.
+    var outreachDraft: String?
     var history: [FollowUpEvent] = []
     var createdAt = Date.now.ISO8601Format()
     var wonAt: String?

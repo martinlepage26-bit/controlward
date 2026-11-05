@@ -6,6 +6,8 @@ import Foundation
             try expect(try StorageLocation.parseReviewID(nil) == nil, "normal launch became a review")
             let id = UUID()
             try expect(try StorageLocation.parseReviewID(id.uuidString.lowercased()) == id, "valid v4 ID refused")
+            let review = URL(fileURLWithPath: "/synthetic-review/\(id.uuidString)", isDirectory: true)
+            try expect(LeadPipelineEnvironment.defaultRoot(reviewDirectory: review) == review.appendingPathComponent("leads", isDirectory: true), "research store escaped the review workspace")
             for raw in ["", "../workspace", "not-a-uuid", "00000000-0000-0000-0000-000000000000"] {
                 var refused = false
                 do { _ = try StorageLocation.parseReviewID(raw) } catch { refused = true }
@@ -48,6 +50,8 @@ import Foundation
         let mail = MailIntakeController(tokens: tripwire, transport: tripwire, accessMode: .live, reviewMode: true)
         try expect(store.isReviewMode && store.savedKeys.isEmpty && !mail.anyConnected, "review observed accounts")
         try expect(store.secrets is InMemorySecretStore && mail.accessMode == .isolated, "live account store selected")
+        store.setAPIKey("synthetic-review-key", for: .pharos)
+        try expect(!store.hasKey(.pharos) && store.notice?.contains("review mode") == true, "review accepted a connector key")
         try expect(store.createWorkspace(name: "Review", industry: "Consulting"), "review workspace did not save")
         let task = CRMTask(title: "Synthetic review", dueDate: "2030-01-01")
         try expect(store.add(task), "local CRM write failed")
@@ -65,5 +69,12 @@ import Foundation
         try expect(center.pending[reminder.id] == reminder && center.requestCalls == 0, "review touched notifications")
         let reloaded = AppStore(storageURL: store.storageURL, secrets: tripwire, reviewMode: true)
         try expect(reloaded.tasks == [task] && tripwire.calls == 0, "review record lost after reload")
+        var lead = Lead.blank(); lead.name = "Synthetic draft"; lead.outreachDraft = "An unsent introduction."
+        try expect(store.add(lead), "draft lead did not save")
+        let saved = AppStore(storageURL: store.storageURL, reviewMode: true).leads[0]
+        try expect(saved.outreachDraft == lead.outreachDraft && saved.lastMessage.isEmpty && saved.history.isEmpty && saved.sequenceStage == 0, "saving a draft recorded contact or lost its text")
+        try expect(store.groundedDraft(for: saved).subject == "Introduction", "unsent draft invented prior contact")
+        try expect(store.markMessageSent(on: &lead, message: lead.outreachDraft!), "synthetic sent log did not save")
+        try expect(lead.outreachDraft == nil && lead.history.count == 1 && lead.lastMessage == "An unsent introduction.", "sent log did not consume the unsent draft")
     }
 }

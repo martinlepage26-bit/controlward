@@ -582,7 +582,7 @@ struct SettingsPanel: View {
             }.padding(7).background(RoundedRectangle(cornerRadius: 8).stroke(Color.black.opacity(0.08)))
             VStack(alignment: .leading, spacing: 4) {
                 Text("API keys").font(.system(size: 10.5, weight: .semibold))
-                Text("Keys are stored in the macOS Keychain and are write-only here. \(store.savedKeys.count) saved.").font(.system(size: 9)).foregroundStyle(CWPalette.gray).fixedSize(horizontal: false, vertical: true)
+                Text(store.isReviewMode ? "Account connections are off in this review workspace." : "Keys are stored in the macOS Keychain and are write-only here. \(store.savedKeys.count) saved.").font(.system(size: 9)).foregroundStyle(CWPalette.gray).fixedSize(horizontal: false, vertical: true)
                 HStack { Spacer(); Button { navigation.show(.settings) } label: { Label("Manage keys", systemImage: "key") }
                     .buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(CWPalette.bronze).padding(.horizontal, 8).padding(.vertical, 4)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(CWPalette.bronze)) }

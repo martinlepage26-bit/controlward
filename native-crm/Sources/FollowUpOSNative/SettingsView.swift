@@ -75,7 +75,7 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("API keys").font(.headline)
-                    Text("Keys are stored in the macOS login Keychain, never in workspace data or exports. They are write-only here: paste to save or replace.")
+                    Text(store.isReviewMode ? "Account connections are off in this review workspace. Keys cannot be saved here." : "Keys are stored in the macOS login Keychain, never in workspace data or exports. They are write-only here: paste to save or replace.")
                         .font(.callout).foregroundStyle(.secondary)
                     ForEach(SyncTarget.keyed) { target in
                         HStack {

@@ -8,29 +8,17 @@ enum StorageLocation {
     static let folderName = "Contextward"
     /// A release review uses a separate workspace inside the app's sandbox.
     /// Invalid IDs fail before any account or workspace can be opened.
-    static let reviewID: UUID? = {
-        do { return try parseReviewID(ProcessInfo.processInfo.environment["CONTROLWARD_REVIEW_ID"]) }
-        catch { fatalError("CONTROLWARD_REVIEW_ID must be a UUID v4. No workspace was opened.") }
-    }()
+    static var reviewID: UUID? { ReviewWorkspace.id }
     static var isReview: Bool { reviewID != nil }
 
     static func parseReviewID(_ raw: String?) throws -> UUID? {
-        guard let raw else { return nil }
-        guard let id = UUID(uuidString: raw), id.uuidString == raw.uppercased(),
-              Array(id.uuidString)[14] == "4", "89AB".contains(Array(id.uuidString)[19]) else {
-            throw CocoaError(.validationMissingMandatoryProperty)
-        }
-        return id
+        try ReviewWorkspace.parseID(raw)
     }
 
     /// `~/Library/Application Support/Contextward/`. Under the App Sandbox the
     /// system resolves this inside `~/Library/Containers/com.pharos.contextward/Data/`.
     static var directory: URL {
-        if let reviewID {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            return base.appendingPathComponent("ControlWard Reviews", isDirectory: true)
-                .appendingPathComponent(reviewID.uuidString, isDirectory: true)
-        }
+        if let review = ReviewWorkspace.directory { return review }
         #if DEBUG
         // Debug-only test hook. Release builds never read the environment for storage.
         if let override = ProcessInfo.processInfo.environment["FOLLOWUPOS_DATA_DIR"], !override.isEmpty {

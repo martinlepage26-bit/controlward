@@ -166,6 +166,7 @@ final class AppStore: ObservableObject {
 
     /// Saves or replaces a key in the Keychain. The key never enters workspace data, activity, or logs.
     func setAPIKey(_ key: String, for target: SyncTarget) {
+        guard !isReviewMode else { showNotice("Account connections are off in review mode."); return }
         let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { showNotice("\(target.label) key is empty. Nothing was saved."); return }
         do {
@@ -1698,6 +1699,7 @@ final class AppStore: ObservableObject {
         let stage = next.sequenceStage
         let delay = stage < FollowUpCadence.days.count ? FollowUpCadence.days[stage] : nil
         next.lastMessage = message
+        next.outreachDraft = nil
         next.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
         next.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
         next.history.append(FollowUpEvent(date: today, message: message))
