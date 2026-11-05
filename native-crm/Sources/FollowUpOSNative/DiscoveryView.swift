@@ -12,6 +12,7 @@ struct DiscoveryView: View {
     @State private var searching = false
     @State private var error: String?
     @State private var lastSearchAt: Date?
+    @State private var cooldownActive = false
     @State private var addedIDs = Set<String>()
 
     var body: some View {
@@ -25,6 +26,7 @@ struct DiscoveryView: View {
                 Button("Done") { dismiss() }
             }
 
+            SaveFailureNotice()
             HStack(alignment: .bottom, spacing: 12) {
                 Picker("Category", selection: $category) {
                     ForEach(DiscoveryCategory.allCases) { Text($0.label).tag($0) }
@@ -56,6 +58,10 @@ struct DiscoveryView: View {
             Text("Priority formula: category and area 50 + website 20 + phone 15 + email 15. This measures public-data completeness; it does not estimate buying intent. Results are capped at 50. Each search is user-started, with a 15-second cooldown.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(CRMTheme.rust) }
+            if lastSearchAt != nil && !searching && error == nil && results.isEmpty {
+                Text("No named businesses found in this area. Try a wider radius or another category.")
+                    .foregroundStyle(.secondary)
+            }
 
             List(results) { candidate in
                 HStack(alignment: .top, spacing: 12) {
@@ -73,7 +79,7 @@ struct DiscoveryView: View {
                     if addedIDs.contains(candidate.sourceID) || store.leads.contains(where: { $0.sourceID == candidate.sourceID }) {
                         Label("In pipeline", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(CRMTheme.moss)
                     } else {
-                        Button("Add for review") { _ = store.acceptDiscovery(candidate); addedIDs.insert(candidate.sourceID) }
+                        Button("Add for review") { if store.acceptDiscovery(candidate) != nil { addedIDs.insert(candidate.sourceID) } }
                             .buttonStyle(.bordered)
                     }
                 }.padding(.vertical, 4)
@@ -87,9 +93,14 @@ struct DiscoveryView: View {
             let point = selected.coordinates
             if selected != .custom { latitude = String(point.0); longitude = String(point.1) }
         }
+        .task(id: lastSearchAt) {
+            guard let lastSearchAt else { return }
+            let remaining = max(0, 15 - Date.now.timeIntervalSince(lastSearchAt))
+            do { try await Task.sleep(for: .seconds(remaining)) }
+            catch { return }
+            cooldownActive = false
+        }
     }
-
-    private var cooldownActive: Bool { lastSearchAt.map { Date.now.timeIntervalSince($0) < 15 } ?? false }
 
     @MainActor
     private func search() async {
@@ -101,6 +112,7 @@ struct DiscoveryView: View {
         searching = true
         error = nil
         lastSearchAt = .now
+        cooldownActive = true
         defer { searching = false }
         do { results = try await DiscoveryClient().search(category: category.selector, latitude: lat, longitude: lon, radiusMeters: radius, limit: 50) }
         catch { results = []; self.error = error.localizedDescription }

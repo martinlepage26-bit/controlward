@@ -1,6 +1,7 @@
 import SwiftUI
 
 private struct EditorShell<Content: View>: View {
+    @EnvironmentObject private var store: AppStore
     let title: String
     let onCancel: () -> Void
     let onSave: () -> Void
@@ -18,10 +19,12 @@ private struct EditorShell<Content: View>: View {
             .padding(16)
             .background(CRMTheme.ink)
             .foregroundStyle(.white)
+            SaveFailureNotice()
             Form { content() }
                 .formStyle(.grouped)
         }
         .frame(width: 560, height: 430)
+        .onAppear { store.clearSaveFailure() }
     }
 }
 
@@ -62,8 +65,7 @@ struct ContactEditor: View {
     private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
     private func save() {
         guard !draft.displayName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        existing ? store.update(draft) : store.add(draft)
-        dismiss()
+        if existing ? store.update(draft) : store.add(draft) { dismiss() }
     }
 }
 
@@ -90,8 +92,7 @@ struct CompanyEditor: View {
 
     private func save() {
         guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        existing ? store.update(draft) : store.add(draft)
-        dismiss()
+        if existing ? store.update(draft) : store.add(draft) { dismiss() }
     }
 }
 
@@ -136,7 +137,7 @@ struct OpportunityEditor: View {
     private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
     private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
     private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
-    private func save() { guard !draft.name.isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
+    private func save() { guard !draft.name.isEmpty else { return }; if existing ? store.update(draft) : store.add(draft) { dismiss() } }
 }
 
 struct TaskEditor: View {
@@ -198,8 +199,7 @@ struct TaskEditor: View {
         // Persist the displayed default too; otherwise a new task can appear dated
         // in the editor while still having no reminder instant in storage.
         if draft.reminderAt == nil { dueDateBinding.wrappedValue = dueDateBinding.wrappedValue }
-        existing ? store.update(draft) : store.add(draft)
-        dismiss()
+        if existing ? store.update(draft) : store.add(draft) { dismiss() }
     }
 }
 
@@ -233,5 +233,17 @@ struct NoteEditor: View {
 
     private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
     private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
-    private func save() { guard !draft.title.isEmpty else { return }; draft.updatedAt = Date.now.ISO8601Format(); existing ? store.update(draft) : store.add(draft); dismiss() }
+    private func save() { guard !draft.title.isEmpty else { return }; draft.updatedAt = Date.now.ISO8601Format(); if existing ? store.update(draft) : store.add(draft) { dismiss() } }
+}
+
+/// A save error remains visible while the editor retains the owner's draft.
+struct SaveFailureNotice: View {
+    @EnvironmentObject private var store: AppStore
+    var body: some View {
+        if let error = store.saveFailure {
+            Label(error + " Check storage and try saving again.", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(CRMTheme.rust)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+        }
+    }
 }

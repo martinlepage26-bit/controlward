@@ -318,9 +318,10 @@ enum IntegrationTests {
         seedCRM(store)
         _ = store.previewTwentyPush()
         var task = CRMTask(); task.title = "Added after preview"; store.add(task)
+        try expect(store.twentyPreview == nil, "saving an edit left a stale preview enabled")
         let before = fake.methodLog.count
         let job = await store.pushToTwenty()
-        try expect(job.status == "failed" && job.error?.contains("changed after preview") == true, "stale preview was not rejected")
+        try expect(job.status == "failed" && job.error?.lowercased().contains("preview") == true, "push without a fresh preview was not rejected")
         try expect(fake.methodLog.count == before, "stale preview made a network request")
         try expect(store.twentyPreview == nil, "stale preview was not cleared")
     }

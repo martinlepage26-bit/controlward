@@ -46,6 +46,7 @@ struct ProspectSearchRun: Sendable {
 
     func run(_ request: Request) async -> Report {
         var report = Report(runID: runID)
+        guard !Task.isCancelled else { return report }
         guard let segment = config.segment(request.segmentID) else {
             audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "search", target: request.segmentID, source: "controlward",
                                     result: "refused:unknown-segment", receipt: runID))
@@ -63,6 +64,7 @@ struct ProspectSearchRun: Sendable {
         }
         var overpassUp = overpassAnswered(outcomes)
         for factor in Self.topUpFactors where candidates.count < request.limit && overpassUp {
+            guard !Task.isCancelled else { break }
             let radius = min(request.radiusMeters * factor, 50_000)
             guard radius > report.radiusUsed else { break }
             let (more, moreOutcomes) = await discovery.searchWithOutcomes(
@@ -96,6 +98,7 @@ struct ProspectSearchRun: Sendable {
         }
         var seenDomains = Set<String>()
         for candidate in candidates {
+            guard !Task.isCancelled else { break }
             let website = candidate.website.flatMap(Self.siteURL)
             let host = website?.host?.lowercased()
             let normalized = ProspectIdentity.normalizedDomain(host)
@@ -119,6 +122,7 @@ struct ProspectSearchRun: Sendable {
             }
             let domain = HostMatch.registrable(host)
             let pages = await fetchSite(siteURL, domain: domain, segment: segment)
+            guard !Task.isCancelled else { break }
             guard !pages.isEmpty else { skip(candidate, "own site not readable"); continue }
             if ProspectIdentity.siteSaysClosed(pages) {
                 place.closed = true
@@ -240,6 +244,7 @@ struct ProspectSearchRun: Sendable {
         var queue: [URL] = [first]
         var planned = false
         while !queue.isEmpty {
+            guard !Task.isCancelled else { break }
             let url = queue.removeFirst()
             defer {
                 if !planned {

@@ -18,4 +18,5 @@ codesign --force --timestamp=none --sign - "${APP}"
 print "Preview app: ${APP}"
 print "Synthetic data: ${PREVIEW_ROOT}/data"
 # No Keychain access; both embedded modules use ephemeral stores in this build.
-FOLLOWUPOS_DATA_DIR="${PREVIEW_ROOT}/data" CONTROLWARD_PREVIEW=synthetic "${APP}/Contents/MacOS/FollowUpOSNative"
+# Launch through Launch Services so macOS recognizes the preview bundle when requesting notifications.
+open -n -W --env "FOLLOWUPOS_DATA_DIR=${PREVIEW_ROOT}/data" --env CONTROLWARD_PREVIEW=synthetic "${APP}"

@@ -67,6 +67,9 @@ struct PipelineView: View {
                     MetricCard(value: currency(store.dollarsWon), label: "$ won", symbol: "checkmark.circle")
                     MetricCard(value: currency(store.activePipeline), label: "$ still open", symbol: "chart.line.uptrend.xyaxis")
                 }
+                Text("Totals use owner-entered values only; a converted lead counts once, through its opportunity.\(store.outcomes.openWithoutValue > 0 ? " \(store.outcomes.openWithoutValue) open record\(store.outcomes.openWithoutValue == 1 ? " has" : "s have") no value and \(store.outcomes.openWithoutValue == 1 ? "is" : "are") not estimated." : "")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 11) {
                     SectionLabel(text: store.dueLeads.isEmpty ? "Due today" : "\(store.dueLeads.count) follow-up\(store.dueLeads.count == 1 ? "" : "s") due")
@@ -160,7 +163,7 @@ struct PipelineView: View {
                 .environmentObject(store)
         }
         .sheet(isPresented: $showDiscovery) { DiscoveryView().environmentObject(store) }
-        .sheet(isPresented: $showLeads) { ProspectLeadsView() }
+        .sheet(isPresented: $showLeads) { ProspectLeadsView().environmentObject(store) }
         .sheet(item: $selectedOpportunity) { OpportunityEditor(opportunity: $0).environmentObject(store) }
         .alert("CSV import failed", isPresented: Binding(
             get: { importError != nil },

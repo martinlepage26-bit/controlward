@@ -4,6 +4,17 @@ All notable changes to this application are documented in this file.
 
 ## Unreleased
 
+- Lead to follow-up: Ready prospects can be added to Pipeline with their evidence; the lead editor shows
+  source, evidence and an itemised completeness score that is not buying intent; **Review conversion…**
+  previews and then creates linked company, contact, opportunity and follow-up task records; the local
+  draft states only recorded facts. Pipeline totals no longer count a converted lead twice. An unlinked
+  lead no longer lists every unlinked note, task and audit. `bin/test-crm-core` runs these checks on
+  macOS or Linux.
+- A lead's follow-up task and its next follow-up date stay in step, and a won or lost deal closes the task
+  and cancels its reminder. Apple Intelligence drafts are limited to recorded facts and checked before they
+  are shown. A hand-entered lead is no longer thanked for getting in touch.
+- Fixed a broken `Integrations.swift` (truncated `TwentyObject`) and the `bin/test-workspace-modules` source
+  list; `bin/check-native-source-lists` guards both test scripts' lists.
 - Every app build is traceable: the bundle's `CFBundleVersion` is stamped
   automatically (base 103 + commits since 001c7cd), and `ControlWardGitCommit` /
   `ControlWardGitDirty` record the source commit. About ControlWard shows

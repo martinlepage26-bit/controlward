@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Builds and runs the CRM model-layer tests (lead → contact/company/opportunity/task workflow, outcome totals,
+# grounded drafts, reminder timing, workspace.json round trip). No SwiftUI, AppKit, Keychain or network.
+# Runs on macOS and on Linux with a Swift 6 toolchain. On Linux, CryptoKit (SHA-256 only) is replaced by a
+# test shim and EndpointPolicy by a fail-closed stub; neither is ever part of the app.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
+TEST_ROOT="${PROJECT_ROOT}/native-crm/Tests"
+BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/crm-core-tests"
+mkdir -p "${BUILD_ROOT}"
+
+source "${SCRIPT_DIR}/portable-sources.sh"
+CRM_CORE_SOURCES=(Models.swift GTMModels.swift AccountIdentity.swift AccountScoring.swift ControlWardModels.swift LeadWorkflow.swift)
+
+SHIM_FLAGS=()
+if [ "$(uname -s)" != "Darwin" ]; then
+  swiftc -parse-as-library -swift-version 6 -module-name CryptoKit -emit-library -static -emit-module \
+    -emit-module-path "${BUILD_ROOT}/CryptoKit.swiftmodule" -o "${BUILD_ROOT}/libCryptoKit.a" \
+    "${TEST_ROOT}/LinuxShims/CryptoKit.swift"
+  SHIM_FLAGS=(-I "${BUILD_ROOT}" -L "${BUILD_ROOT}" -lCryptoKit)
+fi
+
+swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 ${SHIM_FLAGS[@]+"${SHIM_FLAGS[@]}"} \
+  "${CRM_CORE_SOURCES[@]/#/${SOURCE_ROOT}/}" \
+  "${PORTABLE_SOURCES[@]/#/${SOURCE_ROOT}/}" \
+  "${TEST_ROOT}/LinuxShims/EndpointPolicyStub.swift" \
+  "${TEST_ROOT}/PortableCheck.swift" \
+  "${TEST_ROOT}/CRMWorkflowTests.swift" \
+  "${TEST_ROOT}/CRMCoreMain.swift" \
+  -o "${BUILD_ROOT}/CRMCoreTests"
+
+"${BUILD_ROOT}/CRMCoreTests" "$@"

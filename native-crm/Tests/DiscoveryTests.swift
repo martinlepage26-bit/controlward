@@ -41,9 +41,18 @@ enum DiscoveryTests {
         try expect(candidate.name == "Synthetic Cafe" && candidate.sourceID == "osm:node:101", "source identity was not preserved")
         try expect(candidate.researchPriority == 85 && candidate.readyForHumanReview, "visible evidence score is incorrect")
         try expect(candidate.evidence.contains("Buyer intent is unknown") && candidate.evidence.contains("Source:"), "evidence rationale or attribution missing")
-        let store = AppStore(storageURL: FileManager.default.temporaryDirectory.appendingPathComponent("discovery-\(UUID().uuidString).json"), secrets: InMemorySecretStore(), transport: fake)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-discovery-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AppStore(storageURL: root.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(), transport: fake)
         let leadID = store.acceptDiscovery(candidate)
-        try expect(store.leads.first?.id == leadID && store.signals.first?.fitScore == 85, "selected prospect was not added with its score")
+        try expect(leadID != nil && store.leads.first?.id == leadID && store.signals.first?.fitScore == 85, "selected prospect was not saved: \(store.saveFailure ?? "no save error")")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        try expect(reloaded.leads.first?.id == leadID && reloaded.signals.first?.fitScore == 85, "discovery import did not survive reload")
+        try expect(store.leads.first?.service.isEmpty == true, "business category became a requested service")
+        try expect(candidate.evidence.contains("website 20, phone 15, email 0"), "evidence lists maximum points instead of earned points")
+        var blank = candidate
+        blank.website = "  "; blank.phone = ""; blank.email = "\n"
+        try expect(blank.researchPriority == 50 && blank.evidence.contains("website 0, phone 0, email 0"), "blank contact fields earned points")
         _ = store.acceptDiscovery(candidate)
         try expect(store.leads.count == 1, "duplicate public source was added twice")
         guard let body = fake.requests.first?.httpBody, let encoded = String(data: body, encoding: .utf8) else { throw SmokeTestFailure.failed("Overpass request body missing") }

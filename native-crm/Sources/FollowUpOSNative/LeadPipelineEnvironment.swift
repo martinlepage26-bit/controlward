@@ -18,7 +18,9 @@ struct LeadPipelineEnvironment: Sendable {
     var discoveredURL: URL { root.appendingPathComponent("discovered.json") }
 
     /// `CONTROLWARD_LEADS_DIR`, else `~/Library/Application Support/ControlWard/leads`.
-    static func defaultRoot() -> URL {
+    static func defaultRoot(reviewDirectory: URL? = ReviewWorkspace.directory) -> URL {
+        // Review mode takes precedence over the normal research store and its legacy override.
+        if let reviewDirectory { return reviewDirectory.appendingPathComponent("leads", isDirectory: true) }
         if let env = ProcessInfo.processInfo.environment["CONTROLWARD_LEADS_DIR"], !env.isEmpty { return URL(fileURLWithPath: env) }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
@@ -82,6 +84,7 @@ struct LeadPipelineEnvironment: Sendable {
         var reports: [ProspectSearchRun.Report] = []
         let store = ProspectLeadsStore(fileURL: storeURL)
         for request in requests {
+            guard !Task.isCancelled else { break }
             let report = await run.run(request)
             _ = await ProspectIngest.ingest(report.prospects, into: store, config: config, now: clock.now, audit: audit)
             reports.append(report)

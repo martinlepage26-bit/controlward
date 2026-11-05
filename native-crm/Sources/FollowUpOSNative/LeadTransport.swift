@@ -73,6 +73,19 @@ struct SystemLeadClock: LeadClock {
     }
 }
 
+/// The interactive desktop run can cancel and bounds every provider, site and robots request.
+struct InteractiveLeadTransport: LeadTransport {
+    let inner: any LeadTransport
+    func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
+        try Task.checkCancellation()
+        var bounded = request
+        bounded.timeoutInterval = min(request.timeoutInterval, 12)
+        let response = try await inner.send(bounded)
+        try Task.checkCancellation()
+        return response
+    }
+}
+
 /// Why a request is made. Each purpose has its own hosts in icp.json (S3-R11).
 enum FetchPurpose: Equatable, Sendable {
     case discovery
@@ -157,6 +170,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
     func fetch(_ url: URL, purpose: FetchPurpose, method: String = "GET", body: Data? = nil,
                headers: [String: String] = [:], maxBytes: Int? = nil, timeout: Double? = nil,
                meter: LeadWaitMeter? = nil) async throws -> LeadHTTPResponse {
+        try Task.checkCancellation()
         var current = url
         var hops = 0
         while true {
@@ -232,7 +246,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
             log(url, method: method, purpose: purpose, result: refusal.code)
             throw refusal
         } catch {
-            log(url, method: method, purpose: purpose, result: "error:network")
+            log(url, method: method, purpose: purpose, result: Task.isCancelled || error is CancellationError ? "refused:cancelled" : "error:network")
             throw error
         }
     }
@@ -346,6 +360,10 @@ final class GuardedLeadTransport: @unchecked Sendable {
                 } catch let refusal as LeadPipelineRefusal {
                     throw refusal
                 } catch {
+                    if Task.isCancelled || error is CancellationError {
+                        log(robotsURL, method: "GET", purpose: .ownSite(domain: host), result: "refused:cancelled")
+                        throw error
+                    }
                     log(robotsURL, method: "GET", purpose: .ownSite(domain: host), result: "error:network")
                     parsed = disallowAll
                 }

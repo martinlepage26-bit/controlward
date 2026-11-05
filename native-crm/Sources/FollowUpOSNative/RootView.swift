@@ -27,32 +27,38 @@ struct RootView: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            if case .blocked(let reason) = store.recoveryState {
-                ContentUnavailableView("Workspace recovery required", systemImage: "exclamationmark.shield.fill", description: Text(reason))
-                    .padding(40)
-            } else if store.business.name.isEmpty {
-                OnboardingView()
-            } else {
-                MainWorkspaceView()
+        VStack(spacing: 0) {
+            if store.isReviewMode {
+                Label("Review workspace · Local CRM and public prospect search. Account connections and notifications are off.", systemImage: "eyeglasses")
+                    .font(.callout).padding(10).frame(maxWidth: .infinity).background(CRMTheme.paper)
             }
+            ZStack(alignment: .bottom) {
+                if case .blocked(let reason) = store.recoveryState {
+                    ContentUnavailableView("Workspace recovery required", systemImage: "exclamationmark.shield.fill", description: Text(reason))
+                        .padding(40)
+                } else if store.business.name.isEmpty {
+                    OnboardingView()
+                } else {
+                    MainWorkspaceView()
+                }
 
-            if let notice = store.notice {
-                Text(notice)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 11)
-                    .background(CRMTheme.ink, in: Capsule())
+                if let notice = store.notice {
+                    Text(notice)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 11)
+                        .background(CRMTheme.ink, in: Capsule())
 
-                    .padding(.bottom, 20)
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, 20)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.notice)
+            .background(CRMTheme.paper)
+            .tint(CRMTheme.amberDark)
+            .preferredColorScheme(.light)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.notice)
-        .background(CRMTheme.paper)
-        .tint(CRMTheme.amberDark)
-        .preferredColorScheme(.light)
     }
 }
 

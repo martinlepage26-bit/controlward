@@ -97,7 +97,6 @@ extension AppStore {
             guard let index = next.tasks.firstIndex(where: { $0.id == id }) else { throw ControlWardError.invalid("Task no longer exists.") }
             next.tasks[index].status = completed ? .done : .todo
         }
-        if let task = tasks.first(where: { $0.id == id }) { Task { await scheduleTaskReminder(for: task) } }
     }
 
     func createSecurityReviewTask(_ findingID: UUID) throws {

@@ -60,6 +60,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var sequenceStage = 0
     var notes = ""
     var lastMessage = ""
+    /// Unsent work, kept separate from recorded contact and sent-message history.
+    var outreachDraft: String?
     var history: [FollowUpEvent] = []
     var createdAt = Date.now.ISO8601Format()
     var wonAt: String?
@@ -68,6 +70,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var sourceID: String?
     /// Timestamp of the latest upstream message applied to this lead, when source-backed.
     var sourceUpdatedAt: String?
+    /// The open follow-up task created when the owner converted this lead (its next action).
+    var followUpTaskID: UUID?
 
     static func blank(today: Date = .now) -> Lead {
         var lead = Lead()
@@ -501,4 +505,40 @@ enum CalendarCRM {
 
 enum FollowUpCadence {
     static let days = [1, 3, 7, 14]
+}
+
+// MARK: - Persisted connector records
+// Plain data stored in workspace.json. Kept here (not in Integrations.swift) so the model layer
+// compiles without the Keychain-backed connector code.
+
+/// Last verified result for a connector. Contains no secrets.
+struct ConnectorHealth: Codable, Equatable, Sendable {
+    var ok: Bool
+    var detail: String
+    var checkedAt = Date.now.ISO8601Format()
+}
+
+enum TwentyObject: String, CaseIterable, Codable, Sendable {
+    // Push order matters: people and opportunities reference companies; opportunities reference people.
+    case companies, people, opportunities, tasks
+
+    var singular: String {
+        switch self {
+        case .companies: "Company"
+        case .people: "Person"
+        case .opportunities: "Opportunity"
+        case .tasks: "Task"
+        }
+    }
+
+    var label: String { rawValue.capitalized }
+}
+
+/// Local record to Twenty record link, stored in the workspace. `payloadHash`
+/// lets unchanged records be skipped instead of re-sent.
+struct TwentyLink: Codable, Equatable, Sendable {
+    var twentyID: String
+    var object: TwentyObject
+    var payloadHash: String
+    var syncedAt = Date.now.ISO8601Format()
 }

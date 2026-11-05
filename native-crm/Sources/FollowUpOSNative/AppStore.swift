@@ -17,6 +17,7 @@ enum WorkspaceRecoveryState: Equatable {
 final class AppStore: ObservableObject {
     @Published private(set) var workspace: PersistentWorkspace
     @Published var notice: String?
+    @Published private(set) var saveFailure: String?
     /// The last CSV import's result; stays until Martin closes it (CSV-5).
     @Published var lastCSVImport: CSVImportResult?
     @Published private(set) var recoveryState: WorkspaceRecoveryState
@@ -29,6 +30,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var pharosPreviewFingerprint: String?
 
     let storageURL: URL
+    let isReviewMode: Bool
     let secrets: SecretStore
     let transport: HTTPTransport
     var twentyPacing: Duration = .milliseconds(700)
@@ -36,19 +38,34 @@ final class AppStore: ObservableObject {
     /// Receives every sync log line (tests assert these carry no keys or PII).
     var syncLogSink: ((String) -> Void)?
     private var noticeTask: Task<Void, Never>?
+    @Published private(set) var reminderStatus = "Choose Schedule reminders to check notification access."
+    private let reminderCoordinator: ReminderCoordinator?
+    private var lastQueuedReminders: [LeadWorkflow.Reminder]?
     /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
     private var importedCSVFiles: [String: Date] = [:]
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport()) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview) {
         self.storageURL = storageURL
+        self.isReviewMode = reviewMode
+#if CONTEXTWARD_ACCEPTANCE
+        let center: (any ReminderSchedulingCenter)? = reviewMode ? nil : (reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil))
+#else
+        let center: (any ReminderSchedulingCenter)? = reviewMode ? nil : (reminderCenter ?? SystemReminderCenter())
+#endif
+        self.reminderCoordinator = center.map { ReminderCoordinator(center: $0) }
         let selectedSecrets: SecretStore
+        if reviewMode {
+            selectedSecrets = InMemorySecretStore()
+        } else {
 #if CONTEXTWARD_ACCEPTANCE
         selectedSecrets = secrets ?? InMemorySecretStore()
 #else
         selectedSecrets = secrets ?? KeychainSecretStore()
 #endif
+        }
         self.secrets = selectedSecrets
-        self.transport = transport
+        self.transport = reviewMode ? IsolatedMailTransport() : transport
+        if reviewMode { self.reminderStatus = "Review workspace: macOS notifications are not scheduled." }
         let loaded = Self.load(from: storageURL)
         self.workspace = loaded.workspace
         self.recoveryState = loaded.recovery
@@ -149,6 +166,7 @@ final class AppStore: ObservableObject {
 
     /// Saves or replaces a key in the Keychain. The key never enters workspace data, activity, or logs.
     func setAPIKey(_ key: String, for target: SyncTarget) {
+        guard !isReviewMode else { showNotice("Account connections are off in review mode."); return }
         let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { showNotice("\(target.label) key is empty. Nothing was saved."); return }
         do {
@@ -728,20 +746,12 @@ final class AppStore: ObservableObject {
         return audits.map(\.languageGap).reduce(0, +) / Double(audits.count)
     }
 
-    var closeRate: Int {
-        let closed = leads.filter { $0.status == .won || $0.status == .lost }
-        guard !closed.isEmpty else { return 0 }
-        return Int((Double(closed.filter { $0.status == .won }.count) / Double(closed.count) * 100).rounded())
-    }
-
-    var dollarsWon: Double {
-        leads.filter { $0.status == .won }.compactMap(\.quoteAmount).reduce(0, +)
-    }
-
-    var activePipeline: Double {
-        let native = opportunities.filter { !$0.stage.isClosed }.compactMap(\.amount).reduce(0, +)
-        return native + leads.filter { $0.status.isOpen }.compactMap(\.quoteAmount).reduce(0, +)
-    }
+    /// Totals from owner-entered values only. A converted lead's value and outcome come from its opportunity,
+    /// so nothing is counted twice; records without a value are counted, never estimated (LeadWorkflow.outcomes).
+    var outcomes: LeadWorkflow.Outcomes { LeadWorkflow.outcomes(leads: leads, opportunities: opportunities) }
+    var closeRate: Int { outcomes.closeRate }
+    var dollarsWon: Double { outcomes.wonValue }
+    var activePipeline: Double { outcomes.openValue }
 
     var openTasks: [CRMTask] {
         tasks.filter { $0.status != .done }.sorted { ($0.dueDate ?? "9999") < ($1.dueDate ?? "9999") }
@@ -771,53 +781,107 @@ final class AppStore: ObservableObject {
         .sorted { $0.createdAt > $1.createdAt }
     }
 
-    func createWorkspace(name: String, industry: String) {
-        workspace.business = BusinessProfile(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            industry: industry
-        )
-        persist(message: "Workspace created.")
-    }
-
-    func saveBusiness(_ business: BusinessProfile) {
-        workspace.business = business
-        persist(message: "Settings saved.")
-    }
-
-    func add(_ lead: Lead) {
-        if let sourceID = lead.sourceID, !sourceID.isEmpty,
-           workspace.leads.contains(where: { $0.sourceID == sourceID }) {
-            showNotice("This source record is already in the pipeline.")
-            return
+    @discardableResult
+    func createWorkspace(name: String, industry: String) -> Bool {
+        return saveChange { next in
+            next.business = BusinessProfile(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                industry: industry
+            )
+            return "Workspace created."
         }
-        workspace.leads.insert(lead, at: 0)
-        persist(message: "\(lead.name) added.")
-        if workspace.autoPilotEnabled { _ = runAutomations() }
-    }
-
-    func linkLead(_ id: UUID, companyID: UUID?, contactID: UUID?) {
-        guard var lead = workspace.leads.first(where: { $0.id == id }) else { return }
-        lead.companyID = companyID
-        lead.contactID = contactID
-        if let companyID, let company = workspace.companies.first(where: { $0.id == companyID }) { lead.company = company.name }
-        replace(&workspace.leads, with: lead)
-        for index in workspace.signals.indices where workspace.signals[index].leadID == id {
-            workspace.signals[index].companyID = companyID
-            workspace.signals[index].contactID = contactID
-        }
-        persist(message: "Lead relationships saved.")
     }
 
     @discardableResult
-    func createOpportunity(from lead: Lead) -> Opportunity {
+    func saveBusiness(_ business: BusinessProfile) -> Bool {
+        return saveChange { next in
+            next.business = business
+            return "Settings saved."
+        }
+    }
+
+    @discardableResult
+    func add(_ lead: Lead) -> Bool {
+        let saved = saveChange { next in
+            if let sourceID = lead.sourceID, !sourceID.isEmpty,
+               next.leads.contains(where: { $0.sourceID == sourceID }) {
+                throw GTMError.invalid("This source record is already in the pipeline.")
+            }
+            var linked = lead
+            if let companyID = lead.companyID, let company = next.companies.first(where: { $0.id == companyID }) { linked.company = company.name }
+            next.leads.insert(linked, at: 0)
+            return "\(lead.name) added."
+        }
+        if saved && workspace.autoPilotEnabled { _ = runAutomations() }
+        return saved
+    }
+
+    @discardableResult
+    func linkLead(_ id: UUID, companyID: UUID?, contactID: UUID?) -> Bool {
+        return saveChange { next in
+            guard var lead = next.leads.first(where: { $0.id == id }) else { throw GTMError.invalid("This lead no longer exists.") }
+            lead.companyID = companyID
+            lead.contactID = contactID
+            if let companyID, let company = next.companies.first(where: { $0.id == companyID }) { lead.company = company.name }
+            replace(&next.leads, with: lead)
+            for index in next.signals.indices where next.signals[index].leadID == id {
+                next.signals[index].companyID = companyID
+                next.signals[index].contactID = contactID
+            }
+            return "Lead relationships saved."
+        }
+    }
+
+    @discardableResult
+    func createOpportunity(from lead: Lead) -> Opportunity? {
         if let existing = workspace.opportunities.first(where: { $0.leadID == lead.id }) { return existing }
         let opportunity = Opportunity(name: lead.service.isEmpty ? lead.name : "\(lead.name) — \(lead.service)", amount: lead.quoteAmount, stage: .lead, contactID: lead.contactID, companyID: lead.companyID, leadID: lead.id, notes: "Created from the lead pipeline.")
-        add(opportunity)
-        return opportunity
+        return add(opportunity) ? opportunity : nil
+    }
+
+    /// Preview of converting a reviewed lead into linked company, contact, opportunity and follow-up task records.
+    func conversionPlan(for lead: Lead) -> LeadWorkflow.ConversionPlan? {
+        LeadWorkflow.conversionPlan(for: lead.id, in: workspace)
+    }
+
+    /// Applies exactly the preview the owner confirmed. A changed preview, a blocker or a failed save writes nothing.
+    @discardableResult
+    func convertLead(confirmed plan: LeadWorkflow.ConversionPlan) -> LeadWorkflow.ConversionResult? {
+        var result: LeadWorkflow.ConversionResult?
+        do {
+            try commitWorkspace { next in result = try LeadWorkflow.applyConversion(plan, to: &next) }
+        } catch let error as LeadWorkflow.ConversionError {
+            showNotice(error.description)
+            return nil
+        } catch {
+            showNotice("The conversion was not saved. Nothing changed.")
+            return nil
+        }
+        guard let result else { return nil }
+        showNotice(result.created.isEmpty ? "Lead already linked; nothing new was created." : "Converted after review: \(result.created.joined(separator: ", ")).")
+        return result
+    }
+
+    /// Adds one Ready prospect from the Leads list to the CRM pipeline for review. Nothing is sent.
+    @discardableResult
+    func addProspectToPipeline(_ record: ProspectRecord) -> UUID? {
+        var leadID: UUID?
+        do {
+            try commitWorkspace { next in leadID = try LeadWorkflow.promote(record, into: &next) }
+        } catch let error as LeadWorkflow.PromotionError {
+            showNotice(error.description)
+            if case .alreadyInPipeline(let existing) = error { return existing }
+            return nil
+        } catch {
+            showNotice("The prospect was not added. Nothing changed.")
+            return nil
+        }
+        showNotice("\(record.organisation) added to the pipeline for review.")
+        return leadID
     }
 
     @discardableResult
-    func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID {
+    func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID? {
         if let existing = workspace.leads.first(where: { $0.sourceID == candidate.sourceID }) {
             showNotice("Already in pipeline: \(existing.name).")
             return existing.id
@@ -827,113 +891,205 @@ final class AppStore: ObservableObject {
         lead.company = candidate.name
         lead.phone = candidate.phone ?? ""
         lead.email = candidate.email ?? ""
-        lead.service = candidate.category
+        // A public business category is evidence about the business, not a service requested by a buyer.
+        lead.service = ""
         lead.sourceID = candidate.sourceID
         lead.notes = candidate.evidence
         lead.createdAt = candidate.capturedAt
-        workspace.leads.insert(lead, at: 0)
+        guard saveChange({ next in
+            next.leads.insert(lead, at: 0)
 
-        var signal = Signal()
-        signal.title = "Public prospect: \(candidate.name)"
-        signal.source = .imported
-        signal.status = .captured
-        signal.fitScore = candidate.researchPriority
-        signal.intentScore = 0
-        signal.priority = candidate.researchPriority
-        signal.leadID = lead.id
-        signal.companyID = lead.companyID
-        signal.contactID = lead.contactID
-        signal.sourceID = candidate.sourceID
-        signal.evidence = candidate.evidence
-        signal.nextAction = candidate.readyForHumanReview ? "Review public evidence and decide whether this is a suitable prospect." : "Review this public business record before pursuing it."
-        workspace.signals.insert(signal, at: 0)
-        workspace.activity.insert(ActivityEvent(kind: "discovery", message: "Added one public business record to the review pipeline.", sourceID: lead.id), at: 0)
-        persist(message: "\(candidate.name) added for human review.")
+            var signal = Signal()
+            signal.title = "Public prospect: \(candidate.name)"
+            signal.source = .imported
+            signal.status = .captured
+            signal.fitScore = candidate.researchPriority
+            signal.intentScore = 0
+            signal.priority = candidate.researchPriority
+            signal.leadID = lead.id
+            signal.companyID = lead.companyID
+            signal.contactID = lead.contactID
+            signal.sourceID = candidate.sourceID
+            signal.evidence = candidate.evidence
+            signal.nextAction = candidate.readyForHumanReview ? "Review public evidence and decide whether this is a suitable prospect." : "Review this public business record before pursuing it."
+            next.signals.insert(signal, at: 0)
+            next.activity.insert(ActivityEvent(kind: "discovery", message: "Added one public business record to the review pipeline.", sourceID: lead.id), at: 0)
+            return "\(candidate.name) added for human review."
+        }) else { return nil }
         return lead.id
     }
 
-    func add(_ contact: Contact) { workspace.contacts.insert(contact, at: 0); persist(message: "Contact added.") }
-    func update(_ contact: Contact) { replace(&workspace.contacts, with: contact); persist(message: "Contact saved.") }
-    func delete(_ contact: Contact) { workspace.contacts.removeAll { $0.id == contact.id }; persist(message: "Contact deleted.") }
-
-    func add(_ company: Company) { workspace.companies.insert(company, at: 0); persist(message: "Company added.") }
-    func update(_ company: Company) { replace(&workspace.companies, with: company); persist(message: "Company saved.") }
-    func delete(_ company: Company) { workspace.companies.removeAll { $0.id == company.id }; persist(message: "Company deleted.") }
-
-    func add(_ opportunity: Opportunity) { workspace.opportunities.insert(opportunity, at: 0); persist(message: "Opportunity added.") }
-    func update(_ opportunity: Opportunity) { replace(&workspace.opportunities, with: opportunity); persist(message: "Opportunity saved.") }
-    func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
-
-    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminder(for: task) } }
-    func update(_ task: CRMTask) { replace(&workspace.tasks, with: task); persist(message: "Task saved."); Task { await scheduleTaskReminder(for: task) } }
-    func delete(_ task: CRMTask) {
-        workspace.tasks.removeAll { $0.id == task.id }
-#if !CONTEXTWARD_ACCEPTANCE
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["contextward-task-\(task.id.uuidString)"])
-#else
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["contextward-task-\(task.id.uuidString)"])
-        }
-#endif
-        persist(message: "Task deleted.")
+    @discardableResult
+    func add(_ contact: Contact) -> Bool {
+        saveChange { next in next.contacts.insert(contact, at: 0); return "Contact added." }
+    }
+    @discardableResult
+    func update(_ contact: Contact) -> Bool {
+        saveChange { next in replace(&next.contacts, with: contact); return "Contact saved." }
+    }
+    @discardableResult
+    func delete(_ contact: Contact) -> Bool {
+        saveChange { next in next.contacts.removeAll { $0.id == contact.id }; return "Contact deleted." }
     }
 
-    func add(_ note: CRMNote) { workspace.notes.insert(note, at: 0); persist(message: "Note added.") }
-    func update(_ note: CRMNote) { replace(&workspace.notes, with: note); persist(message: "Note saved.") }
-    func delete(_ note: CRMNote) { workspace.notes.removeAll { $0.id == note.id }; persist(message: "Note deleted.") }
+    @discardableResult
+    func add(_ company: Company) -> Bool {
+        saveChange { next in next.companies.insert(company, at: 0); return "Company added." }
+    }
+    @discardableResult
+    func update(_ company: Company) -> Bool {
+        saveChange { next in replace(&next.companies, with: company); return "Company saved." }
+    }
+    @discardableResult
+    func delete(_ company: Company) -> Bool {
+        saveChange { next in next.companies.removeAll { $0.id == company.id }; return "Company deleted." }
+    }
 
-    func add(_ signal: Signal) { workspace.signals.insert(signal, at: 0); persist(message: "Signal captured.") }
-    func update(_ signal: Signal) { replace(&workspace.signals, with: signal); persist(message: "Signal saved.") }
-    func delete(_ signal: Signal) { workspace.signals.removeAll { $0.id == signal.id }; persist(message: "Signal deleted.") }
+    @discardableResult
+    func add(_ opportunity: Opportunity) -> Bool {
+        saveChange { next in next.opportunities.insert(opportunity, at: 0); return "Opportunity added." }
+    }
+    @discardableResult
+    func update(_ opportunity: Opportunity) -> Bool {
+        return saveChange { next in
+            replace(&next.opportunities, with: opportunity)
+            LeadWorkflow.mirrorOutcome(ofOpportunity: opportunity, in: &next)
+            var closedTask: CRMTask?
+            if opportunity.stage.isClosed, let leadID = opportunity.leadID, let lead = next.leads.first(where: { $0.id == leadID }) {
+                closedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &next)
+            }
+            return closedTask == nil ? "Opportunity saved." : "Opportunity saved; the lead's follow-up task is closed and its reminder cancelled."
+        }
+    }
 
-    func add(_ audit: BilingualAudit) { workspace.audits.insert(audit, at: 0); persist(message: "Lantern audit saved.") }
-    func update(_ audit: BilingualAudit) { replace(&workspace.audits, with: audit); persist(message: "Lantern audit updated.") }
-    func delete(_ audit: BilingualAudit) { workspace.audits.removeAll { $0.id == audit.id }; persist(message: "Lantern audit deleted.") }
+    @discardableResult
+    func delete(_ opportunity: Opportunity) -> Bool {
+        saveChange { next in next.opportunities.removeAll { $0.id == opportunity.id }; return "Opportunity deleted." }
+    }
 
-    func setAutomation(_ rule: AutomationRule, enabled: Bool) {
-        var updated = rule
-        updated.enabled = enabled
-        replace(&workspace.automationRules, with: updated)
-        persist(message: enabled ? "Automation enabled." : "Automation paused.")
+    @discardableResult
+    func add(_ task: CRMTask) -> Bool {
+        saveChange { next in next.tasks.insert(task, at: 0); return "Task added." }
+    }
+    @discardableResult
+    func update(_ task: CRMTask) -> Bool {
+        return saveChange { next in
+            replace(&next.tasks, with: task)
+            // A lead's follow-up task and the lead's next follow-up date stay the same date.
+            let leadMoved = LeadWorkflow.syncLead(afterSaving: task, in: &next)
+            return leadMoved ? "Task saved; the lead's next follow-up moved to \(task.dueDate ?? "-")." : "Task saved."
+        }
+    }
+
+    @discardableResult
+    func delete(_ task: CRMTask) -> Bool {
+        return saveChange { next in
+            next.tasks.removeAll { $0.id == task.id }
+            return "Task deleted."
+        }
+    }
+
+    @discardableResult
+    func add(_ note: CRMNote) -> Bool {
+        saveChange { next in next.notes.insert(note, at: 0); return "Note added." }
+    }
+    @discardableResult
+    func update(_ note: CRMNote) -> Bool {
+        saveChange { next in replace(&next.notes, with: note); return "Note saved." }
+    }
+    @discardableResult
+    func delete(_ note: CRMNote) -> Bool {
+        saveChange { next in next.notes.removeAll { $0.id == note.id }; return "Note deleted." }
+    }
+
+    @discardableResult
+    func add(_ signal: Signal) -> Bool {
+        saveChange { next in next.signals.insert(signal, at: 0); return "Signal captured." }
+    }
+    @discardableResult
+    func update(_ signal: Signal) -> Bool {
+        saveChange { next in replace(&next.signals, with: signal); return "Signal saved." }
+    }
+    @discardableResult
+    func delete(_ signal: Signal) -> Bool {
+        saveChange { next in next.signals.removeAll { $0.id == signal.id }; return "Signal deleted." }
+    }
+
+    @discardableResult
+    func add(_ audit: BilingualAudit) -> Bool {
+        saveChange { next in next.audits.insert(audit, at: 0); return "Lantern audit saved." }
+    }
+    @discardableResult
+    func update(_ audit: BilingualAudit) -> Bool {
+        saveChange { next in replace(&next.audits, with: audit); return "Lantern audit updated." }
+    }
+    @discardableResult
+    func delete(_ audit: BilingualAudit) -> Bool {
+        saveChange { next in next.audits.removeAll { $0.id == audit.id }; return "Lantern audit deleted." }
+    }
+
+    @discardableResult
+    func setAutomation(_ rule: AutomationRule, enabled: Bool) -> Bool {
+        return saveChange { next in
+            var updated = rule
+            updated.enabled = enabled
+            replace(&next.automationRules, with: updated)
+            return enabled ? "Automation enabled." : "Automation paused."
+        }
     }
 
     /// Runs only deterministic, local actions. No network calls, message sends, or external mutations occur here.
     @discardableResult
     func runAutomations() -> Int {
         var created = 0
-        let today = CalendarCRM.dayString()
-        if automationRules.contains(where: { $0.enabled && $0.trigger == .dueFollowUp }) {
-            for lead in dueLeads {
-                let alreadyExists = tasks.contains { task in
-                    task.title == "Follow up with \(lead.name)" && task.dueDate == today && task.status != .done
+        guard saveChange({ next in
+            let today = CalendarCRM.dayString()
+            if automationRules.contains(where: { $0.enabled && $0.trigger == .dueFollowUp }) {
+                for lead in dueLeads {
+                    // A linked next action is retained even when completed or deliberately deleted.
+                    // Recording a new date reopens that task through syncFollowUpTask.
+                    guard lead.followUpTaskID == nil else { continue }
+                    let existing = tasks.first { task in
+                        task.leadID == lead.id && task.title == "Follow up with \(lead.name)" && task.dueDate == today
+                    }
+                    if let existing {
+                        if lead.followUpTaskID == nil, existing.leadID == lead.id,
+                           let index = next.leads.firstIndex(where: { $0.id == lead.id }) {
+                            next.leads[index].followUpTaskID = existing.id
+                        }
+                        continue
+                    }
+                    let task = CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id)
+                    next.tasks.insert(task, at: 0)
+                    if let index = next.leads.firstIndex(where: { $0.id == lead.id }) {
+                        next.leads[index].followUpTaskID = task.id
+                    }
+                    next.activity.insert(ActivityEvent(kind: "automation", message: "Created a follow-up task for \(lead.name).", sourceID: lead.id), at: 0)
+                    created += 1
                 }
-                guard !alreadyExists else { continue }
-                workspace.tasks.insert(CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id), at: 0)
-                workspace.activity.insert(ActivityEvent(kind: "automation", message: "Created a follow-up task for \(lead.name).", sourceID: lead.id), at: 0)
-                created += 1
             }
-        }
-        if automationRules.contains(where: { $0.enabled && $0.trigger == .highIntentSignal }) {
-            for signal in activeSignals where signal.status == .captured && signal.intentScore >= 70 && signal.fitScore >= 70 {
-                var routed = signal
-                routed.status = .qualified
-                routed.owner = routed.owner.isEmpty ? business.name : routed.owner
-                workspace.signals[workspace.signals.firstIndex(where: { $0.id == signal.id })!] = routed
-                workspace.activity.insert(ActivityEvent(kind: "automation", message: "Qualified high-intent signal: \(signal.title).", sourceID: signal.id), at: 0)
-                created += 1
+            if automationRules.contains(where: { $0.enabled && $0.trigger == .highIntentSignal }) {
+                for signal in activeSignals where signal.status == .captured && signal.intentScore >= 70 && signal.fitScore >= 70 {
+                    var routed = signal
+                    routed.status = .qualified
+                    routed.owner = routed.owner.isEmpty ? business.name : routed.owner
+                    next.signals[next.signals.firstIndex(where: { $0.id == signal.id })!] = routed
+                    next.activity.insert(ActivityEvent(kind: "automation", message: "Qualified high-intent signal: \(signal.title).", sourceID: signal.id), at: 0)
+                    created += 1
+                }
             }
-        }
-        if automationRules.contains(where: { $0.enabled && $0.trigger == .auditGap }) {
-            for audit in audits where audit.languageGap >= 8 {
-                let title = "Remediate Lantern gap: \(audit.name)"
-                let alreadyExists = tasks.contains { $0.title == title && $0.status != .done }
-                guard !alreadyExists else { continue }
-                workspace.tasks.insert(CRMTask(title: title, details: audit.remediation.isEmpty ? "Review evidence and define a human-approved remediation plan." : audit.remediation, dueDate: today), at: 0)
-                workspace.activity.insert(ActivityEvent(kind: "automation", message: "Flagged \(audit.priority.lowercased()) bilingual gap for remediation.", sourceID: audit.id), at: 0)
-                created += 1
+            if automationRules.contains(where: { $0.enabled && $0.trigger == .auditGap }) {
+                for audit in audits where audit.languageGap >= 8 {
+                    let title = "Remediate Lantern gap: \(audit.name)"
+                    let alreadyExists = tasks.contains { $0.title == title && $0.status != .done }
+                    guard !alreadyExists else { continue }
+                    next.tasks.insert(CRMTask(title: title, details: audit.remediation.isEmpty ? "Review evidence and define a human-approved remediation plan." : audit.remediation, dueDate: today), at: 0)
+                    next.activity.insert(ActivityEvent(kind: "automation", message: "Flagged \(audit.priority.lowercased()) bilingual gap for remediation.", sourceID: audit.id), at: 0)
+                    created += 1
+                }
             }
-        }
-        persist(message: created == 0 ? "No new automation actions." : "Ran automations: \(created) action\(created == 1 ? "" : "s").")
+            return created == 0 ? "No new automation actions." : "Ran automations: \(created) action\(created == 1 ? "" : "s")."
+        }) else { return 0 }
         return created
     }
 
@@ -945,10 +1101,16 @@ final class AppStore: ObservableObject {
         update(routed)
     }
 
-    func add(_ view: SavedView) { workspace.savedViews.append(view); persist(message: "View saved.") }
-    func delete(_ view: SavedView) {
-        workspace.savedViews.removeAll { $0.id == view.id }
-        persist(message: "View deleted.")
+    @discardableResult
+    func add(_ view: SavedView) -> Bool {
+        saveChange { next in next.savedViews.append(view); return "View saved." }
+    }
+    @discardableResult
+    func delete(_ view: SavedView) -> Bool {
+        return saveChange { next in
+            next.savedViews.removeAll { $0.id == view.id }
+            return "View deleted."
+        }
     }
 
     private func replace<T: Identifiable>(_ collection: inout [T], with value: T) where T.ID: Equatable {
@@ -956,24 +1118,49 @@ final class AppStore: ObservableObject {
         collection[index] = value
     }
 
-    func update(_ lead: Lead) {
-        guard let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) else { return }
-        workspace.leads[index] = lead
-        persist(message: "Lead saved.")
-    }
-
-    func delete(_ lead: Lead) {
-        workspace.leads.removeAll { $0.id == lead.id }
-        // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
-        if let source = lead.sourceID, source.hasPrefix("leadgen:"), !workspace.dismissedLeadSources.contains(source) {
-            workspace.dismissedLeadSources.append(source)
+    @discardableResult
+    func update(_ lead: Lead) -> Bool {
+        return saveChange { next in
+            guard let index = next.leads.firstIndex(where: { $0.id == lead.id }) else { throw GTMError.invalid("This lead no longer exists.") }
+            var linked = lead
+            if let companyID = lead.companyID, let company = next.companies.first(where: { $0.id == companyID }) { linked.company = company.name }
+            next.leads[index] = linked
+            for signalIndex in next.signals.indices where next.signals[signalIndex].leadID == lead.id {
+                next.signals[signalIndex].companyID = lead.companyID
+                next.signals[signalIndex].contactID = lead.contactID
+            }
+            LeadWorkflow.mirrorOutcome(ofLead: lead, in: &next)
+            // The follow-up task follows the lead's next follow-up; a won or lost lead closes it and cancels its reminder.
+            let changedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &next)
+            let message = changedTask.map {
+                $0.status == .done ? "Lead saved; its follow-up task is closed and its reminder cancelled." : "Lead saved; the follow-up task moved to \($0.dueDate ?? "-")."
+            } ?? "Lead saved."
+            return message
         }
-        persist(message: "Lead deleted.")
     }
 
-    func markSecurityReviewed() {
-        workspace.lastSecurityReview = Date.now.ISO8601Format()
-        persist(message: "Local record review saved.")
+    @discardableResult
+    func delete(_ lead: Lead) -> Bool {
+        return saveChange { next in
+            if let taskID = lead.followUpTaskID, let index = next.tasks.firstIndex(where: { $0.id == taskID }) {
+                next.tasks[index].status = .done
+                next.tasks[index].reminderAt = nil
+            }
+            next.leads.removeAll { $0.id == lead.id }
+            // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
+            if let source = lead.sourceID, source.hasPrefix("leadgen:"), !next.dismissedLeadSources.contains(source) {
+                next.dismissedLeadSources.append(source)
+            }
+            return "Lead deleted."
+        }
+    }
+
+    @discardableResult
+    func markSecurityReviewed() -> Bool {
+        return saveChange { next in
+            next.lastSecurityReview = Date.now.ISO8601Format()
+            return "Local record review saved."
+        }
     }
 
     enum ResetError: LocalizedError {
@@ -994,8 +1181,8 @@ final class AppStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(workspace), to: backup)
-        workspace = PersistentWorkspace()
-        persist(message: "Workspace reset. Backup saved as \(backup.lastPathComponent).")
+        try commitWorkspace { $0 = PersistentWorkspace() }
+        showNotice("Workspace reset. Backup saved as \(backup.lastPathComponent).")
         return backup
     }
 
@@ -1006,6 +1193,7 @@ final class AppStore: ObservableObject {
         workspace = loaded.workspace
         recoveryState = loaded.recovery
         scrubStoredEndpointSecrets()
+        if case .ready = recoveryState { queueReminderReconciliation() }
         showNotice(outcome.legacyRestricted
             ? "Imported and hash-verified the legacy workspace. The original was kept and set to owner-only access."
             : "Imported and hash-verified the legacy workspace. The original was kept; run chmod 600 on it manually.")
@@ -1170,101 +1358,27 @@ final class AppStore: ObservableObject {
         persist(message: "Finding marked resolved.")
     }
 
-    /// Schedules local macOS notifications for upcoming follow-ups.
-    /// It never sends email, SMS, or CRM messages.
+    /// Permission requests happen only after the owner selects Schedule reminders.
     func scheduleDueFollowUpReminders() async -> Int {
-#if CONTEXTWARD_ACCEPTANCE
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            return await scheduleDueFollowUpRemindersInApp()
-        }
-        return 0
-#else
-        return await scheduleDueFollowUpRemindersInApp()
-#endif
+        await reconcileReminders(requestPermission: true)
     }
 
-    private func scheduleDueFollowUpRemindersInApp() async -> Int {
-        let center = UNUserNotificationCenter.current()
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted else {
-            showNotice("Notifications were not authorized.")
-            return 0
-        }
-        var scheduled = 0
-        let old = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix("contextward-followup-") }
-        if !old.isEmpty { center.removePendingNotificationRequests(withIdentifiers: old) }
-        for lead in workspace.leads where lead.status.isOpen {
-            guard let due = CalendarCRM.date(from: lead.nextFollowUp),
-                  Calendar.current.startOfDay(for: due) >= Calendar.current.startOfDay(for: .now) else { continue }
-            var components = Calendar.current.dateComponents([.year, .month, .day], from: due)
-            components.hour = 9
-            components.minute = 0
-            guard let fireAt = Calendar.current.date(from: components), fireAt > .now else { continue }
-            let content = UNMutableNotificationContent()
-            content.title = "Follow up with \(lead.name)"
-            content.body = "Review the relationship record and decide the next action."
-            content.sound = .default
-            let request = UNNotificationRequest(identifier: "contextward-followup-\(lead.id.uuidString)", content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
-            do { try await center.add(request); scheduled += 1 }
-            catch { showNotice("macOS could not schedule a local follow-up reminder.") }
-        }
-        showNotice(scheduled == 0 ? "No upcoming lead follow-ups could be scheduled." : "Scheduled \(scheduled) local follow-up reminder\(scheduled == 1 ? "" : "s") for 9 AM.")
-        return scheduled
+    func scheduleTaskReminders() async { _ = await reconcileReminders(requestPermission: false) }
+
+    private func queueReminderReconciliation() {
+        guard reminderCoordinator != nil else { return }
+        let desired = LeadWorkflow.reminders(in: workspace)
+        guard lastQueuedReminders != desired else { return }
+        lastQueuedReminders = desired
+        Task { _ = await reconcileReminders(requestPermission: false) }
     }
 
-    /// Keeps one local reminder per open task and restores reminders after relaunch.
-    func scheduleTaskReminders() async {
-        for task in workspace.tasks { await scheduleTaskReminder(for: task) }
-    }
-
-    func scheduleTaskReminder(for task: CRMTask) async {
-#if CONTEXTWARD_ACCEPTANCE
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            await scheduleTaskReminderInApp(for: task)
-        }
-        return
-#else
-        await scheduleTaskReminderInApp(for: task)
-#endif
-    }
-
-    private func scheduleTaskReminderInApp(for task: CRMTask) async {
-        let identifier = "contextward-task-\(task.id.uuidString)"
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-        guard task.status != .done else { return }
-
-        let fireAt: Date?
-        if let reminderAt = task.reminderAt, let instant = ISO8601DateFormatter().date(from: reminderAt) {
-            fireAt = instant
-        } else if let dateString = task.dueDate, let dueDate = CalendarCRM.date(from: dateString) {
-            var components = Calendar.current.dateComponents([.year, .month, .day], from: dueDate)
-            components.hour = 9
-            components.minute = 0
-            fireAt = Calendar.current.date(from: components)
-        } else {
-            fireAt = nil
-        }
-        guard let fireAt, fireAt > .now else { return }
-
-        do {
-            let settings = await center.notificationSettings()
-            if settings.authorizationStatus == .notDetermined { _ = try await center.requestAuthorization(options: [.alert, .sound]) }
-            let finalSettings = await center.notificationSettings()
-            guard finalSettings.authorizationStatus == .authorized || finalSettings.authorizationStatus == .provisional else {
-                showNotice("Enable ControlWard notifications in System Settings to receive task reminders.")
-                return
-            }
-            let content = UNMutableNotificationContent()
-            content.title = "Task: \(task.title)"
-            content.body = "Open ControlWard to review this task."
-            content.sound = .default
-            let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
-            try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)))
-            showNotice("Local task reminder scheduled for \(fireAt.formatted(date: .abbreviated, time: .shortened)).")
-        } catch {
-            showNotice("macOS could not schedule this local task reminder.")
-        }
+    private func reconcileReminders(requestPermission: Bool) async -> Int {
+        guard let reminderCoordinator else { return 0 }
+        let result = await reminderCoordinator.reconcile(LeadWorkflow.reminders(in: workspace), requestPermission: requestPermission)
+        reminderStatus = result.message
+        if requestPermission { showNotice(result.message) }
+        return result.scheduled
     }
 
     /// CSV-1..CSV-8 (Water 9:42 AM ET): every row is accounted for. Imported, skipped (no name) or flagged for review
@@ -1390,37 +1504,68 @@ final class AppStore: ObservableObject {
     /// Accepts one object or an array, and preserves the source filename in evidence.
     func importLeadGenJSON(from url: URL) throws -> Int {
         let events = try LeadGenEvent.decodeBatch(try ImportLimits.readCapped(url), source: url.lastPathComponent)
-
         var imported = 0
-        for event in events {
+        var skipped = 0
+        var existing = 0
+        try commitWorkspace { next in
+          for event in events {
             let identity = event.identity
-            let name = [identity.firstName, identity.lastName].compactMap { $0 }.joined(separator: " ")
-            let email = identity.email ?? event.email ?? ""
-            guard !name.isEmpty || !email.isEmpty else { continue }
+            func clean(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+            let name = [clean(identity.firstName), clean(identity.lastName)].filter { !$0.isEmpty }.joined(separator: " ")
+            let email = clean(identity.email ?? event.email)
+            let phone = clean(identity.phoneRaw)
+            let company = clean(identity.companyNameRaw)
+            guard !name.isEmpty || !email.isEmpty else { skipped += 1; continue }
 
-            var lead = Lead.blank()
-            lead.name = name.isEmpty ? email : name
-            lead.email = email
-            lead.phone = identity.phoneRaw ?? ""
-            lead.company = identity.companyNameRaw ?? ""
-            lead.createdAt = event.capturedAt ?? lead.createdAt
-            workspace.leads.insert(lead, at: 0)
+            // File exports do not prove an inbound conversation. Keep their IDs separate from the live inbox.
+            let eventID = clean(event.eventID)
+            let identityData = try JSONEncoder().encode([name.lowercased(), email.lowercased(), LeadMatching.phoneKey(phone) ?? phone, company.lowercased()])
+            let identityHash = SHA256.hash(data: identityData).map { String(format: "%02x", $0) }.joined()
+            let sourceID = "leadgen-file:" + (eventID.isEmpty ? "identity-" + identityHash : "event-" + eventID)
+            let legacyEvidence = "Event ID: \(eventID)."
+            guard !next.signals.contains(where: {
+                $0.sourceID == sourceID || (!eventID.isEmpty && $0.sourceID == nil && $0.title.hasPrefix("LeadGen: ") && $0.evidence.hasSuffix(legacyEvidence))
+            }) else { existing += 1; continue }
+
+            let exact = next.leads.filter { $0.sourceID == sourceID }
+            let emailMatches = email.isEmpty ? [] : next.leads.filter { clean($0.email).caseInsensitiveCompare(email) == .orderedSame }
+            let matches = exact.isEmpty ? emailMatches : exact
+            guard matches.count <= 1 else {
+                throw ImportLimits.error(409, "LeadGen import matches multiple existing leads. Resolve the duplicate identity first; nothing from this file was imported.")
+            }
+            let lead: Lead
+            if let known = matches.first {
+                // Preserve owner edits, existing source identity, values, status and relationship links.
+                lead = known
+            } else {
+                var created = Lead.blank()
+                created.name = name.isEmpty ? email : name
+                created.email = email
+                created.phone = phone
+                created.company = company
+                created.sourceID = sourceID
+                if let captured = event.capturedAt, ISO8601DateFormatter().date(from: captured) != nil { created.createdAt = captured }
+                next.leads.insert(created, at: 0)
+                lead = created
+            }
 
             var signal = Signal()
             signal.title = "LeadGen: \(lead.name)"
-            signal.source = .manual
+            signal.source = .imported
+            signal.sourceID = sourceID
             signal.status = .captured
             signal.leadID = lead.id
-            signal.evidence = "Imported from \(url.lastPathComponent). Event ID: \(event.eventID ?? "not supplied")."
+            signal.evidence = "Imported from \(url.lastPathComponent). Event ID: \(eventID.isEmpty ? "not supplied" : eventID). Scores were supplied in this file; they are not verified buying intent."
             signal.nextAction = "Resolve identity, qualify fit, and route."
             signal.fitScore = min(max(event.fitScore ?? 0, 0), 100)
             signal.intentScore = min(max(event.intentScore ?? 0, 0), 100)
             signal.priority = min(max(event.compositeScore ?? ((signal.fitScore + signal.intentScore) / 2), 0), 100)
-            workspace.signals.insert(signal, at: 0)
-            workspace.activity.insert(ActivityEvent(kind: "import", message: "Imported LeadGen event for \(lead.name).", sourceID: signal.id), at: 0)
+            next.signals.insert(signal, at: 0)
+            next.activity.insert(ActivityEvent(kind: "import", message: "Imported one LeadGen file event for review.", sourceID: lead.id), at: 0)
             imported += 1
+          }
         }
-        persist(message: imported == 0 ? "No LeadGen events found." : "Imported \(imported) LeadGen event\(imported == 1 ? "" : "s").")
+        showNotice("LeadGen: \(imported) imported, \(existing) already recorded, \(skipped) missing an identity.")
         return imported
     }
 
@@ -1514,62 +1659,53 @@ final class AppStore: ObservableObject {
     }
 
     func generateMessage(for lead: Lead) async -> GeneratedMessage {
-        let fallback = standardMessage(for: lead)
+        let grounded = groundedDraft(for: lead)
 #if canImport(FoundationModels)
-        guard #available(macOS 26.0, *) else {
-            return GeneratedMessage(text: fallback, usedIntelligence: false)
-        }
-        return await generateOnDevice(for: lead, fallback: fallback)
+        guard #available(macOS 26.0, *) else { return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead) }
+        return await generateOnDevice(for: lead, grounded: grounded)
 #else
-        return GeneratedMessage(text: fallback, usedIntelligence: false)
+        return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead)
 #endif
     }
 
 #if canImport(FoundationModels)
+    /// The model only rephrases the grounded draft; LeadWorkflow.AIDraft checks its text before it is shown.
     @available(macOS 26.0, *)
-    private func generateOnDevice(for lead: Lead, fallback: String) async -> GeneratedMessage {
+    private func generateOnDevice(for lead: Lead, grounded: LeadWorkflow.GroundedDraft) async -> GeneratedMessage {
         guard SystemLanguageModel.default.availability == .available else {
-            return GeneratedMessage(text: fallback, usedIntelligence: false)
+            return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead)
         }
-
-        // Customer-controlled fields are delimited and declared as data (F14).
-        let instructions = FollowUpPrompt.instructions
-        let prompt = FollowUpPrompt.build(businessName: business.name, industry: business.industry, lead: lead)
-
         do {
-            let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: prompt)
-            let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return GeneratedMessage(text: text.isEmpty ? fallback : text, usedIntelligence: !text.isEmpty)
+            let session = LanguageModelSession(instructions: LeadWorkflow.AIDraft.instructions)
+            let response = try await session.respond(to: LeadWorkflow.AIDraft.prompt(for: grounded))
+            return LeadWorkflow.AIDraft.accept(response.content, draft: grounded, lead: lead)
         } catch {
-            return GeneratedMessage(text: fallback, usedIntelligence: false)
+            return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead)
         }
     }
 #endif
 
-    func standardMessage(for lead: Lead) -> String {
-        let firstName = lead.name.split(separator: " ").first.map(String.init) ?? lead.name
-        let subject = lead.service.isEmpty ? "quote" : lead.service
-        let signature = business.name.isEmpty ? "the team" : business.name
-        return """
-        Hi \(firstName),
-
-        Just checking in regarding the \(subject) I sent over. Let me know if you have any questions or if you'd like to discuss next steps.
-
-        Best,
-        \(signature)
-        """
+    /// Local draft that states only recorded facts (no invented quote, intent or private notes).
+    func groundedDraft(for lead: Lead) -> LeadWorkflow.GroundedDraft {
+        LeadWorkflow.draft(for: lead, in: workspace, business: business)
     }
 
-    func markMessageSent(on lead: inout Lead, message: String) {
+    func standardMessage(for lead: Lead) -> String { groundedDraft(for: lead).text }
+
+    @discardableResult
+    func markMessageSent(on lead: inout Lead, message: String) -> Bool {
+        var next = lead
         let today = CalendarCRM.dayString()
-        let stage = lead.sequenceStage
+        let stage = next.sequenceStage
         let delay = stage < FollowUpCadence.days.count ? FollowUpCadence.days[stage] : nil
-        lead.lastMessage = message
-        lead.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
-        lead.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
-        lead.history.append(FollowUpEvent(date: today, message: message))
-        update(lead)
+        next.lastMessage = message
+        next.outreachDraft = nil
+        next.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
+        next.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
+        next.history.append(FollowUpEvent(date: today, message: message))
+        guard update(next) else { return false }
+        lead = next
+        return true
     }
 
     private static func load(from url: URL) -> (workspace: PersistentWorkspace, recovery: WorkspaceRecoveryState) {
@@ -1588,6 +1724,24 @@ final class AppStore: ObservableObject {
         try commitWorkspace(mutation)
     }
 
+    func clearSaveFailure() { saveFailure = nil }
+
+    @discardableResult
+    private func saveChange(_ mutation: (inout PersistentWorkspace) throws -> String) -> Bool {
+        do {
+            var message = "Saved."
+            try commitWorkspace { next in message = try mutation(&next) }
+            saveFailure = nil
+            showNotice(message)
+            return true
+        } catch {
+            let message = "Changes were not saved. \(error.localizedDescription)"
+            saveFailure = message
+            showNotice(message)
+            return false
+        }
+    }
+
     /// Publish local workflow changes only after the complete transaction is durable.
     func commitWorkspace(_ mutation: (inout PersistentWorkspace) throws -> Void) throws {
         guard case .ready = recoveryState else { throw GTMError.invalid("Workspace recovery is required before saving.") }
@@ -1597,6 +1751,7 @@ final class AppStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(next), to: storageURL)
         workspace = next
+        queueReminderReconciliation()
         twentyPreview = nil
         pharosPreviewFingerprint = nil
     }
@@ -1609,6 +1764,7 @@ final class AppStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(workspace), to: storageURL)
+        queueReminderReconciliation()
     }
 
     private func persist(message: String? = nil) {
@@ -1620,6 +1776,7 @@ final class AppStore: ObservableObject {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try SecureFiles.writePrivate(try encoder.encode(workspace), to: storageURL)
+            queueReminderReconciliation()
             if let message { showNotice(message) }
         } catch {
             showNotice("Could not save CRM data: \(error.localizedDescription)")
@@ -1642,11 +1799,6 @@ final class AppStore: ObservableObject {
             self?.notice = nil
         }
     }
-}
-
-struct GeneratedMessage: Equatable {
-    var text: String
-    var usedIntelligence: Bool
 }
 
 enum CSVParser {

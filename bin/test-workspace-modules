@@ -6,6 +6,8 @@ SOURCE_ROOT="${PROJECT_ROOT}/native-crm/Sources/FollowUpOSNative"
 BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/webkit-tests"
 TEST_BINARY="${BUILD_ROOT}/ControlWardWebKitTests"
 mkdir -p "${BUILD_ROOT}"
+# Every app source bin/test-native-app compiles, plus the two WebKit module files. AppStore depends on the
+# lead workflow and pipeline sources, so a shorter list stops compiling; bin/check-native-source-lists enforces it.
 swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/Models.swift" \
   "${SOURCE_ROOT}/AppStore.swift" \
@@ -18,10 +20,33 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/GTMEvents.swift" \
   "${SOURCE_ROOT}/WorkspaceModulePolicy.swift" \
   "${SOURCE_ROOT}/ControlWardModels.swift" \
-  "${SOURCE_ROOT}/CWAudit.swift" \
-  "${SOURCE_ROOT}/ProjectControlWrites.swift" \
   "${SOURCE_ROOT}/ControlWardStore.swift" \
+  "${SOURCE_ROOT}/OverviewModel.swift" \
+  "${SOURCE_ROOT}/GoogleWebAuthorizer.swift" \
   "${SOURCE_ROOT}/MailIntake.swift" \
+  "${SOURCE_ROOT}/Mailbox.swift" \
+  "${SOURCE_ROOT}/MailActionOutcome.swift" \
+  "${SOURCE_ROOT}/CWAudit.swift" \
+  "${SOURCE_ROOT}/MailActionRunner.swift" \
+  "${SOURCE_ROOT}/MailActionPresentation.swift" \
+  "${SOURCE_ROOT}/ProjectControlWrites.swift" \
+  "${SOURCE_ROOT}/LeadPipelineConfig.swift" \
+  "${SOURCE_ROOT}/LeadPipelineModels.swift" \
+  "${SOURCE_ROOT}/LeadDefinition.swift" \
+  "${SOURCE_ROOT}/Outreach.swift" \
+  "${SOURCE_ROOT}/LeadTransport.swift" \
+  "${SOURCE_ROOT}/RBQOpenData.swift" \
+  "${SOURCE_ROOT}/SiteExtractor.swift" \
+  "${SOURCE_ROOT}/LeadDiscovery.swift" \
+  "${SOURCE_ROOT}/TenderWatcher.swift" \
+  "${SOURCE_ROOT}/ProspectLeads.swift" \
+  "${SOURCE_ROOT}/ProspectSearchRun.swift" \
+  "${SOURCE_ROOT}/LeadProof.swift" \
+  "${SOURCE_ROOT}/LeadPipelineEnvironment.swift" \
+  "${SOURCE_ROOT}/ProspectResearch.swift" \
+  "${SOURCE_ROOT}/BuildInfo.swift" \
+  "${SOURCE_ROOT}/LeadWorkflow.swift" \
+  "${SOURCE_ROOT}/LocalReminders.swift" \
   "${SOURCE_ROOT}/WorkspaceWebController.swift" \
   "${SOURCE_ROOT}/ProjectModuleBridge.swift" \
   "${PROJECT_ROOT}/native-crm/WebKitTests/ModuleRenderingTests.swift" \

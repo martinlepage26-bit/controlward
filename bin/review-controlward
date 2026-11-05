@@ -1,0 +1,29 @@
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+REVIEW_APP="${1:-${PROJECT_ROOT}/native-crm/dist/ControlWard.app}"
+REVIEW_ID="${2:-$(uuidgen)}"
+REVIEW_PLIST="${REVIEW_APP}/Contents/Info.plist"
+
+# Older releases ignore this launch mode and would open the live workspace.
+[[ -d "${REVIEW_APP}" && "${REVIEW_APP}" == *.app ]] || { print -u2 "Choose a ControlWard .app bundle."; exit 1; }
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${REVIEW_PLIST}")" == com.pharos.contextward ]] || exit 1
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :ControlWardSupportsReviewWorkspace' "${REVIEW_PLIST}" 2>/dev/null)" == true ]] || {
+  print -u2 "This build does not support isolated review. Nothing was opened."
+  exit 1
+}
+python3 - "${REVIEW_ID}" <<'PY'
+import sys, uuid
+raw = sys.argv[1]
+try:
+    value = uuid.UUID(raw)
+    assert value.version == 4 and str(value).upper() == raw.upper()
+except (ValueError, AssertionError):
+    sys.exit("Review ID must be a UUID v4. Nothing was opened.")
+PY
+codesign --verify --strict --verbose=2 "${REVIEW_APP}"
+print "Review workspace ID: ${REVIEW_ID}"
+print "Reuse this ID to reopen this review. No saved accounts or notifications are used."
+open -n --env "CONTROLWARD_REVIEW_ID=${REVIEW_ID}" "${REVIEW_APP}"

@@ -36,6 +36,7 @@ struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 15) {
+                    SaveFailureNotice()
                     TextField("Business name", text: $name)
                         .textFieldStyle(.roundedBorder)
                     Picker("Industry", selection: $industry) {
@@ -74,7 +75,7 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("API keys").font(.headline)
-                    Text("Keys are stored in the macOS login Keychain, never in workspace data or exports. They are write-only here: paste to save or replace.")
+                    Text(store.isReviewMode ? "Account connections are off in this review workspace. Keys cannot be saved here." : "Keys are stored in the macOS login Keychain, never in workspace data or exports. They are write-only here: paste to save or replace.")
                         .font(.callout).foregroundStyle(.secondary)
                     ForEach(SyncTarget.keyed) { target in
                         HStack {
@@ -137,6 +138,9 @@ struct SettingsView: View {
             industry = store.business.industry
             autoPilotEnabled = store.workspace.autoPilotEnabled
         }
+        .onChange(of: store.business.name) { _, value in name = value }
+        .onChange(of: store.business.industry) { _, value in industry = value }
+        .onChange(of: store.workspace.autoPilotEnabled) { _, value in autoPilotEnabled = value }
         .confirmationDialog("Reset the local CRM workspace?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Back up and erase CRM data", role: .destructive) {
                 do { try store.resetAll(confirmed: true) }
