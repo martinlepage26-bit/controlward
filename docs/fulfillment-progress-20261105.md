@@ -15,6 +15,7 @@ The earlier cloud report remains historical evidence for its Linux run. The tabl
 - **Notification errors:** automatic startup does not request permission. The explicit Schedule reminders action distinguishes not-yet-requested, denied, unavailable and API failure. Operations retains the result after the toast disappears and reports partial scheduling failure accurately.
 - **Restore form state:** Settings now refreshes the business name, industry and automation setting when the stored workspace changes. The previous form kept an old name after a successful restore, allowing a later Save to overwrite the restored name.
 - **Discovery usability and evidence:** an empty search explains the result; the 15-second cooldown updates without requiring another UI interaction. A public business category remains evidence, rather than becoming a requested service. Scoring evidence lists earned points and gives no points to blank contact fields.
+- **Release build:** the first packaging attempt exposed a release-only optional-type inference error in reminder initialization. The type is now explicit in both build configurations; a clean Swift release build passed afterward.
 - **Preview startup:** Launch Services opens the preview bundle; fixture follow-up dates are relative to today. Production signing credentials are not inspected during local builds.
 
 ## Evidence collected on this Mac
@@ -23,12 +24,15 @@ The earlier cloud report remains historical evidence for its Linux run. The tabl
 | --- | --- | --- |
 | Native model/store suites | Full `bin/test-native-app` passed after the final preview, reminder, automation and discovery corrections (exit 0): CRM 24/24; reminder delivery control 6/6; mail intake 16/16; mail actions 9/9; pipeline 90/90; CSV 37/37; native persistence smoke; Worker 60/60 and existing regression tallies | Fake transports and fake notification center verify deterministic behavior, not live provider delivery |
 | Portable CRM | `bin/test-crm-core`: 24/24 | Mac run of the portable implementation; no new Linux run |
-| Embedded Project Control bridge | `bin/test-workspace-modules`: 8 assertions passed | No production register write |
+| Embedded Project Control bridge | `bin/test-workspace-modules`: 8 assertions passed; `bin/test-connected-workspace` against the pinned Project Control commit `5cfbaf5` passed 13 assertions using real WebKit, a loopback Worker and disposable D1. Capture produced one unassigned item, retry reused it, and a changed register was refused | No production register write |
 | Preview isolation | Regression exercises default preview construction, credential rejection, connect callback, refresh, polling entrypoint, transport and owner-default preservation | Running preview retained one synthetic mail message and no mail-intake activity |
 | Backup and restore | Running UI exported a backup; business name and task status were changed; reviewed restore recovered the name and open task with its company relationship. Export and rollback files were mode 0600. A quit/reopen retained restored data. The stale Settings field was reproduced, repaired, then the same UI sequence passed | No owner data was used; hosted module storage and credentials are outside the native backup contract |
 | Public discovery | User-started café search around Montréal returned 19 public OSM listings via **Photon fallback**. One listing entered the isolated pipeline with its URL, coordinates, timestamp, evidence and unknown buyer intent | This does not prove the primary Overpass service succeeded, that contacts are reachable, or that a buyer is interested |
 | Public listing conversion | In the running UI, a company-only record produced a company, opportunity without invented value, and follow-up task. No named contact was created | Public data existed only in the isolated test workspace |
 | Apple Intelligence | The running app displayed an AI draft from the discovered listing, an honest general greeting, source attribution and unknowns. Email stayed disabled without an address | One actual on-device call; no message sent and no general claim that every model output is valid |
+| CSV import | Running UI imported two valid synthetic leads, explained the missing-name row, and kept the entered $1,200 value. Re-importing the same file added nothing and showed the original import time | This file-repeat check is session-scoped; row identity checks also exist in the automated suite |
+| Saved views, notes and activity | A saved company search opened the matching filtered directory; a synthetic note retained its company selection; filtering activity to conversions exported one matching event | Activity currently logs selected workflow actions, not every field edit |
+| Lantern | Created and reopened a synthetic bilingual audit with separate FR/EN samples and scores, company relationship, findings and remediation; the comparison displayed the expected 0.2 gap | Synthetic data verifies behavior, not a client assessment |
 | OS notifications | Explicit scheduling in the registered preview returned `UNErrorDomain`, code `1`; the persistent Operations status showed the error. No permission prompt appeared | Delivery remains unverified. This is an API failure, not proof that the owner denied a prompt. No System Settings change was made |
 
 An earlier acceptance attempt in this conversation unexpectedly used the live Keychain-backed mail controller and reported a Gmail metadata pull. Its temporary workspaces were removed before this branch began. That incident prompted the permanent preview repair; it is not counted as an authorized live-mail acceptance test.
@@ -38,9 +42,11 @@ Apple documents [`notificationsNotAllowed`](https://developer.apple.com/document
 ## Remaining work toward the full goal
 
 1. Package the checked source with the repository release command and record its clean commit, signature verification and archive checksum. The final native suite, portable CRM suite, WebKit suite, source-list check and debug build have all exited 0.
-2. Exercise the remaining user paths that currently have automated evidence only: CSV/LeadGen intake, saved views, Lantern, notes/activity, and bundled Project Control review/capture in an isolated local register.
+2. Finish the named-contact conversion/outcome UI journey and LeadGen intake, then recheck persistence. CSV, saved views, notes/activity and Lantern now have running-app evidence; the connected Project Control path has real WebKit-to-Worker evidence in a disposable local register.
 3. Resolve notification authorization on an eligible app installation and verify actual delivery/cancellation. Do not claim this from a fake center or a timestamp calculation.
 4. Keep provider-dependent acceptance distinct: authorized mailbox actions, PHAROS/KAIROS/GAP and production registers have not been exercised by this local run. The hosted Email Aggregator remains explicitly a prototype; the parked Twenty extension is not presented as implemented native functionality.
 5. Prepare a usable packaged build and a short operator workflow. Publish/installation state, hosted task closure, and actual business revenue require their own evidence.
 
 **The overall goal remains active.** This file records progress and remaining acceptance; it is not a full-product completion certificate.
+
+Hosted tracking: Blackboard task `task_549eb0d297e4412f`, created November 5 for this continuation. It remains open; no task closure or production completion is claimed.

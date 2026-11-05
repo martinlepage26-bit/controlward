@@ -45,9 +45,9 @@ final class AppStore: ObservableObject {
     init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil) {
         self.storageURL = storageURL
 #if CONTEXTWARD_ACCEPTANCE
-        let center = reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil)
+        let center: (any ReminderSchedulingCenter)? = reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil)
 #else
-        let center = reminderCenter ?? SystemReminderCenter()
+        let center: (any ReminderSchedulingCenter)? = reminderCenter ?? SystemReminderCenter()
 #endif
         self.reminderCoordinator = center.map { ReminderCoordinator(center: $0) }
         let selectedSecrets: SecretStore
