@@ -4,6 +4,7 @@ import SwiftUI
 /// A search runs only when the button is pressed, through GuardedLeadTransport, and every step is a CW-AUDIT line
 /// in the leads folder's cw-audit.log.
 struct ProspectLeadsView: View {
+    @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var environment: LeadPipelineEnvironment?
     @State private var loadError: String?
@@ -99,9 +100,19 @@ struct ProspectLeadsView: View {
     }
 
     private func row(_ record: ProspectRecord, environment: LeadPipelineEnvironment) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(ProspectDisplay.lines(for: record, config: environment.config).enumerated()), id: \.offset) { index, line in
-                Text(line).font(index == 0 ? .headline : .caption).textSelection(.enabled)
+        let inPipeline = store.leads.contains { $0.sourceID == LeadWorkflow.sourceID(for: record) }
+        return HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(ProspectDisplay.lines(for: record, config: environment.config).enumerated()), id: \.offset) { index, line in
+                    Text(line).font(index == 0 ? .headline : .caption).textSelection(.enabled)
+                }
+            }
+            Spacer()
+            // Only Ready records can enter the CRM pipeline; held, dropped and to-fix records stay here.
+            if record.status == .ready {
+                Button(inPipeline ? "In pipeline" : "Add to pipeline for review") { _ = store.addProspectToPipeline(record) }
+                    .disabled(inPipeline)
+                    .help("Copies this prospect and its evidence into Pipeline as a lead for your review. Nothing is sent.")
             }
         }.padding(.vertical, 4)
     }

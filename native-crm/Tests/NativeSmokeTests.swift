@@ -34,6 +34,7 @@ struct NativeSmokeTests {
         let discoveryPassed = await DiscoveryTests.run()
         let gtmPassed = GTMTests.run()
         let csvPassed = CSVImportTests.run()
+        let crmWorkflowPassed = await CRMWorkflowTests.run()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("followupos-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -94,6 +95,28 @@ struct NativeSmokeTests {
         try expect(entityReload.opportunities.first?.contactID == contact.id, "opportunity relationship did not persist")
         try expect(entityReload.tasks.first?.opportunityID == opportunity.id, "task relationship did not persist")
         try expect(entityReload.notes.first?.contactID == contact.id, "note relationship did not persist")
+
+        // Reviewed lead conversion through AppStore, then a relaunch from workspace.json (synthetic records).
+        var reviewed = Lead.blank()
+        reviewed.name = "Conversion Customer"
+        reviewed.company = "Conversion Co"
+        reviewed.email = "buyer@conversion.example.test"
+        reviewed.service = "Audit"
+        reviewed.quoteAmount = 3_000
+        reviewed.status = .quoteSent
+        store.add(reviewed)
+        let pipelineBeforeConversion = store.activePipeline
+        guard let conversion = store.conversionPlan(for: reviewed) else { throw SmokeTestFailure.failed("no conversion preview") }
+        try expect(store.opportunities.allSatisfy { $0.leadID != reviewed.id }, "the preview wrote an opportunity")
+        let converted = store.convertLead(confirmed: conversion)
+        try expect(converted?.created == ["company", "contact", "opportunity", "follow-up task"], "conversion did not create the linked records")
+        try expect(store.activePipeline == pipelineBeforeConversion, "converted value was counted twice")
+        let relaunched = AppStore(storageURL: storage)
+        guard let savedLead = relaunched.leads.first(where: { $0.id == reviewed.id }) else { throw SmokeTestFailure.failed("converted lead lost") }
+        let linked = LeadWorkflow.context(for: savedLead, in: relaunched.workspace)
+        try expect(linked.company?.name == "Conversion Co" && linked.contact?.email == "buyer@conversion.example.test", "conversion links did not persist")
+        try expect(linked.opportunity?.amount == 3_000 && linked.opportunity?.stage == .proposal, "opportunity value or stage did not persist")
+        try expect(linked.tasks.contains { $0.id == savedLead.followUpTaskID && $0.dueDate == reviewed.nextFollowUp }, "next action did not persist")
 
         var cadenceLead = Lead.blank()
         cadenceLead.name = "Cadence Customer"
@@ -231,6 +254,7 @@ struct NativeSmokeTests {
         try expect(buildInfoPassed, "Build info tests failed")
         try expect(discoveryPassed, "discovery tests failed")
         try expect(csvPassed, "CSV import tests failed")
+        try expect(crmWorkflowPassed, "CRM workflow tests failed")
         try expect(gtmPassed, "account intelligence tests failed")
     }
 

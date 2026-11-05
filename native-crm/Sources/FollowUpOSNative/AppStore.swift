@@ -728,20 +728,12 @@ final class AppStore: ObservableObject {
         return audits.map(\.languageGap).reduce(0, +) / Double(audits.count)
     }
 
-    var closeRate: Int {
-        let closed = leads.filter { $0.status == .won || $0.status == .lost }
-        guard !closed.isEmpty else { return 0 }
-        return Int((Double(closed.filter { $0.status == .won }.count) / Double(closed.count) * 100).rounded())
-    }
-
-    var dollarsWon: Double {
-        leads.filter { $0.status == .won }.compactMap(\.quoteAmount).reduce(0, +)
-    }
-
-    var activePipeline: Double {
-        let native = opportunities.filter { !$0.stage.isClosed }.compactMap(\.amount).reduce(0, +)
-        return native + leads.filter { $0.status.isOpen }.compactMap(\.quoteAmount).reduce(0, +)
-    }
+    /// Totals from owner-entered values only. A converted lead's value and outcome come from its opportunity,
+    /// so nothing is counted twice; records without a value are counted, never estimated (LeadWorkflow.outcomes).
+    var outcomes: LeadWorkflow.Outcomes { LeadWorkflow.outcomes(leads: leads, opportunities: opportunities) }
+    var closeRate: Int { outcomes.closeRate }
+    var dollarsWon: Double { outcomes.wonValue }
+    var activePipeline: Double { outcomes.openValue }
 
     var openTasks: [CRMTask] {
         tasks.filter { $0.status != .done }.sorted { ($0.dueDate ?? "9999") < ($1.dueDate ?? "9999") }
@@ -816,6 +808,50 @@ final class AppStore: ObservableObject {
         return opportunity
     }
 
+    /// Preview of converting a reviewed lead into linked company, contact, opportunity and follow-up task records.
+    func conversionPlan(for lead: Lead) -> LeadWorkflow.ConversionPlan? {
+        LeadWorkflow.conversionPlan(for: lead.id, in: workspace)
+    }
+
+    /// Applies exactly the preview the owner confirmed. A changed preview, a blocker or a failed save writes nothing.
+    @discardableResult
+    func convertLead(confirmed plan: LeadWorkflow.ConversionPlan) -> LeadWorkflow.ConversionResult? {
+        var result: LeadWorkflow.ConversionResult?
+        do {
+            try commitWorkspace { next in result = try LeadWorkflow.applyConversion(plan, to: &next) }
+        } catch let error as LeadWorkflow.ConversionError {
+            showNotice(error.description)
+            return nil
+        } catch {
+            showNotice("The conversion was not saved. Nothing changed.")
+            return nil
+        }
+        guard let result else { return nil }
+        if let taskID = result.taskID, let task = workspace.tasks.first(where: { $0.id == taskID }) {
+            Task { await scheduleTaskReminder(for: task) }
+        }
+        showNotice(result.created.isEmpty ? "Lead already linked; nothing new was created." : "Converted after review: \(result.created.joined(separator: ", ")).")
+        return result
+    }
+
+    /// Adds one Ready prospect from the Leads list to the CRM pipeline for review. Nothing is sent.
+    @discardableResult
+    func addProspectToPipeline(_ record: ProspectRecord) -> UUID? {
+        var leadID: UUID?
+        do {
+            try commitWorkspace { next in leadID = try LeadWorkflow.promote(record, into: &next) }
+        } catch let error as LeadWorkflow.PromotionError {
+            showNotice(error.description)
+            if case .alreadyInPipeline(let existing) = error { return existing }
+            return nil
+        } catch {
+            showNotice("The prospect was not added. Nothing changed.")
+            return nil
+        }
+        showNotice("\(record.organisation) added to the pipeline for review.")
+        return leadID
+    }
+
     @discardableResult
     func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID {
         if let existing = workspace.leads.first(where: { $0.sourceID == candidate.sourceID }) {
@@ -861,7 +897,11 @@ final class AppStore: ObservableObject {
     func delete(_ company: Company) { workspace.companies.removeAll { $0.id == company.id }; persist(message: "Company deleted.") }
 
     func add(_ opportunity: Opportunity) { workspace.opportunities.insert(opportunity, at: 0); persist(message: "Opportunity added.") }
-    func update(_ opportunity: Opportunity) { replace(&workspace.opportunities, with: opportunity); persist(message: "Opportunity saved.") }
+    func update(_ opportunity: Opportunity) {
+        replace(&workspace.opportunities, with: opportunity)
+        LeadWorkflow.mirrorOutcome(ofOpportunity: opportunity, in: &workspace)
+        persist(message: "Opportunity saved.")
+    }
     func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
 
     func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminder(for: task) } }
@@ -904,8 +944,10 @@ final class AppStore: ObservableObject {
         let today = CalendarCRM.dayString()
         if automationRules.contains(where: { $0.enabled && $0.trigger == .dueFollowUp }) {
             for lead in dueLeads {
+                // A converted lead already has its own open follow-up task (its next action); do not add a second.
                 let alreadyExists = tasks.contains { task in
-                    task.title == "Follow up with \(lead.name)" && task.dueDate == today && task.status != .done
+                    (task.title == "Follow up with \(lead.name)" && task.dueDate == today && task.status != .done)
+                        || (task.id == lead.followUpTaskID && task.status != .done)
                 }
                 guard !alreadyExists else { continue }
                 workspace.tasks.insert(CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id), at: 0)
@@ -959,6 +1001,7 @@ final class AppStore: ObservableObject {
     func update(_ lead: Lead) {
         guard let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) else { return }
         workspace.leads[index] = lead
+        LeadWorkflow.mirrorOutcome(ofLead: lead, in: &workspace)
         persist(message: "Lead saved.")
     }
 
@@ -1234,18 +1277,7 @@ final class AppStore: ObservableObject {
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
         guard task.status != .done else { return }
 
-        let fireAt: Date?
-        if let reminderAt = task.reminderAt, let instant = ISO8601DateFormatter().date(from: reminderAt) {
-            fireAt = instant
-        } else if let dateString = task.dueDate, let dueDate = CalendarCRM.date(from: dateString) {
-            var components = Calendar.current.dateComponents([.year, .month, .day], from: dueDate)
-            components.hour = 9
-            components.minute = 0
-            fireAt = Calendar.current.date(from: components)
-        } else {
-            fireAt = nil
-        }
-        guard let fireAt, fireAt > .now else { return }
+        guard let fireAt = LeadWorkflow.reminderFireDate(for: task) else { return }
 
         do {
             let settings = await center.notificationSettings()
@@ -1547,19 +1579,12 @@ final class AppStore: ObservableObject {
     }
 #endif
 
-    func standardMessage(for lead: Lead) -> String {
-        let firstName = lead.name.split(separator: " ").first.map(String.init) ?? lead.name
-        let subject = lead.service.isEmpty ? "quote" : lead.service
-        let signature = business.name.isEmpty ? "the team" : business.name
-        return """
-        Hi \(firstName),
-
-        Just checking in regarding the \(subject) I sent over. Let me know if you have any questions or if you'd like to discuss next steps.
-
-        Best,
-        \(signature)
-        """
+    /// Local draft that states only recorded facts (no invented quote, intent or private notes).
+    func groundedDraft(for lead: Lead) -> LeadWorkflow.GroundedDraft {
+        LeadWorkflow.draft(for: lead, in: workspace, business: business)
     }
+
+    func standardMessage(for lead: Lead) -> String { groundedDraft(for: lead).text }
 
     func markMessageSent(on lead: inout Lead, message: String) {
         let today = CalendarCRM.dayString()
@@ -1570,6 +1595,10 @@ final class AppStore: ObservableObject {
         lead.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
         lead.history.append(FollowUpEvent(date: today, message: message))
         update(lead)
+        if let moved = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace) {
+            persist(message: "Follow-up logged; the follow-up task moved to \(moved.dueDate ?? "-").")
+            Task { await scheduleTaskReminder(for: moved) }
+        }
     }
 
     private static func load(from url: URL) -> (workspace: PersistentWorkspace, recovery: WorkspaceRecoveryState) {

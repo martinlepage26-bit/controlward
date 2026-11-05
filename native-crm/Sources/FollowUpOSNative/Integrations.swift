@@ -479,12 +479,7 @@ enum ExchangeFingerprint {
 
 // MARK: - Connector status
 
-/// Last verified result for a connector. Contains no secrets.
-struct ConnectorHealth: Codable, Equatable, Sendable {
-    var ok: Bool
-    var detail: String
-    var checkedAt = Date.now.ISO8601Format()
-}
+// ConnectorHealth lives in Models.swift (persisted workspace data, no Keychain dependency).
 
 enum ConnectorStatus: Equatable {
     case needsSetup(String)
@@ -573,32 +568,9 @@ enum JSONValue: Codable, Equatable, Sendable {
 // MARK: - Twenty
 
 enum TwentyObject: String, CaseIterable, Codable, Sendable {
-    // Push order matters: people and opportunities reference companies; opportunities reference people.
-    case companies, people, opportunities, tasks
+    // Push order matters: people and opportunities// TwentyObject and TwentyLink live in Models.swift (persisted workspace data, no Keychain dependency).
 
-    var singular: String {
-        switch self {
-        case .companies: "Company"
-        case .people: "Person"
-        case .opportunities: "Opportunity"
-        case .tasks: "Task"
-        }
-    }
-
-    var label: String { rawValue.capitalized }
-}
-
-/// Local record to Twenty record link, stored in the workspace. `payloadHash`
-/// lets unchanged records be skipped instead of re-sent.
-struct TwentyLink: Codable, Equatable, Sendable {
-    var twentyID: String
-    var object: TwentyObject
-    var payloadHash: String
-    var syncedAt = Date.now.ISO8601Format()
-}
-
-/// REST client for Twenty (`/rest/<objectPlural>`). Create returns
-/// `{"data":{"create<Singular>":{...}}}`, update returns `{"data":{"update<Singular>":{...}}}`.
+pdate returns `{"data":{"update<Singular>":{...}}}`.
 /// It never issues DELETE.
 struct TwentyClient: Sendable {
     let baseURL: URL
