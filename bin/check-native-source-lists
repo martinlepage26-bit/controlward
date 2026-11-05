@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Fails when the explicit swiftc source lists in the Mac test scripts drift apart or name missing files.
+# bin/test-workspace-modules must compile every app source that bin/test-native-app compiles (AppStore needs them),
+# and bin/test-crm-core's model/workflow sources must exist. Runs anywhere bash runs; no Swift needed.
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOURCE_ROOT="$(dirname "${SCRIPT_DIR}")/native-crm/Sources/FollowUpOSNative"
+list() { grep -oE '\$\{SOURCE_ROOT\}/[A-Za-z0-9_]+\.swift' "$1" | sed 's|.*/||'; }
+status=0
+for script in test-native-app test-workspace-modules; do
+  dupes="$(list "${SCRIPT_DIR}/${script}" | sort | uniq -d)"
+  if [ -n "${dupes}" ]; then echo "${script}: listed twice: ${dupes//$'\n'/ }"; status=1; fi
+  while read -r file; do
+    [ -f "${SOURCE_ROOT}/${file}" ] || { echo "${script}: missing source ${file}"; status=1; }
+  done < <(list "${SCRIPT_DIR}/${script}")
+done
+missing="$(comm -23 <(list "${SCRIPT_DIR}/test-native-app" | LC_ALL=C sort -u) <(list "${SCRIPT_DIR}/test-workspace-modules" | LC_ALL=C sort -u))"
+if [ -n "${missing}" ]; then echo "test-workspace-modules lacks sources test-native-app compiles: ${missing//$'\n'/ }"; status=1; fi
+for file in Models.swift GTMModels.swift AccountIdentity.swift AccountScoring.swift ControlWardModels.swift LeadWorkflow.swift; do
+  [ -f "${SOURCE_ROOT}/${file}" ] || { echo "test-crm-core: missing source ${file}"; status=1; }
+done
+[ "${status}" -eq 0 ] && echo "Native test source lists: consistent"
+exit "${status}"

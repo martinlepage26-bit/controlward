@@ -1546,35 +1546,28 @@ final class AppStore: ObservableObject {
     }
 
     func generateMessage(for lead: Lead) async -> GeneratedMessage {
-        let fallback = standardMessage(for: lead)
+        let grounded = groundedDraft(for: lead)
 #if canImport(FoundationModels)
-        guard #available(macOS 26.0, *) else {
-            return GeneratedMessage(text: fallback, usedIntelligence: false)
-        }
-        return await generateOnDevice(for: lead, fallback: fallback)
+        guard #available(macOS 26.0, *) else { return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead) }
+        return await generateOnDevice(for: lead, grounded: grounded)
 #else
-        return GeneratedMessage(text: fallback, usedIntelligence: false)
+        return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead)
 #endif
     }
 
 #if canImport(FoundationModels)
+    /// The model only rephrases the grounded draft; LeadWorkflow.AIDraft checks its text before it is shown.
     @available(macOS 26.0, *)
-    private func generateOnDevice(for lead: Lead, fallback: String) async -> GeneratedMessage {
+    private func generateOnDevice(for lead: Lead, grounded: LeadWorkflow.GroundedDraft) async -> GeneratedMessage {
         guard SystemLanguageModel.default.availability == .available else {
-            return GeneratedMessage(text: fallback, usedIntelligence: false)
+            return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead)
         }
-
-        // Customer-controlled fields are delimited and declared as data (F14).
-        let instructions = FollowUpPrompt.instructions
-        let prompt = FollowUpPrompt.build(businessName: business.name, industry: business.industry, lead: lead)
-
         do {
-            let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: prompt)
-            let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return GeneratedMessage(text: text.isEmpty ? fallback : text, usedIntelligence: !text.isEmpty)
+            let session = LanguageModelSession(instructions: LeadWorkflow.AIDraft.instructions)
+            let response = try await session.respond(to: LeadWorkflow.AIDraft.prompt(for: grounded))
+            return LeadWorkflow.AIDraft.accept(response.content, draft: grounded, lead: lead)
         } catch {
-            return GeneratedMessage(text: fallback, usedIntelligence: false)
+            return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead)
         }
     }
 #endif
@@ -1671,11 +1664,6 @@ final class AppStore: ObservableObject {
             self?.notice = nil
         }
     }
-}
-
-struct GeneratedMessage: Equatable {
-    var text: String
-    var usedIntelligence: Bool
 }
 
 enum CSVParser {

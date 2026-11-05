@@ -263,7 +263,7 @@ struct LeadEditorView: View {
                     Text("Grounded in: \(groundedDraft.groundedIn.joined(separator: " · "))")
                         .font(.caption2).foregroundStyle(.secondary)
                     if !groundedDraft.notMentioned.isEmpty {
-                        Text("Not stated: \(groundedDraft.notMentioned.joined(separator: " "))")
+                        Text("Unknown, not stated: \(groundedDraft.notMentioned.joined(separator: " "))")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -288,7 +288,7 @@ struct LeadEditorView: View {
                 .controlSize(.large)
                 .disabled(generating)
             }
-            Text("Drafts use Apple Intelligence on this Mac when available; customer details stay on the device, and nothing is sent without your review.")
+            Text("Drafts use only recorded facts. Apple Intelligence may rephrase them on this Mac when available; anything it adds that is not recorded is set aside. Nothing is sent without your review.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -381,10 +381,10 @@ struct LeadEditorView: View {
             let result = await store.generateMessage(for: draft)
             message = result.text
             draftUsedAI = result.usedIntelligence
-            groundedDraft = result.usedIntelligence ? nil : store.groundedDraft(for: draft)
+            groundedDraft = result.grounded
             writerNote = result.usedIntelligence
-                ? "This lead's name, request, quote, and notes were processed by Apple Intelligence on this Mac only; nothing is sent until you choose Email."
-                : "Local draft from recorded facts only. \(LeadWorkflow.GroundedDraft.reviewNotice)"
+                ? "Apple Intelligence rephrased the grounded draft on this Mac, using only the facts below; internal notes were not given to it. Review it before sending."
+                : (result.fallbackReason ?? "Local draft from recorded facts only. \(LeadWorkflow.GroundedDraft.reviewNotice)")
             showWriter = true
             generating = false
         }

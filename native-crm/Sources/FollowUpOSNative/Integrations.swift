@@ -567,10 +567,10 @@ enum JSONValue: Codable, Equatable, Sendable {
 
 // MARK: - Twenty
 
-enum TwentyObject: String, CaseIterable, Codable, Sendable {
-    // Push order matters: people and opportunities// TwentyObject and TwentyLink live in Models.swift (persisted workspace data, no Keychain dependency).
+// TwentyObject and TwentyLink live in Models.swift (persisted workspace data, no Keychain dependency).
 
-pdate returns `{"data":{"update<Singular>":{...}}}`.
+/// REST client for Twenty (`/rest/<objectPlural>`). Create returns
+/// `{"data":{"create<Singular>":{...}}}`, update returns `{"data":{"update<Singular>":{...}}}`.
 /// It never issues DELETE.
 struct TwentyClient: Sendable {
     let baseURL: URL
