@@ -2,14 +2,23 @@ import Foundation
 
 @MainActor enum ReminderTests {
     static func run() async -> Bool {
-        await PortableCheck.suite("Reminder delivery control", [
+        // Keep AppStore and notification fake cases on MainActor on Swift 6.1 too.
+        // The portable runner is nonisolated and cannot receive these closures.
+        let cases: [(String, @MainActor () async throws -> Void)] = [
             ("automatic reconciliation does not request permission; manual action does", permissionIsExplicit),
             ("denied access cancels obsolete IDs and preserves unrelated notifications", deniedCancels),
             ("permission API errors remain distinct from an owner denial", authorizationError),
             ("partial scheduling failure reports the actual successful count", partialFailure),
             ("a close queued during a slow reschedule leaves no reminder", serializedEdits),
             ("AppStore conversion, date clearing, restore and deletion reconcile notifications", storeLifecycle),
-        ])
+        ]
+        var passed = 0
+        for (name, test) in cases {
+            do { try await test(); passed += 1; print("PASS Reminder: \(name)") }
+            catch { print("FAIL Reminder: \(name): \(error)") }
+        }
+        print("Reminder delivery control tests: \(passed)/\(cases.count) passed")
+        return passed == cases.count
     }
     static func expect(_ value: @autoclosure () -> Bool, _ message: String) throws {
         try PortableCheck.expect(value(), message)
