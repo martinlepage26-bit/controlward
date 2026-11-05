@@ -437,15 +437,34 @@ enum LeadWorkflow {
 
     // MARK: - Follow-up task and reminder
 
-    /// After a follow-up is logged, the lead's open follow-up task moves to the next suggested date.
-    /// Returns the updated task so the caller can reschedule its local reminder.
-    static func syncFollowUpTask(for lead: Lead, in workspace: inout PersistentWorkspace) -> CRMTask? {
-        guard let id = lead.followUpTaskID, let next = lead.nextFollowUp,
-              let index = workspace.tasks.firstIndex(where: { $0.id == id && $0.status != .done }),
-              workspace.tasks[index].dueDate != next else { return nil }
+    /// Keeps a lead's follow-up task in step after the owner saves the lead or logs a follow-up: the task's due date
+    /// follows the lead's next follow-up, and a won or lost lead closes the task so its reminder is cancelled.
+    /// Returns the changed task so the caller can reschedule or cancel its local reminder.
+    static func syncFollowUpTask(for lead: Lead, in workspace: inout PersistentWorkspace, now: Date = .now) -> CRMTask? {
+        guard let id = lead.followUpTaskID,
+              let index = workspace.tasks.firstIndex(where: { $0.id == id && $0.status != .done }) else { return nil }
+        if !lead.status.isOpen {
+            let note = "Closed when the lead was marked \(lead.status.label.lowercased()) on \(CalendarCRM.dayString(now))."
+            workspace.tasks[index].status = .done
+            workspace.tasks[index].reminderAt = nil
+            workspace.tasks[index].details += workspace.tasks[index].details.isEmpty ? note : "\n" + note
+            return workspace.tasks[index]
+        }
+        guard let next = lead.nextFollowUp, workspace.tasks[index].dueDate != next else { return nil }
         workspace.tasks[index].dueDate = next
         workspace.tasks[index].reminderAt = nil
         return workspace.tasks[index]
+    }
+
+    /// After the owner saves a task: when it is an open lead's open follow-up task, the lead's next follow-up
+    /// (which drives the Pipeline due list) follows the task's due date. Returns true when the lead changed.
+    @discardableResult
+    static func syncLead(afterSaving task: CRMTask, in workspace: inout PersistentWorkspace) -> Bool {
+        guard task.status != .done, let due = task.dueDate,
+              let index = workspace.leads.firstIndex(where: { $0.followUpTaskID == task.id }),
+              workspace.leads[index].status.isOpen, workspace.leads[index].nextFollowUp != due else { return false }
+        workspace.leads[index].nextFollowUp = due
+        return true
     }
 
     /// When the local reminder for a task fires: its explicit reminder instant, else 9 AM local on its due date.
@@ -455,11 +474,12 @@ enum LeadWorkflow {
         let fireAt: Date?
         if let reminderAt = task.reminderAt, let instant = ISO8601DateFormatter().date(from: reminderAt) {
             fireAt = instant
-        } else if let day = task.dueDate, let due = CalendarCRM.date(from: day) {
-            var components = calendar.dateComponents([.year, .month, .day], from: due)
-            components.hour = 9
-            components.minute = 0
-            fireAt = calendar.date(from: components)
+        } else if let day = task.dueDate, CalendarCRM.date(from: day) != nil {
+            // The due date is a calendar day ("yyyy-MM-dd"), not an instant: build 9 AM on that day in the
+            // reminder's calendar directly, so a time-zone difference cannot move it to the day before.
+            let parts = day.split(separator: "-").compactMap { Int($0) }
+            guard parts.count == 3 else { return nil }
+            fireAt = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 9, minute: 0))
         } else {
             fireAt = nil
         }

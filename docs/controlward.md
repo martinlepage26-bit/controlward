@@ -31,8 +31,10 @@ Prospects that are held, dropped or still to fix stay in Leads. The lead editor 
 and an itemised record-completeness score; completeness is not buying intent. **Review conversion…** previews
 the company, contact, opportunity and follow-up task, matching existing records by name, email and phone. Only
 the confirmed preview is saved, and existing links are never overwritten. The follow-up task is the lead's next
-action and carries the local reminder. The local draft states only recorded facts and lists them; nothing is
-sent from ControlWard. Pipeline totals count owner-entered values only, and a converted lead counts once,
+action and carries the local reminder. Its date and the lead's next follow-up stay the same in both directions,
+and a won or lost lead closes it. The local draft states only recorded facts and lists them, along with what is
+unknown. Apple Intelligence may only rephrase it, and its text is replaced by the local draft when it adds
+contact, a conversation, a quote or a number that is not recorded. Nothing is sent from ControlWard. Pipeline totals count owner-entered values only, and a converted lead counts once,
 through its opportunity. Status and evidence: [promise-status-20261105.md](promise-status-20261105.md).
 
 ## Project record links and capture

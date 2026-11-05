@@ -12,6 +12,15 @@ image `swift:6.1-noble`) and Node 22. The repository pins Node 24.5; the JavaScr
 records used were synthetic. No mail was sent, no mailbox was changed, nothing was deployed, and no production
 service or migration was touched.
 
+## Correction (second pass, same day)
+
+The first pass relocated `TwentyObject`/`TwentyLink` with a script that sliced the file at stale offsets.
+That left `Integrations.swift` with a truncated `TwentyObject` and a broken `TwentyClient` doc comment,
+so the Mac build would not compile. The first pass ran `swiftc -parse` only on the files it meant to edit,
+so the damage went unnoticed. It also left `bin/test-workspace-modules` without `LeadWorkflow.swift` and
+the lead pipeline sources that AppStore now needs. Both are fixed in `7a7d6a9`. Every Swift file (92) is now
+parse-checked, and `bin/check-native-source-lists` fails if the two Mac test scripts' source lists drift apart.
+
 ## Status vocabulary
 
 - **verified**: a test that exercises the behavior ran and passed in this session.
@@ -27,13 +36,17 @@ A compile, a parse check or reading the code never counts as **verified**.
 | Command | Result |
 | --- | --- |
 | `bin/test-portable` (Swift 6.1 container; `CW_PHAROS_PLANTED_REDS` set from the vitest JSON report) | PASSED. Lead pipeline 90/90; slice 3 planted reds 74/74; mail control 9/9; Project Control writes 4/4; mail outcome 3/3; slice 1/2/4 reds 7/5/3 |
-| `bin/test-crm-core` (new, same container) | PASSED, 18/18 |
+| `bin/test-crm-core` (new, same container) | PASSED, 23/23 (second pass). Also passes with the process time zone set to UTC+14 and UTC−11 |
+| `bin/check-native-source-lists` (new, bash) | consistent. Fails on the pre-fix `test-workspace-modules` list (planted red) |
+| `swiftc -parse` on every `.swift` file (92: Sources, Tests, LinuxShims, WebKitTests) | 0 errors. Syntax only |
 | `yarn test:worker` | 60/60 |
 | `yarn test:unit` | 1/1 |
 | `yarn lint` / `yarn typecheck` | 0 warnings, 0 errors / exit 0 |
 | `swiftc -parse` on edited SwiftUI/AppKit files | Syntax only. They cannot be type-checked here |
 | AppStore additions type-checked against a stand-in class with the same members | Clean under Swift 6. This is not the real AppStore |
-| `bin/test-native-app`, `bin/build-native-app`, `bin/test-workspace-modules` | **Not run** (they need macOS) |
+| `zsh bin/test-native-app` (Swift 6.1 Linux container, zsh installed) | exit 1: `AppStore.swift:1:8: error: no such module 'AppKit'`. Platform limit; **pending Mac verification** |
+| `zsh bin/test-workspace-modules` (same) | exit 1: same `no such module 'AppKit'`. **Pending Mac verification** |
+| `bin/build-native-app` | Not run (needs macOS) |
 
 The first baseline `bin/test-portable` run failed only because `node_modules` was missing: Argus reds 9 and 10 read
 RED-NOT-RUN. After `yarn install --immutable` and passing the vitest report into the container, the suite passed.
@@ -49,7 +62,7 @@ the 18 cases fail. The source was then restored.
 | 2. Source, evidence, dedup, explainable score | partial | Evidence lines with the source ID and "buyer intent unknown". Itemised record-completeness score that disclaims intent. Dedup by source ID and email on promotion; by name/legal form, email and phone on conversion (phone with a conflicting email stays separate). Pipeline dedup rules covered by the 90 pipeline tests | SwiftUI rendering of the evidence block |
 | 3. Convert to linked contact, company, opportunity | partial | Preview, then confirm; fill-only; idempotent; a stale preview or a blocker writes nothing; a company-only listing creates no person; no value is invented (6 cases) | SwiftUI confirmation dialog (parse-only). AppStore `convertLead` type-checked against a stand-in only. Mac smoke check added, not run |
 | 4. Stage, notes, owner-entered value, next action | partial | Stage from lead status; value only from the owner-entered quote; follow-up task is the next action and moves when a follow-up is logged; won/lost mirrors both ways | Editor UI |
-| 5. Reminder and grounded draft | partial / blocked | Reminder fires at 9 AM local on the due date, explicit instant first, none when the task is done or past. Local draft states only recorded facts: no invented quote, no assumed intent, private notes not quoted, logged history used | Notification delivery (**blocked**: needs the Mac and notification permission). The Apple Intelligence draft path (macOS 26 only) is unverified. It stays labelled "AI draft · review before sending" |
+| 5. Reminder and grounded draft | partial / pending Mac | Reminder at 9 AM on the due day in the reminder's calendar, even when that calendar's time zone differs from the process's (fixed in the second pass); explicit instant first; none when the task is done or past. A rescheduled lead moves its task; a rescheduled task moves the lead; a won or lost lead, or its opportunity, closes the task. Local draft: only recorded facts. A hand-entered lead with no inbound record is never thanked for getting in touch, and its subject is "Introduction". On-device (AI) draft: the model gets facts, unknowns and the grounded draft, never internal notes. Output that implies unrecorded contact, a conversation, a quote, a number or a placeholder falls back to the grounded draft, with the reason shown (3 cases + planted reds) | Notification delivery and cancellation (**pending Mac**: needs the Mac and notification permission). The real FoundationModels call (macOS 26 only) is unverified; only its prompt and the output guard are tested |
 | 6. Owner review before sending or external writes | verified (gates) / partial (app) | Mail: unconfirmed reply/trash refused with 0 requests; DELETE refused before the network; allowlist; audit lines (portable 9/9 + reds 7/3). Project Control capture refusals with 0 POSTs (4/4 + reds 5/5). Lead draft "Email" only opens the owner's mail app; ControlWard sends nothing (code) | PHAROS push fingerprint and Twenty preview (`IntegrationTests`, Mac). In-app confirmation dialogs |
 | 7. Persistence after relaunch | partial / blocked | `workspace.json` round trip with AppStore's encoder options and the `PersistentWorkspace` decoder. Links, value, stage, next action, note link and evidence survive. A pre-change workspace still loads | AppStore reload smoke check added to `NativeSmokeTests` (Mac, not run). Quit-and-reopen in the running app (**blocked**) |
 
@@ -64,7 +77,7 @@ score-based revenue anywhere in these totals. `AccountScoring` already labels it
 | --- | --- | --- | --- |
 | CRM records and relationships | partial | Conversion and relaunch cases (Linux). The unlinked-context bug is fixed and has a regression test | Mac `NativeSmokeTests` relationship reloads not run |
 | Pipeline (stages, due, values) | partial | Outcome totals; stage mapping | Pipeline UI |
-| Tasks and reminders | partial / blocked | Reminder timing; follow-up task linked and moved; automation no longer adds a second task for a converted lead (AppStore, inspection) | Delivery needs the Mac |
+| Tasks and reminders | partial / pending Mac | Reminder timing; the follow-up task and the lead's next follow-up stay the same date in both directions; a closed deal closes its follow-up task; automation no longer adds a second task for a converted lead (AppStore, inspection) | Delivery and cancellation need the Mac |
 | Notes and activity | partial | Conversion and promotion write activity events; note links survive the round trip | Activity view (Mac) |
 | LeadGen evidence | partial | Worker: push provenance, retract and test marking (60/60, incl. Argus reds 9–10); prospect evidence carried into the CRM | Native inbox pull (`LeadInboxTests`, Mac) |
 | Lantern audits | partial | Unchanged code. Lead context now lists only linked audits | `CSVImportTests` (Mac) |
@@ -83,9 +96,10 @@ Twenty extension stays parked, credentials stay in the Keychain, and Project Con
 Use a throwaway data folder. `FOLLOWUPOS_DATA_DIR` overrides the folder in Debug builds only; otherwise use
 `./bin/preview-controlward`.
 
-1. `./bin/test-native-app`: expect the new `CRM workflow tests: 18/18 passed` and the conversion relaunch smoke
-   check to pass. This is also the first real type check of the edited SwiftUI files: `LeadEditorView`,
-   `ProspectLeadsView` and `PipelineView`.
+1. `./bin/test-native-app` and `./bin/test-workspace-modules`: expect `CRM workflow tests: 23/23 passed`, the
+   conversion relaunch smoke check, and the WebKit module tests to pass. This is the first real type check of
+   `AppStore.swift`, `Integrations.swift` and the edited SwiftUI files: `LeadEditorView`, `ProspectLeadsView`
+   and `PipelineView`.
 2. `CONTEXTWARD_SIGN_IDENTITY=- ./bin/build-native-app`, then open the app.
 3. Pipeline → Leads: run a search, then choose **Add to pipeline for review** on one Ready row. Held rows have no
    button.
@@ -96,6 +110,11 @@ Use a throwaway data folder. `FOLLOWUPOS_DATA_DIR` overrides the folder in Debug
 6. Write a follow-up message. Check the **Grounded in** and **Not stated** lines, then choose **Email**. Mail.app
    opens a draft; do not send it. Choose **Mark as sent** and check that the follow-up task's date moves.
 7. Grant notifications. Check that a pending reminder exists (or wait for it to fire) at 9 AM on the due date.
+   Change the lead's next follow-up date and save; the task's date and the reminder should move. Then mark the lead
+   **Won**; the follow-up task should show Done, and no reminder should remain.
+   With Apple Intelligence on (macOS 26), regenerate a draft for a hand-entered lead. It must not thank them for
+   getting in touch. If the model adds anything that is not recorded, the editor shows the grounded draft and the
+   reason.
 8. Quit with Cmd+Q, reopen, and repeat step 5.
 9. Settings: export a backup, restore it, and check that the links and the follow-up task are still present.
 10. Optional CI: run the `build-macos-app` workflow on this branch with `workflow_dispatch`. It tests, packages and

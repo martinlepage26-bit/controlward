@@ -900,12 +900,23 @@ final class AppStore: ObservableObject {
     func update(_ opportunity: Opportunity) {
         replace(&workspace.opportunities, with: opportunity)
         LeadWorkflow.mirrorOutcome(ofOpportunity: opportunity, in: &workspace)
-        persist(message: "Opportunity saved.")
+        var closedTask: CRMTask?
+        if opportunity.stage.isClosed, let leadID = opportunity.leadID, let lead = workspace.leads.first(where: { $0.id == leadID }) {
+            closedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace)
+        }
+        persist(message: closedTask == nil ? "Opportunity saved." : "Opportunity saved; the lead's follow-up task is closed and its reminder cancelled.")
+        if let closedTask { Task { await scheduleTaskReminder(for: closedTask) } }
     }
     func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
 
     func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminder(for: task) } }
-    func update(_ task: CRMTask) { replace(&workspace.tasks, with: task); persist(message: "Task saved."); Task { await scheduleTaskReminder(for: task) } }
+    func update(_ task: CRMTask) {
+        replace(&workspace.tasks, with: task)
+        // A lead's follow-up task and the lead's next follow-up date stay the same date.
+        let leadMoved = LeadWorkflow.syncLead(afterSaving: task, in: &workspace)
+        persist(message: leadMoved ? "Task saved; the lead's next follow-up moved to \(task.dueDate ?? "-")." : "Task saved.")
+        Task { await scheduleTaskReminder(for: task) }
+    }
     func delete(_ task: CRMTask) {
         workspace.tasks.removeAll { $0.id == task.id }
 #if !CONTEXTWARD_ACCEPTANCE
@@ -1002,7 +1013,13 @@ final class AppStore: ObservableObject {
         guard let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) else { return }
         workspace.leads[index] = lead
         LeadWorkflow.mirrorOutcome(ofLead: lead, in: &workspace)
-        persist(message: "Lead saved.")
+        // The follow-up task follows the lead's next follow-up; a won or lost lead closes it and cancels its reminder.
+        let changedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace)
+        let message = changedTask.map {
+            $0.status == .done ? "Lead saved; its follow-up task is closed and its reminder cancelled." : "Lead saved; the follow-up task moved to \($0.dueDate ?? "-")."
+        } ?? "Lead saved."
+        persist(message: message)
+        if let changedTask { Task { await scheduleTaskReminder(for: changedTask) } }
     }
 
     func delete(_ lead: Lead) {
@@ -1587,11 +1604,7 @@ final class AppStore: ObservableObject {
         lead.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
         lead.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
         lead.history.append(FollowUpEvent(date: today, message: message))
-        update(lead)
-        if let moved = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace) {
-            persist(message: "Follow-up logged; the follow-up task moved to \(moved.dueDate ?? "-").")
-            Task { await scheduleTaskReminder(for: moved) }
-        }
+        update(lead)  // also moves the lead's follow-up task and its reminder to the next date
     }
 
     private static func load(from url: URL) -> (workspace: PersistentWorkspace, recovery: WorkspaceRecoveryState) {

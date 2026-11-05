@@ -25,6 +25,8 @@ enum CRMWorkflowTests {
             ("AI draft: recorded inbound contact and a recorded quote may be rephrased; record text cannot close the data block", aiDraftAllowsRecordedFacts),
             ("Reminder: 9 AM on the due date, explicit instant first, none when done or past", reminderTiming),
             ("Follow-up: logging a message moves the open follow-up task to the next date", followUpTaskMoves),
+            ("Next action: rescheduling the lead moves its follow-up task; rescheduling the task moves the lead", nextActionStaysInStep),
+            ("Next action: a won or lost lead (or opportunity) closes its follow-up task, so no reminder fires", closedLeadClosesFollowUpTask),
             ("Relaunch: records, links, value, stage and next action survive workspace.json", persistsAcrossRelaunch),
             ("Relaunch: a workspace saved before followUpTaskID still loads", legacyWorkspaceLoads),
         ])
@@ -442,8 +444,8 @@ enum CRMWorkflowTests {
         var task = CRMTask(title: "Call")
         task.dueDate = "2026-11-08"
         let fire = try requireValue(LeadWorkflow.reminderFireDate(for: task, now: now, calendar: calendar), "no reminder")
-        let parts = calendar.dateComponents([.hour, .minute], from: fire)
-        try expect(parts.hour == 9 && parts.minute == 0, "not 9 AM local: \(parts)")
+        let parts = calendar.dateComponents([.day, .hour, .minute], from: fire)
+        try expect(parts.day == 8 && parts.hour == 9 && parts.minute == 0, "not 9 AM local on the due day: \(parts)")
         task.reminderAt = "2026-11-06T14:30:00Z"
         try expect(LeadWorkflow.reminderFireDate(for: task, now: now, calendar: calendar) == ISO8601DateFormatter().date(from: "2026-11-06T14:30:00Z"), "explicit instant ignored")
         task.reminderAt = "2026-11-01T14:30:00Z"
@@ -464,6 +466,58 @@ enum CRMWorkflowTests {
         let moved = try requireValue(LeadWorkflow.syncFollowUpTask(for: sent, in: &workspace), "task not moved")
         try expect(moved.id == result.taskID && moved.dueDate == "2026-11-12", "moved task: \(moved)")
         try expect(LeadWorkflow.syncFollowUpTask(for: sent, in: &workspace) == nil, "unchanged date reported a move")
+    }
+
+    static func nextActionStaysInStep() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        var workspace = PersistentWorkspace()
+        let lead = manualLead()
+        workspace.leads = [lead]
+        let result = try converted(lead, in: &workspace)
+        var rescheduled = workspace.leads[0]
+        rescheduled.nextFollowUp = "2026-11-10"
+        workspace.leads[0] = rescheduled
+        let moved = try requireValue(LeadWorkflow.syncFollowUpTask(for: rescheduled, in: &workspace, now: now), "lead reschedule did not move the task")
+        try expect(moved.id == result.taskID && moved.dueDate == "2026-11-10", "moved: \(moved)")
+        let fire = try requireValue(LeadWorkflow.reminderFireDate(for: moved, now: now, calendar: calendar), "no reminder after the move")
+        try expect(calendar.dateComponents([.day, .hour], from: fire) == DateComponents(day: 10, hour: 9), "reminder not on the new date")
+
+        var task = try requireValue(workspace.tasks.first { $0.id == result.taskID }, "task missing")
+        task.dueDate = "2026-11-14"
+        workspace.tasks[workspace.tasks.firstIndex { $0.id == task.id }!] = task
+        try expect(LeadWorkflow.syncLead(afterSaving: task, in: &workspace), "task reschedule did not move the lead")
+        try expect(workspace.leads[0].nextFollowUp == "2026-11-14", "lead next follow-up: \(workspace.leads[0].nextFollowUp ?? "nil")")
+        try expect(!LeadWorkflow.syncLead(afterSaving: task, in: &workspace), "unchanged date reported a move")
+        var other = CRMTask(title: "Unrelated")
+        other.dueDate = "2026-12-01"
+        try expect(!LeadWorkflow.syncLead(afterSaving: other, in: &workspace), "an unrelated task moved the lead")
+        task.status = .done
+        task.dueDate = "2026-12-20"
+        try expect(!LeadWorkflow.syncLead(afterSaving: task, in: &workspace) && workspace.leads[0].nextFollowUp == "2026-11-14", "a done task moved the lead")
+    }
+
+    static func closedLeadClosesFollowUpTask() async throws {
+        var workspace = PersistentWorkspace()
+        let lead = manualLead()
+        workspace.leads = [lead]
+        let result = try converted(lead, in: &workspace)
+        var won = workspace.leads[0]
+        LeadWorkflow.setOutcome(.won, on: &won, now: now)
+        workspace.leads[0] = won
+        let closed = try requireValue(LeadWorkflow.syncFollowUpTask(for: won, in: &workspace, now: now), "won lead left its task open")
+        try expect(closed.id == result.taskID && closed.status == .done && closed.details.contains("Closed when the lead was marked won"), "closed: \(closed)")
+        try expect(LeadWorkflow.reminderFireDate(for: closed, now: now) == nil, "a closed deal still has a reminder")
+        try expect(LeadWorkflow.syncFollowUpTask(for: won, in: &workspace, now: now) == nil, "closing twice reported a change")
+
+        var viaOpportunity = PersistentWorkspace()
+        let other = manualLead("Sam Rivera", company: "Rivera Cabinets")
+        viaOpportunity.leads = [other]
+        let second = try converted(other, in: &viaOpportunity)
+        viaOpportunity.opportunities[0].stage = .lost
+        try expect(LeadWorkflow.mirrorOutcome(ofOpportunity: viaOpportunity.opportunities[0], in: &viaOpportunity, now: now), "lost opportunity not mirrored")
+        let lost = try requireValue(LeadWorkflow.syncFollowUpTask(for: viaOpportunity.leads[0], in: &viaOpportunity, now: now), "lost opportunity left the task open")
+        try expect(lost.id == second.taskID && lost.status == .done, "lost: \(lost)")
     }
 
     static func persistsAcrossRelaunch() async throws {
