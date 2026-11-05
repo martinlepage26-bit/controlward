@@ -1,5 +1,7 @@
 # Using ControlWard for daily prospect and follow-up work
 
+If a record cannot be saved, its editor stays open with an error. Keep the form open, restore access to the workspace folder or free disk space, then try Save again. The displayed draft has not been committed until Save succeeds; quitting or cancelling can discard it.
+
 Start in **Pipeline**. Import an existing lead CSV, add a lead by hand, or use **Find prospects** to review public business listings. For configured evidence-backed research, use **Pipeline → Leads** and add only Ready records to Pipeline for review. Operations → Import LeadGen accepts exported event files. A listing or imported score is a research lead; it does not establish buying intent.
 
 Open a lead and check its name, source evidence, contact details, service or ask, and next follow-up date. Enter a value only when you have one. Choose **Review conversion…**, check the proposed company, contact, opportunity and follow-up task, then confirm. A business without a named person creates no invented contact. A second conversion reuses its links.

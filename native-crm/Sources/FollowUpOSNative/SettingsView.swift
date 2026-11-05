@@ -36,6 +36,7 @@ struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 15) {
+                    SaveFailureNotice()
                     TextField("Business name", text: $name)
                         .textFieldStyle(.roundedBorder)
                     Picker("Industry", selection: $industry) {

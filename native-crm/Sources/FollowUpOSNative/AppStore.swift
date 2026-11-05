@@ -17,6 +17,7 @@ enum WorkspaceRecoveryState: Equatable {
 final class AppStore: ObservableObject {
     @Published private(set) var workspace: PersistentWorkspace
     @Published var notice: String?
+    @Published private(set) var saveFailure: String?
     /// The last CSV import's result; stays until Martin closes it (CSV-5).
     @Published var lastCSVImport: CSVImportResult?
     @Published private(set) var recoveryState: WorkspaceRecoveryState
@@ -772,49 +773,62 @@ final class AppStore: ObservableObject {
         .sorted { $0.createdAt > $1.createdAt }
     }
 
-    func createWorkspace(name: String, industry: String) {
-        workspace.business = BusinessProfile(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            industry: industry
-        )
-        persist(message: "Workspace created.")
-    }
-
-    func saveBusiness(_ business: BusinessProfile) {
-        workspace.business = business
-        persist(message: "Settings saved.")
-    }
-
-    func add(_ lead: Lead) {
-        if let sourceID = lead.sourceID, !sourceID.isEmpty,
-           workspace.leads.contains(where: { $0.sourceID == sourceID }) {
-            showNotice("This source record is already in the pipeline.")
-            return
+    @discardableResult
+    func createWorkspace(name: String, industry: String) -> Bool {
+        return saveChange { next in
+            next.business = BusinessProfile(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                industry: industry
+            )
+            return "Workspace created."
         }
-        workspace.leads.insert(lead, at: 0)
-        persist(message: "\(lead.name) added.")
-        if workspace.autoPilotEnabled { _ = runAutomations() }
-    }
-
-    func linkLead(_ id: UUID, companyID: UUID?, contactID: UUID?) {
-        guard var lead = workspace.leads.first(where: { $0.id == id }) else { return }
-        lead.companyID = companyID
-        lead.contactID = contactID
-        if let companyID, let company = workspace.companies.first(where: { $0.id == companyID }) { lead.company = company.name }
-        replace(&workspace.leads, with: lead)
-        for index in workspace.signals.indices where workspace.signals[index].leadID == id {
-            workspace.signals[index].companyID = companyID
-            workspace.signals[index].contactID = contactID
-        }
-        persist(message: "Lead relationships saved.")
     }
 
     @discardableResult
-    func createOpportunity(from lead: Lead) -> Opportunity {
+    func saveBusiness(_ business: BusinessProfile) -> Bool {
+        return saveChange { next in
+            next.business = business
+            return "Settings saved."
+        }
+    }
+
+    @discardableResult
+    func add(_ lead: Lead) -> Bool {
+        let saved = saveChange { next in
+            if let sourceID = lead.sourceID, !sourceID.isEmpty,
+               next.leads.contains(where: { $0.sourceID == sourceID }) {
+                throw GTMError.invalid("This source record is already in the pipeline.")
+            }
+            var linked = lead
+            if let companyID = lead.companyID, let company = next.companies.first(where: { $0.id == companyID }) { linked.company = company.name }
+            next.leads.insert(linked, at: 0)
+            return "\(lead.name) added."
+        }
+        if saved && workspace.autoPilotEnabled { _ = runAutomations() }
+        return saved
+    }
+
+    @discardableResult
+    func linkLead(_ id: UUID, companyID: UUID?, contactID: UUID?) -> Bool {
+        return saveChange { next in
+            guard var lead = next.leads.first(where: { $0.id == id }) else { throw GTMError.invalid("This lead no longer exists.") }
+            lead.companyID = companyID
+            lead.contactID = contactID
+            if let companyID, let company = next.companies.first(where: { $0.id == companyID }) { lead.company = company.name }
+            replace(&next.leads, with: lead)
+            for index in next.signals.indices where next.signals[index].leadID == id {
+                next.signals[index].companyID = companyID
+                next.signals[index].contactID = contactID
+            }
+            return "Lead relationships saved."
+        }
+    }
+
+    @discardableResult
+    func createOpportunity(from lead: Lead) -> Opportunity? {
         if let existing = workspace.opportunities.first(where: { $0.leadID == lead.id }) { return existing }
         let opportunity = Opportunity(name: lead.service.isEmpty ? lead.name : "\(lead.name) — \(lead.service)", amount: lead.quoteAmount, stage: .lead, contactID: lead.contactID, companyID: lead.companyID, leadID: lead.id, notes: "Created from the lead pipeline.")
-        add(opportunity)
-        return opportunity
+        return add(opportunity) ? opportunity : nil
     }
 
     /// Preview of converting a reviewed lead into linked company, contact, opportunity and follow-up task records.
@@ -859,7 +873,7 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID {
+    func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID? {
         if let existing = workspace.leads.first(where: { $0.sourceID == candidate.sourceID }) {
             showNotice("Already in pipeline: \(existing.name).")
             return existing.id
@@ -874,128 +888,200 @@ final class AppStore: ObservableObject {
         lead.sourceID = candidate.sourceID
         lead.notes = candidate.evidence
         lead.createdAt = candidate.capturedAt
-        workspace.leads.insert(lead, at: 0)
+        guard saveChange({ next in
+            next.leads.insert(lead, at: 0)
 
-        var signal = Signal()
-        signal.title = "Public prospect: \(candidate.name)"
-        signal.source = .imported
-        signal.status = .captured
-        signal.fitScore = candidate.researchPriority
-        signal.intentScore = 0
-        signal.priority = candidate.researchPriority
-        signal.leadID = lead.id
-        signal.companyID = lead.companyID
-        signal.contactID = lead.contactID
-        signal.sourceID = candidate.sourceID
-        signal.evidence = candidate.evidence
-        signal.nextAction = candidate.readyForHumanReview ? "Review public evidence and decide whether this is a suitable prospect." : "Review this public business record before pursuing it."
-        workspace.signals.insert(signal, at: 0)
-        workspace.activity.insert(ActivityEvent(kind: "discovery", message: "Added one public business record to the review pipeline.", sourceID: lead.id), at: 0)
-        persist(message: "\(candidate.name) added for human review.")
+            var signal = Signal()
+            signal.title = "Public prospect: \(candidate.name)"
+            signal.source = .imported
+            signal.status = .captured
+            signal.fitScore = candidate.researchPriority
+            signal.intentScore = 0
+            signal.priority = candidate.researchPriority
+            signal.leadID = lead.id
+            signal.companyID = lead.companyID
+            signal.contactID = lead.contactID
+            signal.sourceID = candidate.sourceID
+            signal.evidence = candidate.evidence
+            signal.nextAction = candidate.readyForHumanReview ? "Review public evidence and decide whether this is a suitable prospect." : "Review this public business record before pursuing it."
+            next.signals.insert(signal, at: 0)
+            next.activity.insert(ActivityEvent(kind: "discovery", message: "Added one public business record to the review pipeline.", sourceID: lead.id), at: 0)
+            return "\(candidate.name) added for human review."
+        }) else { return nil }
         return lead.id
     }
 
-    func add(_ contact: Contact) { workspace.contacts.insert(contact, at: 0); persist(message: "Contact added.") }
-    func update(_ contact: Contact) { replace(&workspace.contacts, with: contact); persist(message: "Contact saved.") }
-    func delete(_ contact: Contact) { workspace.contacts.removeAll { $0.id == contact.id }; persist(message: "Contact deleted.") }
+    @discardableResult
+    func add(_ contact: Contact) -> Bool {
+        saveChange { next in next.contacts.insert(contact, at: 0); return "Contact added." }
+    }
+    @discardableResult
+    func update(_ contact: Contact) -> Bool {
+        saveChange { next in replace(&next.contacts, with: contact); return "Contact saved." }
+    }
+    @discardableResult
+    func delete(_ contact: Contact) -> Bool {
+        saveChange { next in next.contacts.removeAll { $0.id == contact.id }; return "Contact deleted." }
+    }
 
-    func add(_ company: Company) { workspace.companies.insert(company, at: 0); persist(message: "Company added.") }
-    func update(_ company: Company) { replace(&workspace.companies, with: company); persist(message: "Company saved.") }
-    func delete(_ company: Company) { workspace.companies.removeAll { $0.id == company.id }; persist(message: "Company deleted.") }
+    @discardableResult
+    func add(_ company: Company) -> Bool {
+        saveChange { next in next.companies.insert(company, at: 0); return "Company added." }
+    }
+    @discardableResult
+    func update(_ company: Company) -> Bool {
+        saveChange { next in replace(&next.companies, with: company); return "Company saved." }
+    }
+    @discardableResult
+    func delete(_ company: Company) -> Bool {
+        saveChange { next in next.companies.removeAll { $0.id == company.id }; return "Company deleted." }
+    }
 
-    func add(_ opportunity: Opportunity) { workspace.opportunities.insert(opportunity, at: 0); persist(message: "Opportunity added.") }
-    func update(_ opportunity: Opportunity) {
-        replace(&workspace.opportunities, with: opportunity)
-        LeadWorkflow.mirrorOutcome(ofOpportunity: opportunity, in: &workspace)
-        var closedTask: CRMTask?
-        if opportunity.stage.isClosed, let leadID = opportunity.leadID, let lead = workspace.leads.first(where: { $0.id == leadID }) {
-            closedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace)
+    @discardableResult
+    func add(_ opportunity: Opportunity) -> Bool {
+        saveChange { next in next.opportunities.insert(opportunity, at: 0); return "Opportunity added." }
+    }
+    @discardableResult
+    func update(_ opportunity: Opportunity) -> Bool {
+        return saveChange { next in
+            replace(&next.opportunities, with: opportunity)
+            LeadWorkflow.mirrorOutcome(ofOpportunity: opportunity, in: &next)
+            var closedTask: CRMTask?
+            if opportunity.stage.isClosed, let leadID = opportunity.leadID, let lead = next.leads.first(where: { $0.id == leadID }) {
+                closedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &next)
+            }
+            return closedTask == nil ? "Opportunity saved." : "Opportunity saved; the lead's follow-up task is closed and its reminder cancelled."
         }
-        persist(message: closedTask == nil ? "Opportunity saved." : "Opportunity saved; the lead's follow-up task is closed and its reminder cancelled.")
-    }
-    func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
-
-    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added.") }
-    func update(_ task: CRMTask) {
-        replace(&workspace.tasks, with: task)
-        // A lead's follow-up task and the lead's next follow-up date stay the same date.
-        let leadMoved = LeadWorkflow.syncLead(afterSaving: task, in: &workspace)
-        persist(message: leadMoved ? "Task saved; the lead's next follow-up moved to \(task.dueDate ?? "-")." : "Task saved.")
-    }
-    func delete(_ task: CRMTask) {
-        workspace.tasks.removeAll { $0.id == task.id }
-        persist(message: "Task deleted.")
     }
 
-    func add(_ note: CRMNote) { workspace.notes.insert(note, at: 0); persist(message: "Note added.") }
-    func update(_ note: CRMNote) { replace(&workspace.notes, with: note); persist(message: "Note saved.") }
-    func delete(_ note: CRMNote) { workspace.notes.removeAll { $0.id == note.id }; persist(message: "Note deleted.") }
+    @discardableResult
+    func delete(_ opportunity: Opportunity) -> Bool {
+        saveChange { next in next.opportunities.removeAll { $0.id == opportunity.id }; return "Opportunity deleted." }
+    }
 
-    func add(_ signal: Signal) { workspace.signals.insert(signal, at: 0); persist(message: "Signal captured.") }
-    func update(_ signal: Signal) { replace(&workspace.signals, with: signal); persist(message: "Signal saved.") }
-    func delete(_ signal: Signal) { workspace.signals.removeAll { $0.id == signal.id }; persist(message: "Signal deleted.") }
+    @discardableResult
+    func add(_ task: CRMTask) -> Bool {
+        saveChange { next in next.tasks.insert(task, at: 0); return "Task added." }
+    }
+    @discardableResult
+    func update(_ task: CRMTask) -> Bool {
+        return saveChange { next in
+            replace(&next.tasks, with: task)
+            // A lead's follow-up task and the lead's next follow-up date stay the same date.
+            let leadMoved = LeadWorkflow.syncLead(afterSaving: task, in: &next)
+            return leadMoved ? "Task saved; the lead's next follow-up moved to \(task.dueDate ?? "-")." : "Task saved."
+        }
+    }
 
-    func add(_ audit: BilingualAudit) { workspace.audits.insert(audit, at: 0); persist(message: "Lantern audit saved.") }
-    func update(_ audit: BilingualAudit) { replace(&workspace.audits, with: audit); persist(message: "Lantern audit updated.") }
-    func delete(_ audit: BilingualAudit) { workspace.audits.removeAll { $0.id == audit.id }; persist(message: "Lantern audit deleted.") }
+    @discardableResult
+    func delete(_ task: CRMTask) -> Bool {
+        return saveChange { next in
+            next.tasks.removeAll { $0.id == task.id }
+            return "Task deleted."
+        }
+    }
 
-    func setAutomation(_ rule: AutomationRule, enabled: Bool) {
-        var updated = rule
-        updated.enabled = enabled
-        replace(&workspace.automationRules, with: updated)
-        persist(message: enabled ? "Automation enabled." : "Automation paused.")
+    @discardableResult
+    func add(_ note: CRMNote) -> Bool {
+        saveChange { next in next.notes.insert(note, at: 0); return "Note added." }
+    }
+    @discardableResult
+    func update(_ note: CRMNote) -> Bool {
+        saveChange { next in replace(&next.notes, with: note); return "Note saved." }
+    }
+    @discardableResult
+    func delete(_ note: CRMNote) -> Bool {
+        saveChange { next in next.notes.removeAll { $0.id == note.id }; return "Note deleted." }
+    }
+
+    @discardableResult
+    func add(_ signal: Signal) -> Bool {
+        saveChange { next in next.signals.insert(signal, at: 0); return "Signal captured." }
+    }
+    @discardableResult
+    func update(_ signal: Signal) -> Bool {
+        saveChange { next in replace(&next.signals, with: signal); return "Signal saved." }
+    }
+    @discardableResult
+    func delete(_ signal: Signal) -> Bool {
+        saveChange { next in next.signals.removeAll { $0.id == signal.id }; return "Signal deleted." }
+    }
+
+    @discardableResult
+    func add(_ audit: BilingualAudit) -> Bool {
+        saveChange { next in next.audits.insert(audit, at: 0); return "Lantern audit saved." }
+    }
+    @discardableResult
+    func update(_ audit: BilingualAudit) -> Bool {
+        saveChange { next in replace(&next.audits, with: audit); return "Lantern audit updated." }
+    }
+    @discardableResult
+    func delete(_ audit: BilingualAudit) -> Bool {
+        saveChange { next in next.audits.removeAll { $0.id == audit.id }; return "Lantern audit deleted." }
+    }
+
+    @discardableResult
+    func setAutomation(_ rule: AutomationRule, enabled: Bool) -> Bool {
+        return saveChange { next in
+            var updated = rule
+            updated.enabled = enabled
+            replace(&next.automationRules, with: updated)
+            return enabled ? "Automation enabled." : "Automation paused."
+        }
     }
 
     /// Runs only deterministic, local actions. No network calls, message sends, or external mutations occur here.
     @discardableResult
     func runAutomations() -> Int {
         var created = 0
-        let today = CalendarCRM.dayString()
-        if automationRules.contains(where: { $0.enabled && $0.trigger == .dueFollowUp }) {
-            for lead in dueLeads {
-                // A linked next action is retained even when completed or deliberately deleted.
-                // Recording a new date reopens that task through syncFollowUpTask.
-                guard lead.followUpTaskID == nil else { continue }
-                let existing = tasks.first { task in
-                    task.leadID == lead.id && task.title == "Follow up with \(lead.name)" && task.dueDate == today
-                }
-                if let existing {
-                    if lead.followUpTaskID == nil, existing.leadID == lead.id,
-                       let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) {
-                        workspace.leads[index].followUpTaskID = existing.id
+        guard saveChange({ next in
+            let today = CalendarCRM.dayString()
+            if automationRules.contains(where: { $0.enabled && $0.trigger == .dueFollowUp }) {
+                for lead in dueLeads {
+                    // A linked next action is retained even when completed or deliberately deleted.
+                    // Recording a new date reopens that task through syncFollowUpTask.
+                    guard lead.followUpTaskID == nil else { continue }
+                    let existing = tasks.first { task in
+                        task.leadID == lead.id && task.title == "Follow up with \(lead.name)" && task.dueDate == today
                     }
-                    continue
+                    if let existing {
+                        if lead.followUpTaskID == nil, existing.leadID == lead.id,
+                           let index = next.leads.firstIndex(where: { $0.id == lead.id }) {
+                            next.leads[index].followUpTaskID = existing.id
+                        }
+                        continue
+                    }
+                    let task = CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id)
+                    next.tasks.insert(task, at: 0)
+                    if let index = next.leads.firstIndex(where: { $0.id == lead.id }) {
+                        next.leads[index].followUpTaskID = task.id
+                    }
+                    next.activity.insert(ActivityEvent(kind: "automation", message: "Created a follow-up task for \(lead.name).", sourceID: lead.id), at: 0)
+                    created += 1
                 }
-                let task = CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id)
-                workspace.tasks.insert(task, at: 0)
-                if let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) {
-                    workspace.leads[index].followUpTaskID = task.id
+            }
+            if automationRules.contains(where: { $0.enabled && $0.trigger == .highIntentSignal }) {
+                for signal in activeSignals where signal.status == .captured && signal.intentScore >= 70 && signal.fitScore >= 70 {
+                    var routed = signal
+                    routed.status = .qualified
+                    routed.owner = routed.owner.isEmpty ? business.name : routed.owner
+                    next.signals[next.signals.firstIndex(where: { $0.id == signal.id })!] = routed
+                    next.activity.insert(ActivityEvent(kind: "automation", message: "Qualified high-intent signal: \(signal.title).", sourceID: signal.id), at: 0)
+                    created += 1
                 }
-                workspace.activity.insert(ActivityEvent(kind: "automation", message: "Created a follow-up task for \(lead.name).", sourceID: lead.id), at: 0)
-                created += 1
             }
-        }
-        if automationRules.contains(where: { $0.enabled && $0.trigger == .highIntentSignal }) {
-            for signal in activeSignals where signal.status == .captured && signal.intentScore >= 70 && signal.fitScore >= 70 {
-                var routed = signal
-                routed.status = .qualified
-                routed.owner = routed.owner.isEmpty ? business.name : routed.owner
-                workspace.signals[workspace.signals.firstIndex(where: { $0.id == signal.id })!] = routed
-                workspace.activity.insert(ActivityEvent(kind: "automation", message: "Qualified high-intent signal: \(signal.title).", sourceID: signal.id), at: 0)
-                created += 1
+            if automationRules.contains(where: { $0.enabled && $0.trigger == .auditGap }) {
+                for audit in audits where audit.languageGap >= 8 {
+                    let title = "Remediate Lantern gap: \(audit.name)"
+                    let alreadyExists = tasks.contains { $0.title == title && $0.status != .done }
+                    guard !alreadyExists else { continue }
+                    next.tasks.insert(CRMTask(title: title, details: audit.remediation.isEmpty ? "Review evidence and define a human-approved remediation plan." : audit.remediation, dueDate: today), at: 0)
+                    next.activity.insert(ActivityEvent(kind: "automation", message: "Flagged \(audit.priority.lowercased()) bilingual gap for remediation.", sourceID: audit.id), at: 0)
+                    created += 1
+                }
             }
-        }
-        if automationRules.contains(where: { $0.enabled && $0.trigger == .auditGap }) {
-            for audit in audits where audit.languageGap >= 8 {
-                let title = "Remediate Lantern gap: \(audit.name)"
-                let alreadyExists = tasks.contains { $0.title == title && $0.status != .done }
-                guard !alreadyExists else { continue }
-                workspace.tasks.insert(CRMTask(title: title, details: audit.remediation.isEmpty ? "Review evidence and define a human-approved remediation plan." : audit.remediation, dueDate: today), at: 0)
-                workspace.activity.insert(ActivityEvent(kind: "automation", message: "Flagged \(audit.priority.lowercased()) bilingual gap for remediation.", sourceID: audit.id), at: 0)
-                created += 1
-            }
-        }
-        persist(message: created == 0 ? "No new automation actions." : "Ran automations: \(created) action\(created == 1 ? "" : "s").")
+            return created == 0 ? "No new automation actions." : "Ran automations: \(created) action\(created == 1 ? "" : "s")."
+        }) else { return 0 }
         return created
     }
 
@@ -1007,10 +1093,16 @@ final class AppStore: ObservableObject {
         update(routed)
     }
 
-    func add(_ view: SavedView) { workspace.savedViews.append(view); persist(message: "View saved.") }
-    func delete(_ view: SavedView) {
-        workspace.savedViews.removeAll { $0.id == view.id }
-        persist(message: "View deleted.")
+    @discardableResult
+    func add(_ view: SavedView) -> Bool {
+        saveChange { next in next.savedViews.append(view); return "View saved." }
+    }
+    @discardableResult
+    func delete(_ view: SavedView) -> Bool {
+        return saveChange { next in
+            next.savedViews.removeAll { $0.id == view.id }
+            return "View deleted."
+        }
     }
 
     private func replace<T: Identifiable>(_ collection: inout [T], with value: T) where T.ID: Equatable {
@@ -1018,34 +1110,49 @@ final class AppStore: ObservableObject {
         collection[index] = value
     }
 
-    func update(_ lead: Lead) {
-        guard let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) else { return }
-        workspace.leads[index] = lead
-        LeadWorkflow.mirrorOutcome(ofLead: lead, in: &workspace)
-        // The follow-up task follows the lead's next follow-up; a won or lost lead closes it and cancels its reminder.
-        let changedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace)
-        let message = changedTask.map {
-            $0.status == .done ? "Lead saved; its follow-up task is closed and its reminder cancelled." : "Lead saved; the follow-up task moved to \($0.dueDate ?? "-")."
-        } ?? "Lead saved."
-        persist(message: message)
+    @discardableResult
+    func update(_ lead: Lead) -> Bool {
+        return saveChange { next in
+            guard let index = next.leads.firstIndex(where: { $0.id == lead.id }) else { throw GTMError.invalid("This lead no longer exists.") }
+            var linked = lead
+            if let companyID = lead.companyID, let company = next.companies.first(where: { $0.id == companyID }) { linked.company = company.name }
+            next.leads[index] = linked
+            for signalIndex in next.signals.indices where next.signals[signalIndex].leadID == lead.id {
+                next.signals[signalIndex].companyID = lead.companyID
+                next.signals[signalIndex].contactID = lead.contactID
+            }
+            LeadWorkflow.mirrorOutcome(ofLead: lead, in: &next)
+            // The follow-up task follows the lead's next follow-up; a won or lost lead closes it and cancels its reminder.
+            let changedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &next)
+            let message = changedTask.map {
+                $0.status == .done ? "Lead saved; its follow-up task is closed and its reminder cancelled." : "Lead saved; the follow-up task moved to \($0.dueDate ?? "-")."
+            } ?? "Lead saved."
+            return message
+        }
     }
 
-    func delete(_ lead: Lead) {
-        if let taskID = lead.followUpTaskID, let index = workspace.tasks.firstIndex(where: { $0.id == taskID }) {
-            workspace.tasks[index].status = .done
-            workspace.tasks[index].reminderAt = nil
+    @discardableResult
+    func delete(_ lead: Lead) -> Bool {
+        return saveChange { next in
+            if let taskID = lead.followUpTaskID, let index = next.tasks.firstIndex(where: { $0.id == taskID }) {
+                next.tasks[index].status = .done
+                next.tasks[index].reminderAt = nil
+            }
+            next.leads.removeAll { $0.id == lead.id }
+            // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
+            if let source = lead.sourceID, source.hasPrefix("leadgen:"), !next.dismissedLeadSources.contains(source) {
+                next.dismissedLeadSources.append(source)
+            }
+            return "Lead deleted."
         }
-        workspace.leads.removeAll { $0.id == lead.id }
-        // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
-        if let source = lead.sourceID, source.hasPrefix("leadgen:"), !workspace.dismissedLeadSources.contains(source) {
-            workspace.dismissedLeadSources.append(source)
-        }
-        persist(message: "Lead deleted.")
     }
 
-    func markSecurityReviewed() {
-        workspace.lastSecurityReview = Date.now.ISO8601Format()
-        persist(message: "Local record review saved.")
+    @discardableResult
+    func markSecurityReviewed() -> Bool {
+        return saveChange { next in
+            next.lastSecurityReview = Date.now.ISO8601Format()
+            return "Local record review saved."
+        }
     }
 
     enum ResetError: LocalizedError {
@@ -1066,8 +1173,8 @@ final class AppStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(workspace), to: backup)
-        workspace = PersistentWorkspace()
-        persist(message: "Workspace reset. Backup saved as \(backup.lastPathComponent).")
+        try commitWorkspace { $0 = PersistentWorkspace() }
+        showNotice("Workspace reset. Backup saved as \(backup.lastPathComponent).")
         return backup
     }
 
@@ -1577,15 +1684,19 @@ final class AppStore: ObservableObject {
 
     func standardMessage(for lead: Lead) -> String { groundedDraft(for: lead).text }
 
-    func markMessageSent(on lead: inout Lead, message: String) {
+    @discardableResult
+    func markMessageSent(on lead: inout Lead, message: String) -> Bool {
+        var next = lead
         let today = CalendarCRM.dayString()
-        let stage = lead.sequenceStage
+        let stage = next.sequenceStage
         let delay = stage < FollowUpCadence.days.count ? FollowUpCadence.days[stage] : nil
-        lead.lastMessage = message
-        lead.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
-        lead.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
-        lead.history.append(FollowUpEvent(date: today, message: message))
-        update(lead)  // also moves the lead's follow-up task and its reminder to the next date
+        next.lastMessage = message
+        next.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
+        next.nextFollowUp = delay.flatMap { CalendarCRM.addDays($0, to: today) }
+        next.history.append(FollowUpEvent(date: today, message: message))
+        guard update(next) else { return false }
+        lead = next
+        return true
     }
 
     private static func load(from url: URL) -> (workspace: PersistentWorkspace, recovery: WorkspaceRecoveryState) {
@@ -1602,6 +1713,24 @@ final class AppStore: ObservableObject {
     /// A failed import/task write cannot leave a partial in-memory success.
     func commitGTM(_ mutation: (inout PersistentWorkspace) throws -> Void) throws {
         try commitWorkspace(mutation)
+    }
+
+    func clearSaveFailure() { saveFailure = nil }
+
+    @discardableResult
+    private func saveChange(_ mutation: (inout PersistentWorkspace) throws -> String) -> Bool {
+        do {
+            var message = "Saved."
+            try commitWorkspace { next in message = try mutation(&next) }
+            saveFailure = nil
+            showNotice(message)
+            return true
+        } catch {
+            let message = "Changes were not saved. \(error.localizedDescription)"
+            saveFailure = message
+            showNotice(message)
+            return false
+        }
     }
 
     /// Publish local workflow changes only after the complete transaction is durable.

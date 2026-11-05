@@ -26,6 +26,7 @@ struct DiscoveryView: View {
                 Button("Done") { dismiss() }
             }
 
+            SaveFailureNotice()
             HStack(alignment: .bottom, spacing: 12) {
                 Picker("Category", selection: $category) {
                     ForEach(DiscoveryCategory.allCases) { Text($0.label).tag($0) }
@@ -78,7 +79,7 @@ struct DiscoveryView: View {
                     if addedIDs.contains(candidate.sourceID) || store.leads.contains(where: { $0.sourceID == candidate.sourceID }) {
                         Label("In pipeline", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(CRMTheme.moss)
                     } else {
-                        Button("Add for review") { _ = store.acceptDiscovery(candidate); addedIDs.insert(candidate.sourceID) }
+                        Button("Add for review") { if store.acceptDiscovery(candidate) != nil { addedIDs.insert(candidate.sourceID) } }
                             .buttonStyle(.bordered)
                     }
                 }.padding(.vertical, 4)

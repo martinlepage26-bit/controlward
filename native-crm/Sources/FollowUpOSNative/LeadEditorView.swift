@@ -218,8 +218,7 @@ struct LeadEditorView: View {
             titleVisibility: .visible
         ) {
             Button("Delete \(draft.name)", role: .destructive) {
-                store.delete(draft)
-                dismiss()
+                if store.delete(draft) { dismiss() } else { validationMessage = store.saveFailure }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -346,9 +345,8 @@ struct LeadEditorView: View {
             return
         }
         draft.name = trimmed
-        if isNew { store.add(draft) } else { store.update(draft) }
-        store.linkLead(draft.id, companyID: draft.companyID, contactID: draft.contactID)
-        dismiss()
+        if isNew ? store.add(draft) : store.update(draft) { dismiss() }
+        else { validationMessage = store.saveFailure }
     }
 
     private var conversionPresented: Binding<Bool> {
@@ -363,7 +361,7 @@ struct LeadEditorView: View {
             return
         }
         draft.name = trimmed
-        store.update(draft)
+        guard store.update(draft) else { validationMessage = store.saveFailure; return }
         pendingConversion = store.conversionPlan(for: draft)
     }
 
@@ -408,7 +406,7 @@ struct LeadEditorView: View {
     }
 
     private func markSent() {
-        store.markMessageSent(on: &draft, message: message)
+        guard store.markMessageSent(on: &draft, message: message) else { validationMessage = store.saveFailure; return }
         writerNote = draft.nextFollowUp == nil
             ? "Logged. Sequence complete. Decide the next step."
             : "Logged. Next follow-up suggested for \(CalendarCRM.display(draft.nextFollowUp))."

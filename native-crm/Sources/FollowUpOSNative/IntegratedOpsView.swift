@@ -233,6 +233,7 @@ struct SignalEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack { Button("Cancel") { dismiss() }; Spacer(); Text(existing ? "Edit signal" : "Capture signal").font(.headline); Spacer(); Button("Save") { save() }.buttonStyle(.borderedProminent) }.padding(16).background(CRMTheme.ink).foregroundStyle(.white)
+            SaveFailureNotice()
             Form {
                 Section("Signal") {
                     TextField("Title", text: $draft.title)
@@ -244,9 +245,9 @@ struct SignalEditor: View {
                 }
                 Section("Routing context") { TextField("Owner", text: $draft.owner); TextField("Next action", text: $draft.nextAction); TextEditor(text: $draft.evidence).frame(minHeight: 90) }
             }.formStyle(.grouped)
-        }.frame(width: 560, height: 520)
+        }.frame(width: 560, height: 520).onAppear { store.clearSaveFailure() }
     }
-    private func save() { guard !draft.title.trimmingCharacters(in: .whitespaces).isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
+    private func save() { guard !draft.title.trimmingCharacters(in: .whitespaces).isEmpty else { return }; if existing ? store.update(draft) : store.add(draft) { dismiss() } }
 }
 
 struct BilingualAuditEditor: View {
@@ -258,6 +259,7 @@ struct BilingualAuditEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack { Button("Cancel") { dismiss() }; Spacer(); Text(existing ? "Edit Lantern audit" : "New Lantern audit").font(.headline); Spacer(); Button("Save") { save() }.buttonStyle(.borderedProminent) }.padding(16).background(CRMTheme.ink).foregroundStyle(.white)
+            SaveFailureNotice()
             Form {
                 Section("Audit identity") {
                     TextField("Audit name", text: $draft.name)
@@ -273,12 +275,12 @@ struct BilingualAuditEditor: View {
                 ScoreSection(title: "English", score: $draft.english)
                 Section("Findings and remediation") { TextEditor(text: $draft.findings).frame(minHeight: 70).overlay(alignment: .topLeading) { if draft.findings.isEmpty { Text("Findings / quoted evidence").foregroundStyle(.secondary).padding(8) } }; TextEditor(text: $draft.remediation).frame(minHeight: 70).overlay(alignment: .topLeading) { if draft.remediation.isEmpty { Text("Remediation priority").foregroundStyle(.secondary).padding(8) } } }
             }.formStyle(.grouped)
-        }.frame(width: 600, height: 680)
+        }.frame(width: 600, height: 680).onAppear { store.clearSaveFailure() }
     }
     private var leadBinding: Binding<UUID?> { Binding(get: { draft.leadID }, set: { draft.leadID = $0 }) }
     private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
     private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
-    private func save() { guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }; existing ? store.update(draft) : store.add(draft); dismiss() }
+    private func save() { guard !draft.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }; if existing ? store.update(draft) : store.add(draft) { dismiss() } }
 }
 
 private struct ScoreSection: View {

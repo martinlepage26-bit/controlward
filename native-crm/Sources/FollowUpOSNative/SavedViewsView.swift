@@ -75,19 +75,20 @@ private struct NewSavedView: View {
                 }
             }
             TextField("Search terms (optional)", text: $search).textFieldStyle(.roundedBorder)
+            SaveFailureNotice()
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Save view") {
                     guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                    store.add(SavedView(name: name, objectName: objectName, filter: filter, search: search))
-                    dismiss()
+                    if store.add(SavedView(name: name, objectName: objectName, filter: filter, search: search)) { dismiss() }
                 }
                 .buttonStyle(.borderedProminent)
             }
         }
         .padding(24)
         .frame(width: 460, height: 340)
+        .onAppear { store.clearSaveFailure() }
         .onChange(of: objectName) { _, _ in filter = "all" }
     }
 }
