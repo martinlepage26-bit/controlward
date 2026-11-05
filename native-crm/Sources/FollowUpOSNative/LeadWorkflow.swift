@@ -32,6 +32,7 @@ enum LeadWorkflow {
 
     static func origin(of lead: Lead) -> Origin {
         guard let source = lead.sourceID, !source.isEmpty else { return .manualOrFile }
+        if source.hasPrefix("leadgen-file:") { return .manualOrFile }
         if source.hasPrefix("leadgen:") { return .pharosInbox }
         if source.hasPrefix("intake:") { return .pharosIntake }
         if source.hasPrefix("kairos:") { return .kairos }
@@ -47,7 +48,7 @@ enum LeadWorkflow {
         for signal in workspace.signals where signal.leadID == lead.id {
             let evidence = signal.evidence.trimmingCharacters(in: .whitespacesAndNewlines)
             if !evidence.isEmpty { lines.append(contentsOf: evidence.split(separator: "\n").map(String.init)) }
-            if signal.priority > 0 {
+            if signal.priority > 0, signal.sourceID?.hasPrefix("leadgen-file:") != true {
                 lines.append("Research priority \(signal.priority)/100 (public-record completeness, not buyer intent).")
             }
         }

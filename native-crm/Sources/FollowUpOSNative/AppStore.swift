@@ -1389,37 +1389,68 @@ final class AppStore: ObservableObject {
     /// Accepts one object or an array, and preserves the source filename in evidence.
     func importLeadGenJSON(from url: URL) throws -> Int {
         let events = try LeadGenEvent.decodeBatch(try ImportLimits.readCapped(url), source: url.lastPathComponent)
-
         var imported = 0
-        for event in events {
+        var skipped = 0
+        var existing = 0
+        try commitWorkspace { next in
+          for event in events {
             let identity = event.identity
-            let name = [identity.firstName, identity.lastName].compactMap { $0 }.joined(separator: " ")
-            let email = identity.email ?? event.email ?? ""
-            guard !name.isEmpty || !email.isEmpty else { continue }
+            func clean(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+            let name = [clean(identity.firstName), clean(identity.lastName)].filter { !$0.isEmpty }.joined(separator: " ")
+            let email = clean(identity.email ?? event.email)
+            let phone = clean(identity.phoneRaw)
+            let company = clean(identity.companyNameRaw)
+            guard !name.isEmpty || !email.isEmpty else { skipped += 1; continue }
 
-            var lead = Lead.blank()
-            lead.name = name.isEmpty ? email : name
-            lead.email = email
-            lead.phone = identity.phoneRaw ?? ""
-            lead.company = identity.companyNameRaw ?? ""
-            lead.createdAt = event.capturedAt ?? lead.createdAt
-            workspace.leads.insert(lead, at: 0)
+            // File exports do not prove an inbound conversation. Keep their IDs separate from the live inbox.
+            let eventID = clean(event.eventID)
+            let identityData = try JSONEncoder().encode([name.lowercased(), email.lowercased(), LeadMatching.phoneKey(phone) ?? phone, company.lowercased()])
+            let identityHash = SHA256.hash(data: identityData).map { String(format: "%02x", $0) }.joined()
+            let sourceID = "leadgen-file:" + (eventID.isEmpty ? "identity-" + identityHash : "event-" + eventID)
+            let legacyEvidence = "Event ID: \(eventID)."
+            guard !next.signals.contains(where: {
+                $0.sourceID == sourceID || (!eventID.isEmpty && $0.sourceID == nil && $0.title.hasPrefix("LeadGen: ") && $0.evidence.hasSuffix(legacyEvidence))
+            }) else { existing += 1; continue }
+
+            let exact = next.leads.filter { $0.sourceID == sourceID }
+            let emailMatches = email.isEmpty ? [] : next.leads.filter { clean($0.email).caseInsensitiveCompare(email) == .orderedSame }
+            let matches = exact.isEmpty ? emailMatches : exact
+            guard matches.count <= 1 else {
+                throw ImportLimits.error(409, "LeadGen import matches multiple existing leads. Resolve the duplicate identity first; nothing from this file was imported.")
+            }
+            let lead: Lead
+            if let known = matches.first {
+                // Preserve owner edits, existing source identity, values, status and relationship links.
+                lead = known
+            } else {
+                var created = Lead.blank()
+                created.name = name.isEmpty ? email : name
+                created.email = email
+                created.phone = phone
+                created.company = company
+                created.sourceID = sourceID
+                if let captured = event.capturedAt, ISO8601DateFormatter().date(from: captured) != nil { created.createdAt = captured }
+                next.leads.insert(created, at: 0)
+                lead = created
+            }
 
             var signal = Signal()
             signal.title = "LeadGen: \(lead.name)"
-            signal.source = .manual
+            signal.source = .imported
+            signal.sourceID = sourceID
             signal.status = .captured
             signal.leadID = lead.id
-            signal.evidence = "Imported from \(url.lastPathComponent). Event ID: \(event.eventID ?? "not supplied")."
+            signal.evidence = "Imported from \(url.lastPathComponent). Event ID: \(eventID.isEmpty ? "not supplied" : eventID). Scores were supplied in this file; they are not verified buying intent."
             signal.nextAction = "Resolve identity, qualify fit, and route."
             signal.fitScore = min(max(event.fitScore ?? 0, 0), 100)
             signal.intentScore = min(max(event.intentScore ?? 0, 0), 100)
             signal.priority = min(max(event.compositeScore ?? ((signal.fitScore + signal.intentScore) / 2), 0), 100)
-            workspace.signals.insert(signal, at: 0)
-            workspace.activity.insert(ActivityEvent(kind: "import", message: "Imported LeadGen event for \(lead.name).", sourceID: signal.id), at: 0)
+            next.signals.insert(signal, at: 0)
+            next.activity.insert(ActivityEvent(kind: "import", message: "Imported one LeadGen file event for review.", sourceID: lead.id), at: 0)
             imported += 1
+          }
         }
-        persist(message: imported == 0 ? "No LeadGen events found." : "Imported \(imported) LeadGen event\(imported == 1 ? "" : "s").")
+        showNotice("LeadGen: \(imported) imported, \(existing) already recorded, \(skipped) missing an identity.")
         return imported
     }
 
