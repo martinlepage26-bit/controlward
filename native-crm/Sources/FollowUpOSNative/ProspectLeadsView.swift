@@ -14,6 +14,9 @@ struct ProspectLeadsView: View {
     @State private var radius = 3_000
     @State private var limit = 5
     @State private var running = false
+    @State private var searchTask: Task<Void, Never>?
+    @State private var deadlineTask: Task<Void, Never>?
+    @State private var stopReason: String?
     @State private var records: [ProspectRecord] = []
     @State private var drafts: [OutreachDraft] = []
     @State private var summary: String?
@@ -49,6 +52,7 @@ struct ProspectLeadsView: View {
         .padding(22)
         .frame(minWidth: 860, minHeight: 620)
         .task { load() }
+        .onDisappear { cancelSearch() }
     }
 
     private func controls(_ environment: LeadPipelineEnvironment) -> some View {
@@ -63,12 +67,13 @@ struct ProspectLeadsView: View {
             }.frame(width: 110)
             Stepper("Sites \(limit)", value: $limit, in: 1...10).frame(width: 110)
             Button {
-                Task { await search(environment) }
+                startSearch(environment)
             } label: {
                 Label(running ? "Searching" : "Search", systemImage: "magnifyingglass")
             }
             .buttonStyle(.borderedProminent)
             .disabled(running)
+            if running { Button("Cancel search") { cancelSearch() } }
         }
         .pickerStyle(.menu)
     }
@@ -140,16 +145,45 @@ struct ProspectLeadsView: View {
         funnel = environment.funnel()
     }
 
+    private func startSearch(_ environment: LeadPipelineEnvironment) {
+        guard !running else { return }
+        running = true
+        stopReason = nil
+        summary = "Searching public sources. Time limit: 90 seconds; completed records are kept."
+        let work = Task {
+            await search(environment)
+            running = false
+            deadlineTask?.cancel()
+            searchTask = nil
+        }
+        searchTask = work
+        deadlineTask = Task {
+            do { try await Task.sleep(for: .seconds(90)) } catch { return }
+            guard !Task.isCancelled else { return }
+            stopReason = "Search stopped at the 90-second time limit. Completed records were kept."
+            work.cancel()
+        }
+    }
+
+    private func cancelSearch() {
+        guard running else { return }
+        stopReason = "Search cancelled. Completed records were kept."
+        summary = stopReason
+        deadlineTask?.cancel()
+        searchTask?.cancel()
+    }
+
     private func search(_ environment: LeadPipelineEnvironment) async {
         guard let lat = Double(latitude), let lon = Double(longitude) else { summary = "Enter numeric coordinates."; return }
         running = true
         defer { running = false }
         let request = ProspectSearchRun.Request(segmentID: segmentID, latitude: lat, longitude: lon, radiusMeters: radius, limit: limit)
-        let reports = await environment.searchAndIngest([request], audit: environment.audit)
+        let interactive = LeadPipelineEnvironment(config: environment.config.interactiveSearch(), root: environment.root)
+        let reports = await interactive.searchAndIngest([request], inner: InteractiveLeadTransport(inner: URLSessionLeadTransport()), audit: environment.audit)
         let found = reports.reduce(0) { $0 + $1.candidates }
         let kept = reports.reduce(0) { $0 + $1.prospects.count }
         let refused = reports.reduce(0) { $0 + $1.refusals.count }
-        summary = "Run \(reports.first?.runID ?? "-"): \(found) candidates, \(kept) records, \(refused) refusals. Nothing sent."
+        summary = stopReason ?? "Run \(reports.first?.runID ?? "-"): \(found) candidates, \(kept) records, \(refused) refusals. Nothing sent."
         reload(environment)
     }
 }

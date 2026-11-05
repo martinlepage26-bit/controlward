@@ -56,6 +56,7 @@ struct LeadDiscovery: Sendable {
         var seen = Set<String>()
         var overpassExhausted = false
         for selector in selectors {
+            guard !Task.isCancelled else { break }
             let parts = selector.split(separator: "=", maxSplits: 1).map(String.init)
             guard parts.count == 2, Self.isTag(parts[0]), Self.isTag(parts[1]) else { continue }
             var overpassHits = 0
@@ -63,6 +64,7 @@ struct LeadDiscovery: Sendable {
             var lastResult = overpassExhausted ? "error:overpass-exhausted" : "error:no-answer"
             if !overpassExhausted {
                 cellLoop: for cell in cells {
+                    guard !Task.isCancelled else { break cellLoop }
                     switch await overpass(key: parts[0], value: parts[1], tile: cell, limit: limit, shape: shape) {
                     case .answered(let found, let server):
                         answeredBy = answeredBy ?? server
@@ -206,9 +208,11 @@ struct LeadDiscovery: Sendable {
         for server in Self.overpassServers {
             var serverWait: Double?
             for number in 1...attemptsPerHost {
+                guard !Task.isCancelled else { return .stopped("refused:cancelled") }
                 if number > 1 {
                     await transport.backoff(seconds: Self.backoffSeconds(retry: number - 1, policy: policy, jitter: jitter(), serverWait: serverWait))
                 }
+                guard !Task.isCancelled else { return .stopped("refused:cancelled") }
                 let meter = LeadWaitMeter()
                 let (result, audited) = await attempt(server, body: body, via: "overpass \(key)=\(value)", timeout: shape.clientTimeoutSeconds, meter: meter)
                 transport.auditDiscoveryAttempt(server, attempt: number, of: attemptsPerHost, result: audited, waitMilliseconds: meter.milliseconds)
@@ -250,6 +254,7 @@ struct LeadDiscovery: Sendable {
         } catch let refusal as LeadPipelineRefusal {
             return (.stop, refusal.code)
         } catch {
+            if Task.isCancelled || error is CancellationError { return (.stop, "refused:cancelled") }
             return (.retryable(retryAfter: nil), "error:network")
         }
     }
@@ -260,6 +265,7 @@ struct LeadDiscovery: Sendable {
 
     /// One Photon request (unchanged query), audited like an Overpass attempt with its real result and wait.
     func photonAudited(key: String, value: String, latitude: Double, longitude: Double, limit: Int) async -> (candidates: [LeadCandidate], result: String) {
+        guard !Task.isCancelled else { return ([], "refused:cancelled") }
         guard let url = Self.photonURL(key: key, value: value, latitude: latitude, longitude: longitude, limit: limit) else { return ([], "refused:photon-url") }
         let meter = LeadWaitMeter()
         var found: [LeadCandidate] = []
@@ -277,7 +283,7 @@ struct LeadDiscovery: Sendable {
         } catch let refusal as LeadPipelineRefusal {
             audited = refusal.code
         } catch {
-            audited = "error:network"
+            audited = Task.isCancelled || error is CancellationError ? "refused:cancelled" : "error:network"
         }
         transport.auditDiscoveryAttempt(Self.photon, attempt: 1, of: 1, result: audited, waitMilliseconds: meter.milliseconds)
         return (found, audited)

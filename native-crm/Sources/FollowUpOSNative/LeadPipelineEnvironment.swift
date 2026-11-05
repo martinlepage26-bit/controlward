@@ -84,6 +84,7 @@ struct LeadPipelineEnvironment: Sendable {
         var reports: [ProspectSearchRun.Report] = []
         let store = ProspectLeadsStore(fileURL: storeURL)
         for request in requests {
+            guard !Task.isCancelled else { break }
             let report = await run.run(request)
             _ = await ProspectIngest.ingest(report.prospects, into: store, config: config, now: clock.now, audit: audit)
             reports.append(report)

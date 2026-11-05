@@ -222,6 +222,19 @@ struct ICPConfig: Codable, Equatable, Sendable {
 
     func segment(_ id: String?) -> Segment? { segments.first { $0.id == id } }
 
+    /// The desktop's bounded search uses fast fallback; batch/proof policy stays unchanged.
+    func interactiveSearch() -> Self {
+        var copy = self
+        var retry = etiquette.discoveryRetry ?? .standard
+        retry.retriesPerHost = 0
+        copy.etiquette.discoveryRetry = retry
+        var query = etiquette.discoveryQuery ?? .standard
+        query.overpassQueryTimeoutSeconds = 8
+        query.clientTimeoutMarginSeconds = 4
+        copy.etiquette.discoveryQuery = query
+        return copy
+    }
+
     /// The contact sources a segment may use today: listed for the segment and enabled in config.
     func enabledContactSources(for segment: Segment) -> [String] {
         segment.allowedContactSources.filter { id in

@@ -107,6 +107,27 @@ enum LeadPipelineTests {
         let expect = PortableCheck.expect
 
         return await PortableCheck.suite("Lead pipeline", [
+            ("Interactive search: bounded requests and fast fallback preserve the batch policy", {
+                let boundedConfig = config.interactiveSearch()
+                try expect(boundedConfig.segments == config.segments && boundedConfig.etiquette.discoveryRetry?.retriesPerHost == 0, "interactive profile changed segments or retained repeated retries")
+                try expect(boundedConfig.etiquette.discoveryQuery?.overpassQueryTimeoutSeconds == 8 && boundedConfig.etiquette.discoveryQuery?.clientTimeoutSeconds == 12, "interactive query/client limits disagree")
+                try expect(config.etiquette.discoveryRetry?.retriesPerHost == 2, "interactive search changed the original batch config")
+                let fake = FakeLeadTransport()
+                var request = URLRequest(url: URL(string: "https://example.test")!); request.timeoutInterval = 70
+                _ = try await InteractiveLeadTransport(inner: fake).send(request)
+                try expect(fake.requests.count == 1 && fake.requests[0].timeoutInterval == 12, "interactive request retained a long timeout")
+            }),
+            ("Interactive search: cancellation stops retries, fallback and further selectors", {
+                let fake = FakeLeadTransport()
+                fake.onSend = { _ in withUnsafeCurrentTask { $0?.cancel() } }
+                let guarded = GuardedLeadTransport(config: config.interactiveSearch(), inner: InteractiveLeadTransport(inner: fake), audit: MemoryAuditSink(), clock: FakeLeadClock())
+                let child = Task {
+                    await LeadDiscovery(transport: guarded).searchWithOutcomes(selectors: ["healthcare=clinic", "amenity=clinic"], latitude: 45.5, longitude: -73.6, radiusMeters: 1000, limit: 5)
+                }
+                let result = await child.value
+                try expect(fake.requests.count == 1 && result.candidates.isEmpty, "cancelled run made more provider requests")
+                try expect(result.outcomes.first?.result == "refused:cancelled" && !Task.isCancelled, "cancellation was misreported or affected the parent")
+            }),
             ("ICP config: seven confirmed segments, equal priority, valid", {
                 try expect(config.validate(against: confirmed) == nil, "config should validate: \(String(describing: config.validate(against: confirmed)))")
                 try expect(config.segments.count == 7 && Set(config.segments.map(\.priority)).count == 1, "7 equal-priority segments")
