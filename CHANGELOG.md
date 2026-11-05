@@ -4,6 +4,12 @@ All notable changes to this application are documented in this file.
 
 ## Unreleased
 
+- Lead to follow-up: Ready prospects can be added to Pipeline with their evidence; the lead editor shows
+  source, evidence and an itemised completeness score that is not buying intent; **Review conversion…**
+  previews and then creates linked company, contact, opportunity and follow-up task records; the local
+  draft states only recorded facts. Pipeline totals no longer count a converted lead twice. An unlinked
+  lead no longer lists every unlinked note, task and audit. `bin/test-crm-core` runs these checks on
+  macOS or Linux.
 - Every app build is traceable: the bundle's `CFBundleVersion` is stamped
   automatically (base 103 + commits since 001c7cd), and `ControlWardGitCommit` /
   `ControlWardGitDirty` record the source commit. About ControlWard shows

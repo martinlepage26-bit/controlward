@@ -1,5 +1,7 @@
 # ContextWard Remediation — Final Status
 
+> **Superseded 2026-11-05.** Current promise status, evidence and owner-side acceptance steps: [docs/promise-status-20261105.md](docs/promise-status-20261105.md). This file is kept as history; several gaps it lists are closed in current code.
+
 **Date**: 2026-10-14  
 **Status**: DELIVERABLE INCOMPLETE — Waiting for external action (Martin's build + test)  
 **What I can deliver**: Code + verification plan ✓  

@@ -1,5 +1,7 @@
 # ContextWard product promises — pre-implementation gaps
 
+> **Superseded 2026-11-05.** Current promise status, evidence and owner-side acceptance steps: [docs/promise-status-20261105.md](promise-status-20261105.md). This file is kept as history; several gaps it lists are closed in current code.
+
 Inspected 2026-10-14 at baseline `9b63dbb`. This file was written before implementation changes. The requested checkout was clean but behind the released commit; work continues on `feat/product-promises-20261014`, preserving `main` and other worktrees. Baseline native regression tests pass (101 named checks plus smoke); that is not running-app proof. No promise is marked working based on inspection alone.
 
 | # | Promise | Status | Evidence and gap |

@@ -24,6 +24,17 @@ system's records and authority explicit.
 | Security | Filter resolved/high-severity findings and create one review task per finding |
 | Settings | Private backup export, reviewed restore with rollback, and existing connector/local automation settings |
 
+## Lead to follow-up
+
+Pipeline → Leads → **Add to pipeline for review** copies one Ready prospect and its evidence into Pipeline.
+Prospects that are held, dropped or still to fix stay in Leads. The lead editor shows the source, the evidence
+and an itemised record-completeness score; completeness is not buying intent. **Review conversion…** previews
+the company, contact, opportunity and follow-up task, matching existing records by name, email and phone. Only
+the confirmed preview is saved, and existing links are never overwritten. The follow-up task is the lead's next
+action and carries the local reminder. The local draft states only recorded facts and lists them; nothing is
+sent from ControlWard. Pipeline totals count owner-entered values only, and a converted lead counts once,
+through its opportunity. Status and evidence: [promise-status-20261105.md](promise-status-20261105.md).
+
 ## Project record links and capture
 
 Connect a register in Projects → Sync using the existing owner workflow. The
@@ -135,6 +146,9 @@ credentials to a backup-supplied endpoint.
 ./bin/vendor-project-control --check
 ./bin/test-native-app
 ./bin/test-workspace-modules
+# Platform-neutral suites (macOS or Linux with Swift 6):
+./bin/test-portable
+./bin/test-crm-core
 # Optional real WebKit-to-Worker check; requires npm ci in that Worker checkout:
 ./bin/test-connected-workspace /path/to/project-control
 ./bin/preview-controlward

@@ -1,5 +1,7 @@
 # ContextWard Acceptance Test Plan — 2026-10-14
 
+> **Superseded 2026-11-05.** Current promise status, evidence and owner-side acceptance steps: [docs/promise-status-20261105.md](docs/promise-status-20261105.md). This file is kept as history; several gaps it lists are closed in current code.
+
 **Scenario**: Record a lead → link to company and contact → add conversation notes and audit findings → create an opportunity → schedule next follow-up → quit and reopen → the full context and next action are recovered intact.
 
 ## Test Execution (Running App Required)
