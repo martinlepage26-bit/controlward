@@ -74,6 +74,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlPlantedReds.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/CRMWorkflowTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ReminderTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/ReleaseReviewTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 

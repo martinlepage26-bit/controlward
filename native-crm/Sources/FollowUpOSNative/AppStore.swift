@@ -30,6 +30,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var pharosPreviewFingerprint: String?
 
     let storageURL: URL
+    let isReviewMode: Bool
     let secrets: SecretStore
     let transport: HTTPTransport
     var twentyPacing: Duration = .milliseconds(700)
@@ -43,22 +44,28 @@ final class AppStore: ObservableObject {
     /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
     private var importedCSVFiles: [String: Date] = [:]
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview) {
         self.storageURL = storageURL
+        self.isReviewMode = reviewMode
 #if CONTEXTWARD_ACCEPTANCE
-        let center: (any ReminderSchedulingCenter)? = reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil)
+        let center: (any ReminderSchedulingCenter)? = reviewMode ? nil : (reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil))
 #else
-        let center: (any ReminderSchedulingCenter)? = reminderCenter ?? SystemReminderCenter()
+        let center: (any ReminderSchedulingCenter)? = reviewMode ? nil : (reminderCenter ?? SystemReminderCenter())
 #endif
         self.reminderCoordinator = center.map { ReminderCoordinator(center: $0) }
         let selectedSecrets: SecretStore
+        if reviewMode {
+            selectedSecrets = InMemorySecretStore()
+        } else {
 #if CONTEXTWARD_ACCEPTANCE
         selectedSecrets = secrets ?? InMemorySecretStore()
 #else
         selectedSecrets = secrets ?? KeychainSecretStore()
 #endif
+        }
         self.secrets = selectedSecrets
-        self.transport = transport
+        self.transport = reviewMode ? IsolatedMailTransport() : transport
+        if reviewMode { self.reminderStatus = "Review workspace: macOS notifications are not scheduled." }
         let loaded = Self.load(from: storageURL)
         self.workspace = loaded.workspace
         self.recoveryState = loaded.recovery

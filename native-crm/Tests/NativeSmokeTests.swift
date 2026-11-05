@@ -14,6 +14,7 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        guard await ReleaseReviewTests.run() else { throw SmokeTestFailure.failed("Release review tests failed") }
         guard CRMSaveTests.run() else { throw SmokeTestFailure.failed("CRM save tests failed") }
         guard WorkspaceModuleTests.run() else { throw SmokeTestFailure.failed("Workspace module policy tests failed") }
         guard OverviewModelTests.run() else { throw SmokeTestFailure.failed("Overview model tests failed") }

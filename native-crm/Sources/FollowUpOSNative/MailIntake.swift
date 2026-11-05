@@ -373,10 +373,11 @@ enum MailAccountState: Equatable, Sendable {
 enum MailAccessMode {
     case live, isolated
     static var applicationDefault: Self {
+        if StorageLocation.isReview { return .isolated }
 #if CONTEXTWARD_ACCEPTANCE
-        .isolated
+        return .isolated
 #else
-        .live
+        return .live
 #endif
     }
 }
@@ -400,13 +401,14 @@ final class MailIntakeController: ObservableObject {
     let accessMode: MailAccessMode
 
     init(tokens: MailTokenStore? = nil, transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard,
-         accessMode: MailAccessMode = .applicationDefault) {
-        self.accessMode = accessMode
+         accessMode: MailAccessMode = .applicationDefault, reviewMode: Bool = StorageLocation.isReview) {
+        let selectedMode: MailAccessMode = reviewMode ? .isolated : accessMode
+        self.accessMode = selectedMode
         // Choose before querying account state. The preview must never instantiate or query the owner's store.
-        self.tokens = accessMode == .isolated ? InMemoryMailTokenStore() : (tokens ?? KeychainMailTokenStore())
-        self.transport = accessMode == .isolated ? IsolatedMailTransport() : transport
+        self.tokens = selectedMode == .isolated ? InMemoryMailTokenStore() : (tokens ?? KeychainMailTokenStore())
+        self.transport = selectedMode == .isolated ? IsolatedMailTransport() : transport
         self.defaults = defaults
-        clientID = accessMode == .isolated ? GoogleOAuthConfig.defaultClientID
+        clientID = selectedMode == .isolated ? GoogleOAuthConfig.defaultClientID
             : (defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID)
         for account in MailAccount.signIns { states[account.email] = self.tokens.exists(account.email) ? .idle : .notConnected }
     }

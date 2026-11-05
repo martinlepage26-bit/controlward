@@ -20,7 +20,8 @@ final class WorkspaceModules: ObservableObject {
         #if DEBUG && CONTEXTWARD_ACCEPTANCE
         let controller = WorkspaceWebController(module: module, document: document, dataStore: .nonPersistent())
 #else
-        let controller = WorkspaceWebController(module: module, document: document)
+        let controller = WorkspaceWebController(module: module, document: document,
+            dataStore: StorageLocation.isReview ? .nonPersistent() : nil)
 #endif
         controllers[module] = controller
         return controller
