@@ -24,6 +24,7 @@ enum CRMWorkflowTests {
             ("AI draft: unrecorded contact, conversation, quote, numbers or placeholders fall back to the grounded draft", aiDraftIsGuarded),
             ("AI draft: recorded inbound contact and a recorded quote may be rephrased; record text cannot close the data block", aiDraftAllowsRecordedFacts),
             ("Reminder: 9 AM on the due date, explicit instant first, none when done or past", reminderTiming),
+            ("Reminders: converted leads use one task notification; clearing dates removes the next action", reminderPlan),
             ("Follow-up: logging a message moves the open follow-up task to the next date", followUpTaskMoves),
             ("Next action: rescheduling the lead moves its follow-up task; rescheduling the task moves the lead", nextActionStaysInStep),
             ("Next action: a won or lost lead (or opportunity) closes its follow-up task, so no reminder fires", closedLeadClosesFollowUpTask),
@@ -36,6 +37,28 @@ enum CRMWorkflowTests {
         try PortableCheck.expect(try condition(), message)
     }
     private static let now = ISO8601DateFormatter().date(from: "2026-11-05T15:00:00Z")!
+
+    static func reminderPlan() async throws {
+        var workspace = PersistentWorkspace()
+        var lead = manualLead()
+        lead.nextFollowUp = "2026-11-10"
+        workspace.leads = [lead]
+        _ = try LeadWorkflow.applyConversion(LeadWorkflow.conversionPlan(for: lead.id, in: workspace)!, to: &workspace, now: now)
+        let planned = LeadWorkflow.reminders(in: workspace, now: now)
+        try expect(planned.count == 1 && planned[0].id.hasPrefix("contextward-task-"), "converted lead has duplicate reminder")
+        workspace.leads[0].nextFollowUp = nil
+        _ = LeadWorkflow.syncFollowUpTask(for: workspace.leads[0], in: &workspace)
+        try expect(workspace.tasks[0].dueDate == nil && LeadWorkflow.reminders(in: workspace, now: now).isEmpty, "cleared lead date left task reminder")
+        workspace.tasks[0].dueDate = "2026-11-11"
+        _ = LeadWorkflow.syncLead(afterSaving: workspace.tasks[0], in: &workspace)
+        workspace.tasks[0].dueDate = nil
+        _ = LeadWorkflow.syncLead(afterSaving: workspace.tasks[0], in: &workspace)
+        try expect(workspace.leads[0].nextFollowUp == nil, "cleared task date left lead date")
+        workspace.tasks[0].status = .done
+        workspace.leads[0].nextFollowUp = "2026-11-12"
+        _ = LeadWorkflow.syncFollowUpTask(for: workspace.leads[0], in: &workspace)
+        try expect(workspace.tasks.count == 1 && workspace.tasks[0].status == .todo && workspace.tasks[0].dueDate == "2026-11-12", "a new next action was lost after completing the previous task")
+    }
 
     private static func readyProspect(_ id: String = "fixture-1") -> ProspectRecord {
         var record = ProspectRecord(id: id, organisation: "Atelier Synthétique Inc.")

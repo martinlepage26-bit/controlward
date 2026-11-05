@@ -36,11 +36,20 @@ final class AppStore: ObservableObject {
     /// Receives every sync log line (tests assert these carry no keys or PII).
     var syncLogSink: ((String) -> Void)?
     private var noticeTask: Task<Void, Never>?
+    @Published private(set) var reminderStatus = "Choose Schedule reminders to check notification access."
+    private let reminderCoordinator: ReminderCoordinator?
+    private var lastQueuedReminders: [LeadWorkflow.Reminder]?
     /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
     private var importedCSVFiles: [String: Date] = [:]
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport()) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil) {
         self.storageURL = storageURL
+#if CONTEXTWARD_ACCEPTANCE
+        let center = reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil)
+#else
+        let center = reminderCenter ?? SystemReminderCenter()
+#endif
+        self.reminderCoordinator = center.map { ReminderCoordinator(center: $0) }
         let selectedSecrets: SecretStore
 #if CONTEXTWARD_ACCEPTANCE
         selectedSecrets = secrets ?? InMemorySecretStore()
@@ -827,9 +836,6 @@ final class AppStore: ObservableObject {
             return nil
         }
         guard let result else { return nil }
-        if let taskID = result.taskID, let task = workspace.tasks.first(where: { $0.id == taskID }) {
-            Task { await scheduleTaskReminder(for: task) }
-        }
         showNotice(result.created.isEmpty ? "Lead already linked; nothing new was created." : "Converted after review: \(result.created.joined(separator: ", ")).")
         return result
     }
@@ -863,7 +869,8 @@ final class AppStore: ObservableObject {
         lead.company = candidate.name
         lead.phone = candidate.phone ?? ""
         lead.email = candidate.email ?? ""
-        lead.service = candidate.category
+        // A public business category is evidence about the business, not a service requested by a buyer.
+        lead.service = ""
         lead.sourceID = candidate.sourceID
         lead.notes = candidate.evidence
         lead.createdAt = candidate.capturedAt
@@ -905,27 +912,18 @@ final class AppStore: ObservableObject {
             closedTask = LeadWorkflow.syncFollowUpTask(for: lead, in: &workspace)
         }
         persist(message: closedTask == nil ? "Opportunity saved." : "Opportunity saved; the lead's follow-up task is closed and its reminder cancelled.")
-        if let closedTask { Task { await scheduleTaskReminder(for: closedTask) } }
     }
     func delete(_ opportunity: Opportunity) { workspace.opportunities.removeAll { $0.id == opportunity.id }; persist(message: "Opportunity deleted.") }
 
-    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added."); Task { await scheduleTaskReminder(for: task) } }
+    func add(_ task: CRMTask) { workspace.tasks.insert(task, at: 0); persist(message: "Task added.") }
     func update(_ task: CRMTask) {
         replace(&workspace.tasks, with: task)
         // A lead's follow-up task and the lead's next follow-up date stay the same date.
         let leadMoved = LeadWorkflow.syncLead(afterSaving: task, in: &workspace)
         persist(message: leadMoved ? "Task saved; the lead's next follow-up moved to \(task.dueDate ?? "-")." : "Task saved.")
-        Task { await scheduleTaskReminder(for: task) }
     }
     func delete(_ task: CRMTask) {
         workspace.tasks.removeAll { $0.id == task.id }
-#if !CONTEXTWARD_ACCEPTANCE
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["contextward-task-\(task.id.uuidString)"])
-#else
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["contextward-task-\(task.id.uuidString)"])
-        }
-#endif
         persist(message: "Task deleted.")
     }
 
@@ -955,13 +953,24 @@ final class AppStore: ObservableObject {
         let today = CalendarCRM.dayString()
         if automationRules.contains(where: { $0.enabled && $0.trigger == .dueFollowUp }) {
             for lead in dueLeads {
-                // A converted lead already has its own open follow-up task (its next action); do not add a second.
-                let alreadyExists = tasks.contains { task in
-                    (task.title == "Follow up with \(lead.name)" && task.dueDate == today && task.status != .done)
-                        || (task.id == lead.followUpTaskID && task.status != .done)
+                // A linked next action is retained even when completed or deliberately deleted.
+                // Recording a new date reopens that task through syncFollowUpTask.
+                guard lead.followUpTaskID == nil else { continue }
+                let existing = tasks.first { task in
+                    task.leadID == lead.id && task.title == "Follow up with \(lead.name)" && task.dueDate == today
                 }
-                guard !alreadyExists else { continue }
-                workspace.tasks.insert(CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id), at: 0)
+                if let existing {
+                    if lead.followUpTaskID == nil, existing.leadID == lead.id,
+                       let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) {
+                        workspace.leads[index].followUpTaskID = existing.id
+                    }
+                    continue
+                }
+                let task = CRMTask(title: "Follow up with \(lead.name)", details: lead.lastMessage.isEmpty ? "Review the relationship record and send the next appropriate follow-up." : lead.lastMessage, dueDate: today, leadID: lead.id)
+                workspace.tasks.insert(task, at: 0)
+                if let index = workspace.leads.firstIndex(where: { $0.id == lead.id }) {
+                    workspace.leads[index].followUpTaskID = task.id
+                }
                 workspace.activity.insert(ActivityEvent(kind: "automation", message: "Created a follow-up task for \(lead.name).", sourceID: lead.id), at: 0)
                 created += 1
             }
@@ -1019,10 +1028,13 @@ final class AppStore: ObservableObject {
             $0.status == .done ? "Lead saved; its follow-up task is closed and its reminder cancelled." : "Lead saved; the follow-up task moved to \($0.dueDate ?? "-")."
         } ?? "Lead saved."
         persist(message: message)
-        if let changedTask { Task { await scheduleTaskReminder(for: changedTask) } }
     }
 
     func delete(_ lead: Lead) {
+        if let taskID = lead.followUpTaskID, let index = workspace.tasks.firstIndex(where: { $0.id == taskID }) {
+            workspace.tasks[index].status = .done
+            workspace.tasks[index].reminderAt = nil
+        }
         workspace.leads.removeAll { $0.id == lead.id }
         // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
         if let source = lead.sourceID, source.hasPrefix("leadgen:"), !workspace.dismissedLeadSources.contains(source) {
@@ -1066,6 +1078,7 @@ final class AppStore: ObservableObject {
         workspace = loaded.workspace
         recoveryState = loaded.recovery
         scrubStoredEndpointSecrets()
+        if case .ready = recoveryState { queueReminderReconciliation() }
         showNotice(outcome.legacyRestricted
             ? "Imported and hash-verified the legacy workspace. The original was kept and set to owner-only access."
             : "Imported and hash-verified the legacy workspace. The original was kept; run chmod 600 on it manually.")
@@ -1230,90 +1243,27 @@ final class AppStore: ObservableObject {
         persist(message: "Finding marked resolved.")
     }
 
-    /// Schedules local macOS notifications for upcoming follow-ups.
-    /// It never sends email, SMS, or CRM messages.
+    /// Permission requests happen only after the owner selects Schedule reminders.
     func scheduleDueFollowUpReminders() async -> Int {
-#if CONTEXTWARD_ACCEPTANCE
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            return await scheduleDueFollowUpRemindersInApp()
-        }
-        return 0
-#else
-        return await scheduleDueFollowUpRemindersInApp()
-#endif
+        await reconcileReminders(requestPermission: true)
     }
 
-    private func scheduleDueFollowUpRemindersInApp() async -> Int {
-        let center = UNUserNotificationCenter.current()
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted else {
-            showNotice("Notifications were not authorized.")
-            return 0
-        }
-        var scheduled = 0
-        let old = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix("contextward-followup-") }
-        if !old.isEmpty { center.removePendingNotificationRequests(withIdentifiers: old) }
-        for lead in workspace.leads where lead.status.isOpen {
-            guard let due = CalendarCRM.date(from: lead.nextFollowUp),
-                  Calendar.current.startOfDay(for: due) >= Calendar.current.startOfDay(for: .now) else { continue }
-            var components = Calendar.current.dateComponents([.year, .month, .day], from: due)
-            components.hour = 9
-            components.minute = 0
-            guard let fireAt = Calendar.current.date(from: components), fireAt > .now else { continue }
-            let content = UNMutableNotificationContent()
-            content.title = "Follow up with \(lead.name)"
-            content.body = "Review the relationship record and decide the next action."
-            content.sound = .default
-            let request = UNNotificationRequest(identifier: "contextward-followup-\(lead.id.uuidString)", content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
-            do { try await center.add(request); scheduled += 1 }
-            catch { showNotice("macOS could not schedule a local follow-up reminder.") }
-        }
-        showNotice(scheduled == 0 ? "No upcoming lead follow-ups could be scheduled." : "Scheduled \(scheduled) local follow-up reminder\(scheduled == 1 ? "" : "s") for 9 AM.")
-        return scheduled
+    func scheduleTaskReminders() async { _ = await reconcileReminders(requestPermission: false) }
+
+    private func queueReminderReconciliation() {
+        guard reminderCoordinator != nil else { return }
+        let desired = LeadWorkflow.reminders(in: workspace)
+        guard lastQueuedReminders != desired else { return }
+        lastQueuedReminders = desired
+        Task { _ = await reconcileReminders(requestPermission: false) }
     }
 
-    /// Keeps one local reminder per open task and restores reminders after relaunch.
-    func scheduleTaskReminders() async {
-        for task in workspace.tasks { await scheduleTaskReminder(for: task) }
-    }
-
-    func scheduleTaskReminder(for task: CRMTask) async {
-#if CONTEXTWARD_ACCEPTANCE
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            await scheduleTaskReminderInApp(for: task)
-        }
-        return
-#else
-        await scheduleTaskReminderInApp(for: task)
-#endif
-    }
-
-    private func scheduleTaskReminderInApp(for task: CRMTask) async {
-        let identifier = "contextward-task-\(task.id.uuidString)"
-        let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
-        guard task.status != .done else { return }
-
-        guard let fireAt = LeadWorkflow.reminderFireDate(for: task) else { return }
-
-        do {
-            let settings = await center.notificationSettings()
-            if settings.authorizationStatus == .notDetermined { _ = try await center.requestAuthorization(options: [.alert, .sound]) }
-            let finalSettings = await center.notificationSettings()
-            guard finalSettings.authorizationStatus == .authorized || finalSettings.authorizationStatus == .provisional else {
-                showNotice("Enable ControlWard notifications in System Settings to receive task reminders.")
-                return
-            }
-            let content = UNMutableNotificationContent()
-            content.title = "Task: \(task.title)"
-            content.body = "Open ControlWard to review this task."
-            content.sound = .default
-            let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireAt)
-            try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false)))
-            showNotice("Local task reminder scheduled for \(fireAt.formatted(date: .abbreviated, time: .shortened)).")
-        } catch {
-            showNotice("macOS could not schedule this local task reminder.")
-        }
+    private func reconcileReminders(requestPermission: Bool) async -> Int {
+        guard let reminderCoordinator else { return 0 }
+        let result = await reminderCoordinator.reconcile(LeadWorkflow.reminders(in: workspace), requestPermission: requestPermission)
+        reminderStatus = result.message
+        if requestPermission { showNotice(result.message) }
+        return result.scheduled
     }
 
     /// CSV-1..CSV-8 (Water 9:42 AM ET): every row is accounted for. Imported, skipped (no name) or flagged for review
@@ -1632,6 +1582,7 @@ final class AppStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(next), to: storageURL)
         workspace = next
+        queueReminderReconciliation()
         twentyPreview = nil
         pharosPreviewFingerprint = nil
     }
@@ -1644,6 +1595,7 @@ final class AppStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try SecureFiles.writePrivate(try encoder.encode(workspace), to: storageURL)
+        queueReminderReconciliation()
     }
 
     private func persist(message: String? = nil) {
@@ -1655,6 +1607,7 @@ final class AppStore: ObservableObject {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try SecureFiles.writePrivate(try encoder.encode(workspace), to: storageURL)
+            queueReminderReconciliation()
             if let message { showNotice(message) }
         } catch {
             showNotice("Could not save CRM data: \(error.localizedDescription)")

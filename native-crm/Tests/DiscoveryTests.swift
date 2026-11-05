@@ -44,6 +44,11 @@ enum DiscoveryTests {
         let store = AppStore(storageURL: FileManager.default.temporaryDirectory.appendingPathComponent("discovery-\(UUID().uuidString).json"), secrets: InMemorySecretStore(), transport: fake)
         let leadID = store.acceptDiscovery(candidate)
         try expect(store.leads.first?.id == leadID && store.signals.first?.fitScore == 85, "selected prospect was not added with its score")
+        try expect(store.leads.first?.service.isEmpty == true, "business category became a requested service")
+        try expect(candidate.evidence.contains("website 20, phone 15, email 0"), "evidence lists maximum points instead of earned points")
+        var blank = candidate
+        blank.website = "  "; blank.phone = ""; blank.email = "\n"
+        try expect(blank.researchPriority == 50 && blank.evidence.contains("website 0, phone 0, email 0"), "blank contact fields earned points")
         _ = store.acceptDiscovery(candidate)
         try expect(store.leads.count == 1, "duplicate public source was added twice")
         guard let body = fake.requests.first?.httpBody, let encoded = String(data: body, encoding: .utf8) else { throw SmokeTestFailure.failed("Overpass request body missing") }

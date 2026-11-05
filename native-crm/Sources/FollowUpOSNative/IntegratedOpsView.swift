@@ -130,6 +130,8 @@ private struct SignalQueueView: View {
                     .buttonStyle(.bordered)
                 }
                 .listRowBackground(Color.clear)
+                Text(store.reminderStatus).font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
             Section("Priority queue") {
                 if store.signals.isEmpty {

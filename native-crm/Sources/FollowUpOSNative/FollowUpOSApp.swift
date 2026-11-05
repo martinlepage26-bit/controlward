@@ -8,9 +8,10 @@ struct FollowUpOSApp: App {
 
     @MainActor private static func makeStore() -> AppStore {
 #if DEBUG && CONTEXTWARD_ACCEPTANCE
-        PreviewFixture.prepareIfRequested()
-#endif
+        return AppStore(storageURL: PreviewFixture.prepareIfRequested())
+#else
         return AppStore()
+#endif
     }
 
     var body: some Scene {

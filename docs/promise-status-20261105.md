@@ -1,5 +1,8 @@
 # ControlWard promise status — 2026-11-05
 
+Later Mac work and newly reproduced defects are tracked in [fulfillment progress](fulfillment-progress-20261105.md).
+The Linux-only results below remain the record of the cloud session; they do not override later Mac evidence.
+
 This document replaces the status claims in the 2026-10-14 reports (`FINAL-STATUS.md`, `GAP-AUDIT-20261014.md`,
 `docs/product-promises-gap-20261014.md`). Those files are kept as history. Several of their gaps are now closed in
 code: Auto-Pilot is a Settings toggle that defaults to off, task and contact editors have relationship pickers,

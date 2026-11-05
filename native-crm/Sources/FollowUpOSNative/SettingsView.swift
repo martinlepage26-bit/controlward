@@ -137,6 +137,9 @@ struct SettingsView: View {
             industry = store.business.industry
             autoPilotEnabled = store.workspace.autoPilotEnabled
         }
+        .onChange(of: store.business.name) { _, value in name = value }
+        .onChange(of: store.business.industry) { _, value in industry = value }
+        .onChange(of: store.workspace.autoPilotEnabled) { _, value in autoPilotEnabled = value }
         .confirmationDialog("Reset the local CRM workspace?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Back up and erase CRM data", role: .destructive) {
                 do { try store.resetAll(confirmed: true) }

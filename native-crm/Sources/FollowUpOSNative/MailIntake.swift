@@ -370,6 +370,24 @@ enum MailAccountState: Equatable, Sendable {
     }
 }
 
+enum MailAccessMode {
+    case live, isolated
+    static var applicationDefault: Self {
+#if CONTEXTWARD_ACCEPTANCE
+        .isolated
+#else
+        .live
+#endif
+    }
+}
+
+/// Preview mailbox views also receive this transport, so opening a message cannot reach a provider.
+struct IsolatedMailTransport: HTTPTransport {
+    func send(_ request: URLRequest) async throws -> HTTPResponse {
+        throw MailIntakeError.notConnected
+    }
+}
+
 @MainActor
 final class MailIntakeController: ObservableObject {
     static let interval: TimeInterval = 10 * 60
@@ -379,11 +397,18 @@ final class MailIntakeController: ObservableObject {
     let transport: HTTPTransport
     private let defaults: UserDefaults
     private var timer: Timer?
+    let accessMode: MailAccessMode
 
-    init(tokens: MailTokenStore = KeychainMailTokenStore(), transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard) {
-        self.tokens = tokens; self.transport = transport; self.defaults = defaults
-        clientID = defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID
-        for account in MailAccount.signIns { states[account.email] = tokens.exists(account.email) ? .idle : .notConnected }
+    init(tokens: MailTokenStore? = nil, transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard,
+         accessMode: MailAccessMode = .applicationDefault) {
+        self.accessMode = accessMode
+        // Choose before querying account state. The preview must never instantiate or query the owner's store.
+        self.tokens = accessMode == .isolated ? InMemoryMailTokenStore() : (tokens ?? KeychainMailTokenStore())
+        self.transport = accessMode == .isolated ? IsolatedMailTransport() : transport
+        self.defaults = defaults
+        clientID = accessMode == .isolated ? GoogleOAuthConfig.defaultClientID
+            : (defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID)
+        for account in MailAccount.signIns { states[account.email] = self.tokens.exists(account.email) ? .idle : .notConnected }
     }
 
     func state(_ account: MailAccount) -> MailAccountState { states[account.forwardsInto ?? account.email] ?? .notConnected }
@@ -391,7 +416,8 @@ final class MailIntakeController: ObservableObject {
 
     func saveClientID(_ raw: String) throws {
         let config = try GoogleOAuthConfig(clientID: raw)
-        defaults.set(config.clientID, forKey: GoogleOAuthConfig.defaultsKey); clientID = config.clientID
+        if accessMode == .live { defaults.set(config.clientID, forKey: GoogleOAuthConfig.defaultsKey) }
+        clientID = config.clientID
     }
     func config() throws -> GoogleOAuthConfig {
         guard !clientID.isEmpty else { throw MailIntakeError.missingClientID }
@@ -401,6 +427,10 @@ final class MailIntakeController: ObservableObject {
 
     /// `authorize` opens the system browser sheet and returns the callback URL.
     func connect(_ account: MailAccount, store: AppStore, authorize: (URL, String) async throws -> URL) async {
+        guard accessMode == .live else {
+            states[account.email] = .failed("Preview uses synthetic mail. Connect accounts in the installed app.")
+            return
+        }
         guard account.isSignIn else { return }
         do {
             let engine = try engine()
@@ -421,6 +451,7 @@ final class MailIntakeController: ObservableObject {
     }
 
     func refresh(_ account: MailAccount, store: AppStore) async {
+        guard accessMode == .live else { return }
         guard account.isSignIn, tokens.exists(account.email), states[account.email] != .syncing else { return }
         states[account.email] = .syncing
         do {
@@ -436,7 +467,7 @@ final class MailIntakeController: ObservableObject {
     }
 
     func startPeriodic(store: AppStore) {
-        guard timer == nil else { return }
+        guard accessMode == .live, timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self, weak store] _ in
             Task { @MainActor in if let self, let store { await self.refreshAll(store: store) } }
         }

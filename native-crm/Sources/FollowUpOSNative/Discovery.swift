@@ -16,9 +16,10 @@ struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
 
     var id: String { sourceID }
     var categoryLocationPoints: Int { 50 }
-    var websitePoints: Int { website == nil ? 0 : 20 }
-    var phonePoints: Int { phone == nil ? 0 : 15 }
-    var emailPoints: Int { email == nil ? 0 : 15 }
+    private func recorded(_ value: String?) -> Bool { !(value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var websitePoints: Int { recorded(website) ? 20 : 0 }
+    var phonePoints: Int { recorded(phone) ? 15 : 0 }
+    var emailPoints: Int { recorded(email) ? 15 : 0 }
     var researchPriority: Int { categoryLocationPoints + websitePoints + phonePoints + emailPoints }
     var readyForHumanReview: Bool { researchPriority >= 65 }
     var evidence: String {
@@ -32,7 +33,7 @@ struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
             "Map coordinates: \(latitude), \(longitude)",
             "Source: \(sourceURL)",
             "Retrieved: \(capturedAt)",
-            "Research priority: \(researchPriority)/100 (category/area 50, website 20, phone 15, email 15). Buyer intent is unknown."
+            "Research priority: \(researchPriority)/100 (category/area \(categoryLocationPoints), website \(websitePoints), phone \(phonePoints), email \(emailPoints)). Buyer intent is unknown."
         ].compactMap { $0 }.joined(separator: "\n")
     }
 }

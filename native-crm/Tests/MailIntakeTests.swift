@@ -5,6 +5,7 @@ import Foundation
 enum MailIntakeTests {
     static func run() async -> Bool {
         let tests: [(String, () async throws -> Void)] = [
+            ("Mail: preview cannot read tokens, open OAuth, refresh mail or change owner defaults", isolatedPreview),
             ("Mail: PKCE S256 matches RFC 7636 vector", pkceVector),
             ("Mail: client ID is validated and maps to reverse-DNS callback", clientIDValidation),
             ("Mail: authorization URL requests modify and compose, PKCE, offline, login hint", authURL),
@@ -178,6 +179,40 @@ enum MailIntakeTests {
         try expect(m.receivedAt == "2026-10-18T07:43:06Z" && m.link.contains("#all/m1"), "date/link")
         try expect(!String(describing: m).contains("BODY-SHOULD-NOT-APPEAR"), "snippet leaked")
     }
+    static func isolatedPreview() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cw-mail-preview-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppStore(storageURL: dir.appendingPathComponent("workspace.json"))
+        let injectedTokens = InMemoryMailTokenStore()
+        try injectedTokens.write("synthetic-refresh", for: MailAccount.personalGmail.email)
+        let fake = FakeGoogle([])
+        let suiteName = "cw-mail-preview-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(clientID, forKey: GoogleOAuthConfig.defaultsKey)
+        let mail = MailIntakeController(tokens: injectedTokens, transport: fake, defaults: defaults)
+        try expect(mail.accessMode == .isolated && mail.tokens is InMemoryMailTokenStore, "acceptance default is not isolated")
+        try expect(!mail.anyConnected, "preview observed supplied credentials")
+        try expect(mail.clientID == GoogleOAuthConfig.defaultClientID, "preview read owner preferences")
+        try mail.saveClientID("999-example.apps.googleusercontent.com")
+        try expect(defaults.string(forKey: GoogleOAuthConfig.defaultsKey) == clientID, "preview changed owner preferences")
+        var openedOAuth = false
+        await mail.connect(.personalGmail, store: store) { _, _ in
+            openedOAuth = true
+            throw MailIntakeError.cancelled
+        }
+        await mail.refreshAll(store: store)
+        mail.startPeriodic(store: store)
+        // Exercise the mailbox transport itself, even if a future view bypasses refreshAll.
+        do {
+            _ = try await mail.transport.send(URLRequest(url: URL(string: "https://example.test")!))
+            throw SmokeTestFailure.failed("preview transport allowed a request")
+        } catch MailIntakeError.notConnected {}
+        mail.disconnect(.personalGmail)
+        try expect(!openedOAuth && fake.requests.isEmpty && store.mail.isEmpty, "preview contacted a provider")
+        try expect(injectedTokens.exists(MailAccount.personalGmail.email), "preview changed supplied credentials")
+    }
+
     static func dedupe() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cw-mail-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -187,7 +222,7 @@ enum MailIntakeTests {
         let fake = FakeGoogle([message("a", to: "martinlepage.ai@gmail.com"), message("b", to: "ml@pharos-ai.ca")])
         let tokens = InMemoryMailTokenStore(); try tokens.write("synthetic-refresh", for: MailAccount.personalGmail.email)
         let suite = UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!
-        let mail = MailIntakeController(tokens: tokens, transport: fake, defaults: suite)
+        let mail = MailIntakeController(tokens: tokens, transport: fake, defaults: suite, accessMode: .live)
         try mail.saveClientID(clientID)
         await mail.refresh(.personalGmail, store: store)
         try expect(store.mail.count == 2, "first pull \(store.mail.count) \(mail.state(.personalGmail))")
@@ -244,7 +279,7 @@ enum MailIntakeTests {
     }
     static func disconnect() throws {
         let tokens = InMemoryMailTokenStore(); try tokens.write("synthetic-refresh", for: MailAccount.infrafabric.email)
-        let mail = MailIntakeController(tokens: tokens, transport: FakeGoogle([]), defaults: UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!)
+        let mail = MailIntakeController(tokens: tokens, transport: FakeGoogle([]), defaults: UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!, accessMode: .live)
         try expect(mail.state(.infrafabric) == .idle, "connected")
         mail.disconnect(.infrafabric)
         try expect(!tokens.exists(MailAccount.infrafabric.email) && mail.state(.infrafabric) == .notConnected, "disconnect")
@@ -253,7 +288,7 @@ enum MailIntakeTests {
     }
     static func shippedClient() throws {
         let suite = UserDefaults(suiteName: "cw-mail-\(UUID().uuidString)")!
-        let mail = MailIntakeController(tokens: InMemoryMailTokenStore(), transport: FakeGoogle([]), defaults: suite)
+        let mail = MailIntakeController(tokens: InMemoryMailTokenStore(), transport: FakeGoogle([]), defaults: suite, accessMode: .live)
         let c = try mail.config()
         try expect(c.clientID == "522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1.apps.googleusercontent.com", "default id")
         try expect(c.callbackScheme == "com.googleusercontent.apps.522514188059-qe7qirvdks6ott29v2e8r9ni4tno30k1", "reversed scheme")

@@ -442,17 +442,20 @@ enum LeadWorkflow {
     /// Returns the changed task so the caller can reschedule or cancel its local reminder.
     static func syncFollowUpTask(for lead: Lead, in workspace: inout PersistentWorkspace, now: Date = .now) -> CRMTask? {
         guard let id = lead.followUpTaskID,
-              let index = workspace.tasks.firstIndex(where: { $0.id == id && $0.status != .done }) else { return nil }
+              let index = workspace.tasks.firstIndex(where: { $0.id == id }) else { return nil }
         if !lead.status.isOpen {
+            guard workspace.tasks[index].status != .done else { return nil }
             let note = "Closed when the lead was marked \(lead.status.label.lowercased()) on \(CalendarCRM.dayString(now))."
             workspace.tasks[index].status = .done
             workspace.tasks[index].reminderAt = nil
             workspace.tasks[index].details += workspace.tasks[index].details.isEmpty ? note : "\n" + note
             return workspace.tasks[index]
         }
-        guard let next = lead.nextFollowUp, workspace.tasks[index].dueDate != next else { return nil }
-        workspace.tasks[index].dueDate = next
+        guard workspace.tasks[index].dueDate != lead.nextFollowUp else { return nil }
+        workspace.tasks[index].dueDate = lead.nextFollowUp
         workspace.tasks[index].reminderAt = nil
+        // Completing today's action does not suppress the next date recorded by the owner.
+        if lead.nextFollowUp != nil { workspace.tasks[index].status = .todo }
         return workspace.tasks[index]
     }
 
@@ -460,10 +463,10 @@ enum LeadWorkflow {
     /// (which drives the Pipeline due list) follows the task's due date. Returns true when the lead changed.
     @discardableResult
     static func syncLead(afterSaving task: CRMTask, in workspace: inout PersistentWorkspace) -> Bool {
-        guard task.status != .done, let due = task.dueDate,
+        guard task.status != .done,
               let index = workspace.leads.firstIndex(where: { $0.followUpTaskID == task.id }),
-              workspace.leads[index].status.isOpen, workspace.leads[index].nextFollowUp != due else { return false }
-        workspace.leads[index].nextFollowUp = due
+              workspace.leads[index].status.isOpen, workspace.leads[index].nextFollowUp != task.dueDate else { return false }
+        workspace.leads[index].nextFollowUp = task.dueDate
         return true
     }
 
@@ -488,6 +491,31 @@ enum LeadWorkflow {
     }
 
     // MARK: - Evidence-grounded draft
+
+    struct Reminder: Equatable, Sendable {
+        var id: String
+        var title: String
+        var fireAt: Date
+    }
+
+    /// The task owns a converted lead's reminder, including after completion or deliberate deletion.
+    /// Unconverted leads retain their original follow-up reminder. Reconciliation removes obsolete IDs.
+    static func reminders(in workspace: PersistentWorkspace, now: Date = .now, calendar: Calendar = .current) -> [Reminder] {
+        var reminders = workspace.tasks.compactMap { task -> Reminder? in
+            if workspace.leads.contains(where: { $0.followUpTaskID == task.id && !$0.status.isOpen }) { return nil }
+            guard let date = reminderFireDate(for: task, now: now, calendar: calendar) else { return nil }
+            return Reminder(id: "contextward-task-\(task.id.uuidString)", title: "Task: \(task.title)", fireAt: date)
+        }
+        for lead in workspace.leads where lead.status.isOpen && lead.followUpTaskID == nil {
+            // Older automatic follow-up tasks carried leadID before followUpTaskID was persisted.
+            if workspace.tasks.contains(where: { $0.leadID == lead.id && $0.title == "Follow up with \(lead.name)" }) { continue }
+            var task = CRMTask()
+            task.dueDate = lead.nextFollowUp
+            guard let date = reminderFireDate(for: task, now: now, calendar: calendar) else { continue }
+            reminders.append(Reminder(id: "contextward-followup-\(lead.id.uuidString)", title: "Follow up with \(lead.name)", fireAt: date))
+        }
+        return reminders.sorted { $0.id < $1.id }
+    }
 
     struct GroundedDraft: Equatable, Sendable {
         var subject: String

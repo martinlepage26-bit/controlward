@@ -34,6 +34,7 @@ struct NativeSmokeTests {
         let discoveryPassed = await DiscoveryTests.run()
         let gtmPassed = GTMTests.run()
         let csvPassed = CSVImportTests.run()
+        guard await ReminderTests.run() else { throw SmokeTestFailure.failed("Reminder tests failed") }
         let crmWorkflowPassed = await CRMWorkflowTests.run()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("followupos-tests-\(UUID().uuidString)", isDirectory: true)
