@@ -44,6 +44,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/LeadProof.swift" \
   "${SOURCE_ROOT}/LeadPipelineEnvironment.swift" \
   "${SOURCE_ROOT}/ProspectResearch.swift" \
+  "${SOURCE_ROOT}/QuickScanResearch.swift" \
   "${SOURCE_ROOT}/BuildInfo.swift" \
   "${SOURCE_ROOT}/LeadWorkflow.swift" \
   "${SOURCE_ROOT}/LocalReminders.swift" \
@@ -67,6 +68,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/MailActionOutcomeTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadPipelineTestKit.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadPipelineTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/QuickScanResearchTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadPipelinePlantedReds.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlTestKit.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/MailControlTests.swift" \

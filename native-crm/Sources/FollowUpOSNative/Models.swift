@@ -62,6 +62,8 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var lastMessage = ""
     /// Unsent work, kept separate from recorded contact and sent-message history.
     var outreachDraft: String?
+    /// Public website research, including literal source evidence and explicit unknowns.
+    var quickScanResearch: QuickScanResearchResult?
     var history: [FollowUpEvent] = []
     var createdAt = Date.now.ISO8601Format()
     var wonAt: String?

@@ -7,6 +7,7 @@ struct PortableTestMain {
         var ok = true
         ok = await MailActionOutcomeTests.run() && ok
         ok = await LeadPipelineTests.run() && ok
+        ok = await QuickScanResearchTests.run() && ok
         ok = await LeadPipelinePlantedReds.run() && ok
         ok = await MailControlTests.run() && ok
         ok = await ProjectControlTests.run() && ok

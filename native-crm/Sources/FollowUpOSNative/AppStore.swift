@@ -881,23 +881,43 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func acceptDiscovery(_ candidate: DiscoveryCandidate) -> UUID? {
-        if let existing = workspace.leads.first(where: { $0.sourceID == candidate.sourceID }) {
+    func acceptDiscovery(_ candidate: DiscoveryCandidate, research: QuickScanResearchResult? = nil, researchConfig: ICPConfig? = nil) -> UUID? {
+        if research == nil, let existing = workspace.leads.first(where: { $0.sourceID == candidate.sourceID }) {
             showNotice("Already in pipeline: \(existing.name).")
             return existing.id
         }
-        var lead = Lead.blank()
-        lead.name = candidate.name
-        lead.company = candidate.name
-        lead.phone = candidate.phone ?? ""
-        lead.email = candidate.email ?? ""
+        let researchedDomain = research?.record.businessDomain
+        var lead = workspace.leads.first(where: {
+            $0.sourceID == candidate.sourceID || (researchedDomain != nil && $0.quickScanResearch?.record.businessDomain == researchedDomain)
+        }) ?? Lead.blank()
+        let existing = workspace.leads.contains { $0.id == lead.id }
+        if !existing {
+            lead.name = candidate.name
+            lead.company = candidate.name
+            lead.phone = candidate.phone ?? ""
+            lead.email = candidate.email ?? ""
+        }
         // A public business category is evidence about the business, not a service requested by a buyer.
-        lead.service = ""
-        lead.sourceID = candidate.sourceID
-        lead.notes = candidate.evidence
-        lead.createdAt = candidate.capturedAt
+        if !existing { lead.service = "" }
+        if !existing { lead.sourceID = candidate.sourceID }
+        if !existing { lead.notes = candidate.evidence; lead.createdAt = candidate.capturedAt }
+        if let research {
+            guard research.record.id == "cw:\(candidate.sourceID)" else { showNotice("The research belongs to a different business."); return nil }
+            lead.quickScanResearch = research
+            if !existing || lead.email == (candidate.email ?? "") || lead.email.isEmpty { lead.email = research.email ?? "" }
+            if !existing || lead.phone == (candidate.phone ?? "") || lead.phone.isEmpty {
+                lead.phone = research.contacts.first(where: { $0.kind == .phone })?.value ?? ""
+            }
+            if lead.name == candidate.name, let person = research.record.contact { lead.name = person.name }
+            if lead.outreachDraft == nil, lead.lastMessage.isEmpty, lead.email == research.email,
+               let config = researchConfig,
+               let draft = research.draft(config: config, suppression: SuppressionList(storageURL: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("suppression.json")), now: .now) {
+                lead.outreachDraft = draft.body
+            }
+        }
         guard saveChange({ next in
-            next.leads.insert(lead, at: 0)
+            if let index = next.leads.firstIndex(where: { $0.id == lead.id }) { next.leads[index] = lead }
+            else { next.leads.insert(lead, at: 0) }
 
             var signal = Signal()
             signal.title = "Public prospect: \(candidate.name)"
@@ -910,9 +930,12 @@ final class AppStore: ObservableObject {
             signal.companyID = lead.companyID
             signal.contactID = lead.contactID
             signal.sourceID = candidate.sourceID
-            signal.evidence = candidate.evidence
-            signal.nextAction = candidate.readyForHumanReview ? "Review public evidence and decide whether this is a suitable prospect." : "Review this public business record before pursuing it."
-            next.signals.insert(signal, at: 0)
+            signal.evidence = ([candidate.evidence] + (research?.lines ?? [])).joined(separator: "\n")
+            signal.nextAction = lead.outreachDraft != nil ? "Review the source-backed Quick Scan draft. Nothing has been sent." : "Review the automated research findings and recorded unknowns."
+            if let index = next.signals.firstIndex(where: { $0.leadID == lead.id && ($0.sourceID == candidate.sourceID || $0.sourceID == lead.sourceID) }) {
+                next.signals[index].evidence = signal.evidence
+                next.signals[index].nextAction = signal.nextAction
+            } else { next.signals.insert(signal, at: 0) }
             next.activity.insert(ActivityEvent(kind: "discovery", message: "Added one public business record to the review pipeline.", sourceID: lead.id), at: 0)
             return "\(candidate.name) added for human review."
         }) else { return nil }

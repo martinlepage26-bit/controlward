@@ -14,6 +14,8 @@ enum SiteExtractor {
         var text: String
         /// LIVE-R4: the page's body text only: no nav, header or footer, and no link text. Trigger phrases are matched here.
         var bodyText: String = ""
+        /// Own-business prose with inline link text retained, but no navigation or quoted testimonials.
+        var claimText: String = ""
         var links: [String]
         var emails: [String]
         var phones: [String]
@@ -28,9 +30,12 @@ enum SiteExtractor {
         let links = hrefs(html, base: url)
         var emails = links.compactMap { $0.lowercased().hasPrefix("mailto:") ? MailAddress.bare(String($0.dropFirst(7)).components(separatedBy: "?")[0]) : nil }
         emails += matches(text, "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").map { MailAddress.bare($0) }
+        // Printed spacing around a literal @ is formatting, not a guessed address pattern.
+        emails += matches(text, "[A-Za-z0-9._%+-]+[ \\t]+@[ \\t]*[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+            .map { MailAddress.bare(normalizePrintedEmail($0)) }
         var phones = links.compactMap { $0.lowercased().hasPrefix("tel:") ? String($0.dropFirst(4)).removingPercentEncoding : nil }
         phones += matches(text, "\\(?\\b[2-9][0-9]{2}\\)?[ .-][0-9]{3}[ .-][0-9]{4}\\b")
-        return Page(url: url.absoluteString, fetchedAt: fetchedAt, text: text, bodyText: bodyText(html), links: links,
+        return Page(url: url.absoluteString, fetchedAt: fetchedAt, text: text, bodyText: bodyText(html), claimText: claimText(html), links: links,
                     emails: unique(emails.filter { !$0.isEmpty }), phones: unique(phones),
                     address: address(in: text), people: people(in: text),
                     linkedinURLs: links.filter { URL(string: $0)?.host.map { HostMatch.belongs($0, to: "linkedin.com") } == true },
@@ -65,6 +70,14 @@ enum SiteExtractor {
         return visibleText(body)
     }
 
+    static func claimText(_ html: String) -> String {
+        var body = html
+        for tag in ["nav", "header", "footer", "blockquote"] {
+            body = body.replacingOccurrences(of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: "<br>", options: [.regularExpression, .caseInsensitive])
+        }
+        return visibleText(body)
+    }
+
     static func decodeEntities(_ text: String) -> String {
         let named = ["&amp;": "&", "&nbsp;": " ", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&#39;": "'",
                      "&eacute;": "é", "&egrave;": "è", "&ecirc;": "ê", "&agrave;": "à", "&acirc;": "â", "&ccedil;": "ç",
@@ -77,6 +90,10 @@ enum SiteExtractor {
             if let code, let scalar = Unicode.Scalar(code) { out = out.replacingOccurrences(of: match, with: String(Character(scalar))) }
         }
         return out
+    }
+
+    static func normalizePrintedEmail(_ text: String) -> String {
+        text.replacingOccurrences(of: "[ \\t]*@[ \\t]*", with: "@", options: .regularExpression)
     }
 
     static func hrefs(_ html: String, base: URL) -> [String] {

@@ -103,6 +103,13 @@ struct LeadEditorView: View {
                             ForEach(Array(LeadWorkflow.evidenceLines(for: draft, in: store.workspace).enumerated()), id: \.offset) { _, line in
                                 Text(line).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             }
+                            if let research = draft.quickScanResearch {
+                                DisclosureGroup("Contact and AI-use research") {
+                                    ForEach(Array(research.lines.enumerated()), id: \.offset) { _, line in
+                                        Text(line).font(.caption).textSelection(.enabled)
+                                    }
+                                }
+                            }
                             Text("Record completeness \(completeness.score)/100 · missing: \(missing.isEmpty ? "none" : missing.joined(separator: ", "))")
                                 .font(.caption.monospacedDigit())
                             Text(LeadWorkflow.Completeness.meaning).font(.caption2).foregroundStyle(.secondary)

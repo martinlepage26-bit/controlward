@@ -1,6 +1,6 @@
 import Foundation
 
-struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
+struct DiscoveryCandidate: Codable, Identifiable, Equatable, Sendable {
     var sourceID: String
     var name: String
     var category: String
@@ -15,7 +15,7 @@ struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
     var capturedAt: String
 
     var id: String { sourceID }
-    var categoryLocationPoints: Int { 50 }
+    var categoryLocationPoints: Int { sourceID.hasPrefix("website:") ? 0 : 50 }
     private func recorded(_ value: String?) -> Bool { !(value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var websitePoints: Int { recorded(website) ? 20 : 0 }
     var phonePoints: Int { recorded(phone) ? 15 : 0 }
@@ -24,17 +24,70 @@ struct DiscoveryCandidate: Identifiable, Equatable, Sendable {
     var readyForHumanReview: Bool { researchPriority >= 65 }
     var evidence: String {
         [
-            "Public business listing: \(name)",
+            "\(sourceID.hasPrefix("website:") ? "Website research input" : "Public business listing"): \(name)",
             "Category / area: \(category) · \(query)",
             address.isEmpty ? nil : "Address: \(address)",
             website.map { "Website: \($0)" },
             phone.map { "Phone: \($0)" },
             email.map { "Email: \($0)" },
-            "Map coordinates: \(latitude), \(longitude)",
+            sourceID.hasPrefix("website:") ? nil : "Map coordinates: \(latitude), \(longitude)",
             "Source: \(sourceURL)",
             "Retrieved: \(capturedAt)",
             "Research priority: \(researchPriority)/100 (category/area \(categoryLocationPoints), website \(websitePoints), phone \(phonePoints), email \(emailPoints)). Buyer intent is unknown."
         ].compactMap { $0 }.joined(separator: "\n")
+    }
+}
+
+/// Unreviewed findings survive closing the search sheet or the app. Stored separately from CRM leads;
+/// reviewing or saving a lead never converts a public contact into a sent message.
+struct WebsiteResearchCache: Codable, Equatable {
+    var candidates: [DiscoveryCandidate] = []
+    var results: [String: QuickScanResearchResult] = [:]
+
+    static func load(_ url: URL) throws -> Self {
+        guard FileManager.default.fileExists(atPath: url.path) else { return Self() }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 20_000_000 else { throw DiscoverySearchError.responseTooLarge }
+        return try JSONDecoder.iso.decode(Self.self, from: data)
+    }
+
+    mutating func merge(_ candidate: DiscoveryCandidate, result: QuickScanResearchResult) {
+        candidates.removeAll { $0.sourceID == candidate.sourceID }
+        candidates.append(candidate)
+        results[candidate.sourceID] = result
+    }
+
+    func save(_ url: URL) throws {
+        let data = try JSONEncoder.iso.encode(self)
+        guard data.count <= 20_000_000 else { throw DiscoverySearchError.responseTooLarge }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+/// An agent or an existing prospect list can supply websites without supplying guessed contacts or AI claims.
+/// Each entry is researched by ControlWard itself, under the normal public-site policy.
+enum WebsiteResearchQueue {
+    static func parse(_ text: String) throws -> [DiscoveryCandidate] {
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !lines.isEmpty, lines.count <= 10 else { throw DiscoverySearchError.invalidWebsiteQueue }
+        var seen = Set<String>()
+        return try lines.compactMap { line in
+            let pair = line.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard pair.count <= 2, let raw = pair.last,
+                  var parts = URLComponents(string: raw.contains("://") ? raw : "https://" + raw),
+                  let host = parts.host?.lowercased(), ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+                  let url = parts.url, GuardedLeadTransport.ownSiteHostRefusal(url) == nil else { throw DiscoverySearchError.invalidWebsiteQueue }
+            parts.query = nil; parts.fragment = nil; parts.host = host
+            guard let cleaned = parts.url else { throw DiscoverySearchError.invalidWebsiteQueue }
+            let domain = HostMatch.registrable(host)
+            guard seen.insert(domain).inserted else { return nil }
+            let name = pair.count == 2 && !pair[0].isEmpty ? pair[0] : domain
+            return DiscoveryCandidate(sourceID: "website:" + domain, name: name, category: "Website research", address: "",
+                                      website: cleaned.absoluteString, phone: nil, email: nil, sourceURL: cleaned.absoluteString,
+                                      latitude: 0, longitude: 0, query: "Website queue; business identity and AI use require site evidence", capturedAt: Date.now.ISO8601Format())
+        }
     }
 }
 
@@ -44,6 +97,7 @@ enum DiscoverySearchError: LocalizedError {
     case unavailable(Int)
     case responseTooLarge
     case malformed
+    case invalidWebsiteQueue
 
     var errorDescription: String? {
         switch self {
@@ -54,6 +108,7 @@ enum DiscoverySearchError: LocalizedError {
         case .unavailable: "The public map search is temporarily unavailable. Try again later."
         case .responseTooLarge: "The search returned too much data. Reduce the search radius."
         case .malformed: "The public map search returned data ControlWard could not read."
+        case .invalidWebsiteQueue: "Enter up to 10 public business websites, one per line: Business name | https://website. Private addresses and credentials are refused."
         }
     }
 }
@@ -210,7 +265,7 @@ private struct OverpassElement: Decodable {
 }
 
 enum DiscoveryCategory: String, CaseIterable, Identifiable {
-    case restaurant, cafe, contractor, plumber, electrician, landscaping, consulting
+    case restaurant, cafe, contractor, plumber, electrician, landscaping, consulting, marketing
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -221,6 +276,7 @@ enum DiscoveryCategory: String, CaseIterable, Identifiable {
         case .electrician: "Electricians"
         case .landscaping: "Landscapers"
         case .consulting: "Consultants"
+        case .marketing: "Marketing agencies"
         }
     }
     var selector: String {
@@ -232,6 +288,7 @@ enum DiscoveryCategory: String, CaseIterable, Identifiable {
         case .electrician: "craft=electrician"
         case .landscaping: "craft=gardener"
         case .consulting: "office=consulting"
+        case .marketing: "office=advertising_agency"
         }
     }
 }

@@ -37,7 +37,7 @@ enum LeadWorkflow {
         if source.hasPrefix("intake:") { return .pharosIntake }
         if source.hasPrefix("kairos:") { return .kairos }
         if source.hasPrefix("osm:") { return .publicListing }
-        if source.hasPrefix("prospect:") { return .prospectSearch }
+        if source.hasPrefix("prospect:") || source.hasPrefix("website:") { return .prospectSearch }
         return .other
     }
 
@@ -267,6 +267,12 @@ enum LeadWorkflow {
         var warnings: [String] = []
         if trim(lead.name).isEmpty { blockers.append("Enter the lead's name before converting it.") }
 
+        let businessMailbox = lead.quickScanResearch?.email.map { MailAddress.bare(lead.email) == $0 } == true
+        let businessPhone = lead.quickScanResearch?.contacts.contains { $0.kind == .phone && digits($0.value) == digits(lead.phone) } == true
+        if businessMailbox || businessPhone {
+            warnings.append("The website publishes a business contact route, not a verified personal inbox or phone. Those fields are not assigned to the named person.")
+        }
+
         // Company: linked → same normalized name → same non-webmail email domain → create from the lead → none.
         let emailDomain = businessEmailDomain(lead.email)
         let companyName = trim(lead.company)
@@ -284,7 +290,7 @@ enum LeadWorkflow {
             var company = Company()
             company.name = companyName
             company.domain = emailDomain ?? ""
-            if personName(for: lead) == nil { company.phone = trim(lead.phone) }
+            if personName(for: lead) == nil || businessPhone { company.phone = trim(lead.phone) }
             company.notes = "Created from lead \(lead.name) on owner review."
             resolution.newCompany = company
             resolution.plan.company = .create(companyName)
@@ -294,8 +300,8 @@ enum LeadWorkflow {
         }
 
         // Contact: linked → same email → same phone without a conflicting email → create from a named person → none.
-        let email = MailAddress.bare(lead.email)
-        let phone = digits(lead.phone)
+        let email = businessMailbox ? "" : MailAddress.bare(lead.email)
+        let phone = businessPhone ? "" : digits(lead.phone)
         if let id = lead.contactID, let contact = workspace.contacts.first(where: { $0.id == id }) {
             resolution.contactID = id
             resolution.plan.contact = .linkExisting(id, contact.displayName)
@@ -312,8 +318,8 @@ enum LeadWorkflow {
             var contact = Contact()
             contact.firstName = parts.first ?? person
             contact.lastName = parts.count > 1 ? parts[1] : ""
-            contact.email = trim(lead.email)
-            contact.phone = trim(lead.phone)
+            contact.email = businessMailbox ? "" : trim(lead.email)
+            contact.phone = businessPhone ? "" : trim(lead.phone)
             contact.leadID = lead.id
             resolution.newContact = contact
             resolution.plan.contact = .create(person)

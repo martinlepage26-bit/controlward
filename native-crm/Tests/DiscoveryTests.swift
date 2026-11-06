@@ -19,7 +19,10 @@ enum DiscoveryTests {
         do {
             try await overpassResultsCarryEvidenceAndDeduplicate()
             try await photonFallbackMapsOnlyNearbyMatchingBusinesses()
-            print("Discovery tests: 2/2 passed")
+            try await automaticResearchSurvivesSaveAndReload()
+            try await failedResearchSaveKeepsOriginal()
+            try websiteQueuesKeepInputsUnverifiedAndRejectPrivateURLs()
+            print("Discovery tests: 5/5 passed")
             return true
         } catch {
             print("Discovery tests: FAIL \(error)")
@@ -66,5 +69,78 @@ enum DiscoveryTests {
         let candidates = try await client.search(category: "amenity=cafe", latitude: 45.5017, longitude: -73.5673, radiusMeters: 2_000)
         try expect(candidates.map(\.name) == ["Nearby Cafe"], "Photon fallback did not filter by category and radius")
         try expect(candidates.first?.query.contains("Photon fallback") == true, "fallback source was not recorded in evidence")
+    }
+
+    static func researchFixture() async throws -> (DiscoveryCandidate, QuickScanResearchResult, ICPConfig) {
+        let (researcher, _, source) = try QuickScanResearchTests.fixture(now: Date.now.addingTimeInterval(-120))
+        let result = await researcher.research(source, segmentID: "clinic")
+        let candidate = DiscoveryCandidate(sourceID: source.osmID, name: source.name, category: "clinic", address: "Montréal", website: source.website,
+                                           phone: nil, email: "old-map@clinique-exemple.test", sourceURL: "https://www.openstreetmap.org/node/1001",
+                                           latitude: source.latitude, longitude: source.longitude, query: "healthcare=clinic", capturedAt: Date.now.ISO8601Format())
+        return (candidate, result, researcher.config)
+    }
+
+    static func automaticResearchSurvivesSaveAndReload() async throws {
+        let (candidate, result, config) = try await researchFixture()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-research-save-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var cache = WebsiteResearchCache()
+        cache.merge(candidate, result: result)
+        cache.merge(candidate, result: result)
+        let cacheURL = root.appendingPathComponent("research.json")
+        try cache.save(cacheURL)
+        let loadedCache = try WebsiteResearchCache.load(cacheURL)
+        try expect(try JSONEncoder.iso.encode(loadedCache) == JSONEncoder.iso.encode(cache) && cache.candidates.count == 1,
+                   "unreviewed findings survive reopen without duplicates at the ISO millisecond precision")
+        let attributes = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
+        try expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "research cache is owner-only")
+        let store = AppStore(storageURL: root.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore())
+        let id = store.acceptDiscovery(candidate, research: result, researchConfig: config)
+        try expect(id != nil && store.leads.first?.email == "info@clinique-exemple.test", "own-site contact replaces unverified map value")
+        try expect(store.leads.first?.name == "Alex Fictif" && store.leads.first?.quoteAmount == nil, "actual person, no invented deal value")
+        try expect(store.leads.first?.outreachDraft?.contains("99 $ CA") == true && store.leads.first?.history.isEmpty == true, "priced unsent draft retained")
+        var converted = store.workspace
+        if let id, let plan = LeadWorkflow.conversionPlan(for: id, in: converted) {
+            _ = try LeadWorkflow.applyConversion(plan, to: &converted)
+            try expect(converted.contacts.first?.email == "" && converted.contacts.first?.phone == "", "business routes were not invented as personal contact details")
+            try expect(plan.warnings.contains { $0.contains("not a verified personal inbox") }, "preview states the association limit")
+        } else { throw SmokeTestFailure.failed("conversion plan missing") }
+        let reopened = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        try expect(reopened.leads.first?.quickScanResearch == result && reopened.leads.first?.outreachDraft == store.leads.first?.outreachDraft, "research and draft survive restart")
+        var edited = store.leads[0]; edited.email = "owner-edited@other.test"; edited.outreachDraft = "Owner's saved draft"
+        store.update(edited)
+        _ = store.acceptDiscovery(candidate, research: result, researchConfig: config)
+        try expect(store.leads.count == 1 && store.signals.count == 1, "repeated research creates no duplicate")
+        try expect(store.leads[0].email == edited.email && store.leads[0].outreachDraft == edited.outreachDraft, "owner edits retained")
+        var queued = candidate; queued.sourceID = "website:" + LeadKit.clinicDomain
+        var secondResult = result; secondResult.record.id = "cw:" + queued.sourceID
+        _ = store.acceptDiscovery(queued, research: secondResult, researchConfig: config)
+        try expect(store.leads.count == 1 && store.signals.count == 1 && store.leads[0].sourceID == candidate.sourceID, "map and website queue dedupe by researched domain without replacing source identity")
+    }
+
+    static func failedResearchSaveKeepsOriginal() async throws {
+        let (candidate, result, config) = try await researchFixture()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-research-failure-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let blocked = root.appendingPathComponent("blocked")
+        try Data("write blocker".utf8).write(to: blocked)
+        let store = AppStore(storageURL: blocked.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore())
+        try expect(store.acceptDiscovery(candidate, research: result, researchConfig: config) == nil && store.leads.isEmpty && store.signals.isEmpty,
+                   "research save failure publishes nothing")
+        try FileManager.default.removeItem(at: blocked)
+        try expect(store.acceptDiscovery(candidate, research: result, researchConfig: config) != nil && store.leads.count == 1, "retry saves one researched lead")
+    }
+
+    static func websiteQueuesKeepInputsUnverifiedAndRejectPrivateURLs() throws {
+        let queue = try WebsiteResearchQueue.parse("Example | https://www.example.test/en/about?tracking=1#top\nOther label | https://example.test/contact")
+        try expect(queue.count == 1 && queue[0].sourceID == "website:example.test", "domain dedupe")
+        try expect(queue[0].email == nil && queue[0].phone == nil && queue[0].website == "https://www.example.test/en/about", "queue supplies no guessed contact or AI claim")
+        try expect(!queue[0].evidence.contains("Map coordinates") && queue[0].categoryLocationPoints == 0, "website queue invents no location or geographic fit")
+        try expect(LeadWorkflow.origin(of: { var l = Lead.blank(); l.sourceID = queue[0].sourceID; return l }()) == .prospectSearch, "outbound origin")
+        for invalid in ["http://127.0.0.1", "https://localhost", "http://10.0.0.1", "https://user:password@example.test", "file:///etc/hosts"] {
+            do { _ = try WebsiteResearchQueue.parse(invalid); throw SmokeTestFailure.failed("accepted \(invalid)") }
+            catch DiscoverySearchError.invalidWebsiteQueue {}
+        }
     }
 }
