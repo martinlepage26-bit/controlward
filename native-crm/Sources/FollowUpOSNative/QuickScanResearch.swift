@@ -133,6 +133,20 @@ struct QuickScanResearcher: Sendable {
         result.complete = !Task.isCancelled
         guard !pages.isEmpty else { result.complete = false; return result }
         var record = ProspectSearchRun.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: UUID().uuidString.lowercased())
+        // Website-only discovery has no verified category tags. A generic company segment must not
+        // bypass the configured licence hold when the checked business page contains trade signals.
+        if segment.osmSelectors.contains("office=company"), let hold = config.rbqLicenceHold {
+            let text = ([candidate.name] + pages.prefix(1).map(\.text)).joined(separator: " ").folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))
+            if let held = config.segments.first(where: { candidateSegment in
+                hold.segments.contains(candidateSegment.id) && candidateSegment.keywords.contains { keyword in
+                    let normalized = keyword.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))
+                    return text.range(of: "\\b" + NSRegularExpression.escapedPattern(for: normalized) + "\\b", options: .regularExpression) != nil
+                }
+            }) {
+                record.segment = held.id
+                result.issues.append("Trade signals on the checked website require the configured licence review.")
+            }
+        }
         result.aiUse = AIUseEvidence.find(in: pages, organisation: candidate.name)
         if let evidence = result.aiUse.first, let page = pages.first(where: { $0.url == evidence.url }) {
             // Quick Scan qualification uses an actual AI-use statement, never the old broad keyword signals.

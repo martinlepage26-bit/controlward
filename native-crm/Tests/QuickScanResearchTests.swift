@@ -128,6 +128,14 @@ enum QuickScanResearchTests {
                 let result = await researcher.research(candidate, segmentID: "construction_trades")
                 try expect(result.record.status == .conflictReview && result.draft(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now) == nil, "licence hold preserved")
             }),
+            ("Generic website discovery cannot bypass a trade licence hold", {
+                let (researcher, _, candidate) = try fixture("<h1>Toiture Exemple</h1><p>Nous utilisons ChatGPT pour préparer les documents.</p>")
+                let config = researcher.config.interactiveSearch()
+                guard let segment = config.segments.first(where: { $0.osmSelectors.contains("office=company") }) else { throw PortableCheckFailure(description: "generic segment missing") }
+                let result = await QuickScanResearcher(config: config, transport: researcher.transport, clock: researcher.clock).research(candidate, segmentID: segment.id)
+                try expect(result.record.status == .conflictReview && result.record.reasons.contains { $0.contains("rbq-licence-unverified") }, "generic input did not bypass held trade")
+                try expect(result.draft(config: config, suppression: SuppressionList(), now: researcher.clock.now) == nil, "no draft for an unverified construction firm")
+            }),
             ("Source evidence and dated research survive encoding", {
                 let (researcher, _, candidate) = try fixture()
                 let result = await researcher.research(candidate, segmentID: "clinic")
