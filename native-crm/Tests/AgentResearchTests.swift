@@ -96,6 +96,30 @@ enum AgentResearchTests {
                 try expect(result.status == "failed" && store.leads.isEmpty, "save failure surfaced")
                 try expect(try WebsiteResearchCache.load(directory.appendingPathComponent("quick-scan-research.json")).results.count == 1, "research retained for retry")
             }),
+            ("Saved email handoff rechecks exclusions, current evidence, recipient and edited content", {
+                let (researcher, _, candidate) = try QuickScanResearchTests.fixture()
+                let result = await researcher.research(candidate, segmentID: "clinic")
+                let config = researcher.config
+                let now = researcher.clock.now
+                let message = result.draft(config: config, suppression: SuppressionList(), now: now)!
+                var lead = Lead.blank(); lead.email = result.email!; lead.quickScanResearch = result; lead.outreachDraft = message.body
+                func issue(_ lead: Lead, _ body: String, _ list: SuppressionList = SuppressionList(), at: Date? = nil) -> String? {
+                    LeadWorkflow.emailDraftIssue(for: lead, body: body, subject: message.subject, config: config, suppression: list, now: at ?? now)
+                }
+                try expect(issue(lead, message.body) == nil, "valid saved cold draft can be opened for review")
+                let list = SuppressionList(); list.record(lead.email, at: now, via: "unsubscribe")
+                try expect(issue(lead, message.body, list) != nil && lead.outreachDraft == message.body, "later unsubscribe blocks handoff without deleting text")
+                var changed = lead; changed.email = "other@other.test"
+                try expect(issue(changed, message.body) != nil, "changed recipient cannot inherit publication evidence")
+                try expect(issue(lead, message.body + "\nSur votre site (https://invented.test), j’ai lu : « made up »") != nil, "edited unsupported citation blocked")
+                try expect(issue(lead, message.body, at: now.addingTimeInterval(8 * 86_400)) != nil, "stale saved draft blocked")
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("cw-handoff-\(UUID()).json")
+                defer { try? FileManager.default.removeItem(at: file) }
+                try Data("broken unsubscribe list".utf8).write(to: file)
+                try expect(issue(lead, message.body, SuppressionList(storageURL: file)) != nil, "damaged exclusions block a saved draft")
+                var manual = Lead.blank(); manual.email = "warm@example.test"
+                try expect(LeadWorkflow.emailDraftIssue(for: manual, body: "Recorded warm follow-up", subject: "Following up", config: nil, suppression: SuppressionList(), now: now) == nil, "ordinary owner-entered correspondence remains available")
+            }),
             ("Cancellation performs no network request and creates no draft", {
                 let now = Date.now
                 let inner = FakeLeadTransport()

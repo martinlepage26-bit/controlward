@@ -1605,6 +1605,9 @@ enum LeadPipelineTests {
                 var elsewhere = draft
                 elsewhere.body = elsewhere.body.replacingOccurrences(of: LeadKit.homePage, with: "https://annuaire.example.test/clinique")
                 try expect(OutreachDraftGate.check(elsewhere, prospect: lead, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:unsupported-claim", "off-site URL")
+                var afterFooter = draft
+                afterFooter.body += "\nSur votre site https://invented.example.test : « unsupported claim »"
+                try expect(OutreachDraftGate.check(afterFooter, prospect: lead, config: config, suppression: SuppressionList(), now: now) != nil, "claims after a footer cannot evade review")
                 var stale = lead
                 stale.snapshots[0].text = "Clinique Exemple Nord"
                 try expect(OutreachDraftGate.check(draft, prospect: stale, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:manual-review", "excerpt gone from snapshot")

@@ -183,7 +183,8 @@ enum QuickScanResearchTests {
                 draft.approvedOffer = .quickScan99CAD
                 draft.body += "\nAnother offer costs 500 $ CA."
                 try expect(OutreachDraftGate.content(draft, config: researcher.config)?.code == "refused:draft-content:pricing", "other amount blocked")
-            })
+            }),
+
         ])
     }
 }

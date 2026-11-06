@@ -210,13 +210,13 @@ enum OutreachDraftGate {
         if let refusal = antiSpam(draft, config: config, suppression: suppression) { return refusal }
         if !AddressProvenance.consentFromOwnDomain(prospect) { return LeadPipelineRefusal(code: "refused:anti-spam:consent", detail: "consent not from own domain") }
         if let refusal = content(draft, config: config) { return refusal }
-        if let refusal = citations(draft, prospect: prospect) { return refusal }
+        if let refusal = citations(draft, prospect: prospect, config: config) { return refusal }
         return nil
     }
 
     /// The draft may quote only `observed_facts` / `supporting_evidence` that check out against the stored snapshots,
     /// and only when the assessment does not need manual review. Every URL and quote above the footer must be one of those.
-    static func citations(_ draft: OutreachDraft, prospect: ProspectRecord) -> LeadPipelineRefusal? {
+    static func citations(_ draft: OutreachDraft, prospect: ProspectRecord, config: ICPConfig) -> LeadPipelineRefusal? {
         guard let research = prospect.research, !research.assessment.requiresManualReview,
               ProspectResearcher.citation(for: prospect) != nil else {
             return LeadPipelineRefusal(code: "refused:research:manual-review", detail: "no evidence-backed opportunity")
@@ -224,7 +224,14 @@ enum OutreachDraftGate {
         let citable = ProspectResearcher.citable(prospect)
         let urls = Set(citable.map(\.url))
         let excerpts = Set(citable.map(\.excerpt))
-        let message = draft.body.components(separatedBy: "\n--\n").first ?? draft.body
+        // Exclude only the known footer at the actual end. Splitting at the first separator
+        // previously hid unsupported claims appended after it from the citation check.
+        let body = draft.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let footer = OutreachDraftBuilder.footer(config: config, language: draft.language)
+        guard body.hasSuffix(footer) else {
+            return LeadPipelineRefusal(code: "refused:research:footer", detail: "Keep the identification and unsubscribe footer at the end of the message.")
+        }
+        let message = String(body.dropLast(footer.count))
         for url in SiteExtractor.matches(message, "https?://[^\\s)»”\"]+") where !urls.contains(url) {
             return LeadPipelineRefusal(code: "refused:research:unsupported-claim", detail: url)
         }
