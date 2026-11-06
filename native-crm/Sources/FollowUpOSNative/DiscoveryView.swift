@@ -139,6 +139,9 @@ struct DiscoveryView: View {
                 cached = try WebsiteResearchCache.load(cacheURL)
                 results = cached.candidates
                 researchResults = cached.results
+                if let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle) {
+                    researchConfig = try ICPConfig.load(directory: directory).interactiveSearch()
+                }
                 if !results.isEmpty { progress = "Saved website research. Sources and unknowns are retained; nothing sent." }
             } catch {
                 cacheWritable = false
