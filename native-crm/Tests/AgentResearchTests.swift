@@ -9,9 +9,21 @@ enum AgentResearchTests {
 
     static func root() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("controlward-agent-\(UUID())") }
 
+    // These cases exercise AppStore on MainActor. Keep their runner on the same actor on
+    // Swift 6.1 too, rather than sending actor-isolated closures to the portable runner.
+    private static func suite(_ cases: [(String, @MainActor () async throws -> Void)]) async -> Bool {
+        var passed = 0
+        for (label, body) in cases {
+            do { try await body(); passed += 1; print("  PASS \(label)") }
+            catch { print("  FAIL \(label): \(error)") }
+        }
+        print("Agent research tests: \(passed)/\(cases.count) passed")
+        return passed == cases.count
+    }
+
     static func run() async -> Bool {
         let expect = PortableCheck.expect
-        return await PortableCheck.suite("Agent research", [
+        return await suite([
             ("Names and URLs produce sourced unsent CRM drafts; replay reuses research without duplicates", {
                 // Force an ISO round-up so cache reuse does not depend on sub-millisecond timing.
                 let now = Date(timeIntervalSince1970: floor(Date.now.timeIntervalSince1970 - 120) + 0.0006)
@@ -69,6 +81,7 @@ enum AgentResearchTests {
                 let store = AppStore(storageURL: directory.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore())
                 let result = await AgentResearchCoordinator().execute(request(now: now), store: store, root: directory, config: try LeadKit.config().interactiveSearch(), output: directory.appendingPathComponent("result.json"), inner: inner, clock: FakeLeadClock(now))
                 try expect(result.status == "completed" && result.entries.first?.aiEvidenceFound == false && store.leads.isEmpty, "unsupported candidate not promoted")
+                try expect(result.entries.first?.issues.contains { $0.contains("Draft withheld:") } == true, "withheld draft explains why")
                 try expect(try WebsiteResearchCache.load(directory.appendingPathComponent("quick-scan-research.json")).candidates.count == 1, "unknown retained for review")
             }),
             ("CRM save failure reports failure and publishes no lead", {

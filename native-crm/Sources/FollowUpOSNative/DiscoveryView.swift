@@ -118,6 +118,9 @@ struct DiscoveryView: View {
                                 .font(.caption.weight(.semibold))
                             Text(research.email.map { "Website-published email: \($0)" } ?? "No website-published email found")
                                 .font(.caption)
+                            if let researchConfig, let reason = research.draftAssessment(config: researchConfig, suppression: SuppressionList(storageURL: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("suppression.json")), now: .now).reason {
+                                Text("Draft withheld: " + reason).font(.caption).foregroundStyle(.secondary)
+                            }
                             DisclosureGroup("Sources, contact checks and qualification") {
                                 ForEach(Array(research.lines.enumerated()), id: \.offset) { _, line in
                                     Text(line).font(.caption).textSelection(.enabled)

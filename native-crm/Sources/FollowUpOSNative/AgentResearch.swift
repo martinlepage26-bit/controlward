@@ -240,12 +240,14 @@ final class AgentResearchCoordinator: ObservableObject {
                 cache.merge(candidate, result: result)
                 try cache.save(root.appendingPathComponent("quick-scan-research.json"))
                 var leadID: UUID?
-                if result.draft(config: config, suppression: suppression, now: clock.now) != nil {
+                let assessment = result.draftAssessment(config: config, suppression: suppression, now: clock.now)
+                if assessment.draft != nil {
                     leadID = store.acceptDiscovery(candidate, research: result, researchConfig: config)
                     if leadID == nil { throw GTMError.invalid("The researched lead could not be saved. No draft was published.") }
                 }
                 outcome.entries.append(.init(sourceID: candidate.sourceID, business: candidate.name, aiEvidenceFound: result.hasAIUseEvidence,
-                                              contactFound: result.email != nil, leadID: leadID, issues: result.issues + result.record.reasons))
+                                              contactFound: result.email != nil, leadID: leadID,
+                                              issues: result.issues + result.record.reasons + (assessment.reason.map { ["Draft withheld: " + $0] } ?? [])))
                 outcome.updatedAt = clock.now
                 try AgentResearchFiles.write(outcome, to: output)
             }

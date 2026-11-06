@@ -87,7 +87,13 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
     /// Existing lead, suppression, provenance and conflict gates still apply. The offer price never becomes
     /// an opportunity value or a claim that this business requested a scan.
     func draft(config: ICPConfig, suppression: SuppressionList, now: Date) -> OutreachDraft? {
-        guard complete, hasAIUseEvidence, record.status == .ready, let citation = aiUse.first else { return nil }
+        draftAssessment(config: config, suppression: suppression, now: now).draft
+    }
+
+    func draftAssessment(config: ICPConfig, suppression: SuppressionList, now: Date) -> (draft: OutreachDraft?, reason: String?) {
+        guard complete else { return (nil, "Website research is incomplete.") }
+        guard hasAIUseEvidence, let citation = aiUse.first else { return (nil, "Actual AI use is not established from the checked pages.") }
+        guard record.status == .ready else { return (nil, "Qualification: " + record.reasons.joined(separator: "; ")) }
         let greeting = record.contact?.name.split(separator: " ").first.map(String.init) ?? ""
         var draft = OutreachDraftBuilder.build(for: record, config: config, language: "fr", messageID: "quickscan-\(record.id)-\(ISODates.string(checkedAt))")
         draft.approvedOffer = .quickScan99CAD
@@ -105,7 +111,10 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 
         \(OutreachDraftBuilder.footer(config: config, language: "fr"))
         """
-        return OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: now) == nil ? draft : nil
+        if let refusal = OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: now) {
+            return (nil, refusal.description)
+        }
+        return (draft, nil)
     }
 }
 

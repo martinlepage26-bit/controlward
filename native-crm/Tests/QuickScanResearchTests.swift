@@ -142,6 +142,13 @@ enum QuickScanResearchTests {
                 let restored = try JSONDecoder.iso.decode(QuickScanResearchResult.self, from: JSONEncoder.iso.encode(result))
                 try expect(restored == result && restored.email == result.email && restored.hasAIUseEvidence, "round trip")
             }),
+            ("A withheld draft explains the unchanged address requirement", {
+                let (researcher, _, candidate) = try fixture()
+                var result = await researcher.research(candidate, segmentID: "clinic")
+                result.record.address = nil
+                let assessment = result.draftAssessment(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now)
+                try expect(assessment.draft == nil && assessment.reason?.lowercased().contains("address") == true, "missing address is explained, not bypassed")
+            }),
             ("Only the explicitly selected Quick Scan price is allowed; other pricing stays blocked", {
                 let (researcher, _, candidate) = try fixture()
                 let result = await researcher.research(candidate, segmentID: "clinic")
