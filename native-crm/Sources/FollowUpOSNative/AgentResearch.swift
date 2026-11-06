@@ -196,7 +196,7 @@ final class AgentResearchCoordinator: ObservableObject {
                     recent = Array(recent.prefix(20))
                     running = false; work = nil
                     let ready = outcome.entries.filter { $0.leadID != nil }.count
-                    summary = "\(outcome.entries.count) websites checked; \(ready) draft(s) ready in Pipeline. \(outcome.message)"
+                    summary = "Last request: \(outcome.entries.count) websites checked; \(ready) draft(s) ready in Pipeline. \(outcome.message)"
                     if cancelledByOwner { return }
                 } catch {
                     // A malformed filename never becomes an output path supplied by a request.
@@ -230,7 +230,7 @@ final class AgentResearchCoordinator: ObservableObject {
                 let source = LeadCandidate(osmID: candidate.sourceID, name: candidate.name, website: candidate.website, tags: [], city: nil,
                                            latitude: 0, longitude: 0, discoveredVia: candidate.sourceURL)
                 let result: QuickScanResearchResult
-                if let saved = cache.results[candidate.sourceID], saved.complete,
+                if let saved = cache.results[candidate.sourceID], saved.complete, saved.researchVersion == QuickScanResearcher.version,
                    // ISO storage rounds to milliseconds; allow only that rounding interval into the future.
                    clock.now.timeIntervalSince(saved.checkedAt) >= -0.001, clock.now.timeIntervalSince(saved.checkedAt) < 3600 {
                     result = saved

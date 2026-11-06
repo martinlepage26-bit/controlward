@@ -52,6 +52,8 @@ struct PublishedContactEvidence: Codable, Equatable, Sendable {
 struct QuickScanResearchResult: Codable, Equatable, Sendable {
     var record: ProspectRecord
     var checkedAt: Date
+    /// Optional so findings from earlier releases remain readable; revised research is rechecked.
+    var researchVersion: Int?
     var aiUse: [FactEvidence] = []
     var contacts: [PublishedContactEvidence] = []
     var issues: [String] = []
@@ -121,6 +123,7 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 /// Runs after map discovery, through the same public-site transport and policy as the existing lead pipeline.
 /// The page budget, robots rules, host exclusions, pacing and cancellation remain enforced.
 struct QuickScanResearcher: Sendable {
+    static let version = 2
     let config: ICPConfig
     let transport: GuardedLeadTransport
     let clock: any LeadClock
@@ -130,6 +133,7 @@ struct QuickScanResearcher: Sendable {
         var blank = ProspectRecord(id: "cw:\(candidate.osmID)", organisation: candidate.name, segment: segmentID)
         blank.businessDomain = candidate.website.flatMap { ProspectSearchRun.siteURL($0)?.host }.map(HostMatch.registrable)
         var result = QuickScanResearchResult(record: blank, checkedAt: now)
+        result.researchVersion = Self.version
         guard !candidate.closed, let website = candidate.website,
               let root = URL(string: website.contains("://") ? website : "https://" + website),
               let host = root.host, let segment = config.segment(segmentID) else {
@@ -145,7 +149,8 @@ struct QuickScanResearcher: Sendable {
         // Website-only discovery has no verified category tags. A generic company segment must not
         // bypass the configured licence hold when the checked business page contains trade signals.
         if segment.osmSelectors.contains("office=company"), let hold = config.rbqLicenceHold {
-            let text = ([candidate.name] + pages.prefix(1).map(\.text)).joined(separator: " ").folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))
+            // Match business identity, not a portfolio client or an article elsewhere in the page.
+            let text = ([candidate.name] + pages.prefix(1).compactMap { $0.text.components(separatedBy: .newlines).first }).joined(separator: " ").folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))
             if let held = config.segments.first(where: { candidateSegment in
                 hold.segments.contains(candidateSegment.id) && candidateSegment.keywords.contains { keyword in
                     let normalized = keyword.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))

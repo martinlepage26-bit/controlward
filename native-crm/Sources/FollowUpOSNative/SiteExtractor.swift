@@ -118,6 +118,10 @@ enum SiteExtractor {
                 if streetWords.contains(where: { lower.contains($0) }) { return candidate }
             }
         }
+        // An explicitly printed Québec unit/building address may omit a street-type word and
+        // wrap its city and postal code onto separate lines. Keep the exact text, including newlines.
+        let unitAddress = #"(?im)^\d{1,5}\s*[-–]\s*\d{1,5}[ \t]+[\p{L}][^\n]{2,100}\n[\p{L} .’'\-]{2,60},?[ \t]+(?:QC|Québec|Quebec)\n[GHJ]\d[A-Z][ -]?\d[A-Z]\d\b"#
+        if let range = text.range(of: unitAddress, options: .regularExpression) { return String(text[range]) }
         return nil
     }
 
