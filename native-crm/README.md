@@ -32,6 +32,15 @@ provider credentials remain outside the native workspace.
 
 ## Build and test
 
+For agent-assisted prospect discovery, describe the target to an agent with public
+web search. The agent uses `bin/controlward-research` to pass names and business
+URLs directly to the open app; ControlWard researches its own contact details and
+AI-use evidence, retains unknowns, and saves only eligible unsent 99 CAD Quick Scan
+drafts in Pipeline. No manual URL paste is required. See the bundled
+[agent workflow](Sources/FollowUpOSNative/Resources/Agent/README.md).
+The desktop app still depends on that external agent for general web discovery.
+It does not include an independent general search provider or send outreach.
+
 ```bash
 ./bin/test-native-app
 CONTEXTWARD_SIGN_IDENTITY=- ./bin/build-native-app

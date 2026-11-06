@@ -15,7 +15,7 @@ let package = Package(
             // ControlWardLogo loads controlward-mark.png. The SVG is source art and is not bundled.
             exclude: ["Resources/controlward-mark.svg"],
             // Resources/config holds icp.json and icp.confirmed.json for the lead pipeline (Slice 3).
-            resources: [.process("Resources/controlward-mark.png"), .copy("Resources/ProjectControl"), .copy("Resources/config")]
+            resources: [.process("Resources/controlward-mark.png"), .copy("Resources/ProjectControl"), .copy("Resources/config"), .copy("Resources/Agent")]
         ),
     ]
 )

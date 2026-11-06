@@ -52,6 +52,8 @@ struct PublishedContactEvidence: Codable, Equatable, Sendable {
 struct QuickScanResearchResult: Codable, Equatable, Sendable {
     var record: ProspectRecord
     var checkedAt: Date
+    /// Optional so findings from earlier releases remain readable; revised research is rechecked.
+    var researchVersion: Int?
     var aiUse: [FactEvidence] = []
     var contacts: [PublishedContactEvidence] = []
     var issues: [String] = []
@@ -87,7 +89,13 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
     /// Existing lead, suppression, provenance and conflict gates still apply. The offer price never becomes
     /// an opportunity value or a claim that this business requested a scan.
     func draft(config: ICPConfig, suppression: SuppressionList, now: Date) -> OutreachDraft? {
-        guard complete, hasAIUseEvidence, record.status == .ready, let citation = aiUse.first else { return nil }
+        draftAssessment(config: config, suppression: suppression, now: now).draft
+    }
+
+    func draftAssessment(config: ICPConfig, suppression: SuppressionList, now: Date) -> (draft: OutreachDraft?, reason: String?) {
+        guard complete else { return (nil, "Website research is incomplete.") }
+        guard hasAIUseEvidence, let citation = aiUse.first else { return (nil, "Actual AI use is not established from the checked pages.") }
+        guard record.status == .ready else { return (nil, "Qualification: " + record.reasons.joined(separator: "; ")) }
         let greeting = record.contact?.name.split(separator: " ").first.map(String.init) ?? ""
         var draft = OutreachDraftBuilder.build(for: record, config: config, language: "fr", messageID: "quickscan-\(record.id)-\(ISODates.string(checkedAt))")
         draft.approvedOffer = .quickScan99CAD
@@ -105,13 +113,17 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 
         \(OutreachDraftBuilder.footer(config: config, language: "fr"))
         """
-        return OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: now) == nil ? draft : nil
+        if let refusal = OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: now) {
+            return (nil, refusal.description)
+        }
+        return (draft, nil)
     }
 }
 
 /// Runs after map discovery, through the same public-site transport and policy as the existing lead pipeline.
 /// The page budget, robots rules, host exclusions, pacing and cancellation remain enforced.
 struct QuickScanResearcher: Sendable {
+    static let version = 2
     let config: ICPConfig
     let transport: GuardedLeadTransport
     let clock: any LeadClock
@@ -121,6 +133,7 @@ struct QuickScanResearcher: Sendable {
         var blank = ProspectRecord(id: "cw:\(candidate.osmID)", organisation: candidate.name, segment: segmentID)
         blank.businessDomain = candidate.website.flatMap { ProspectSearchRun.siteURL($0)?.host }.map(HostMatch.registrable)
         var result = QuickScanResearchResult(record: blank, checkedAt: now)
+        result.researchVersion = Self.version
         guard !candidate.closed, let website = candidate.website,
               let root = URL(string: website.contains("://") ? website : "https://" + website),
               let host = root.host, let segment = config.segment(segmentID) else {
@@ -133,6 +146,21 @@ struct QuickScanResearcher: Sendable {
         result.complete = !Task.isCancelled
         guard !pages.isEmpty else { result.complete = false; return result }
         var record = ProspectSearchRun.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: UUID().uuidString.lowercased())
+        // Website-only discovery has no verified category tags. A generic company segment must not
+        // bypass the configured licence hold when the checked business page contains trade signals.
+        if segment.osmSelectors.contains("office=company"), let hold = config.rbqLicenceHold {
+            // Match business identity, not a portfolio client or an article elsewhere in the page.
+            let text = ([candidate.name] + pages.prefix(1).compactMap { $0.text.components(separatedBy: .newlines).first }).joined(separator: " ").folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))
+            if let held = config.segments.first(where: { candidateSegment in
+                hold.segments.contains(candidateSegment.id) && candidateSegment.keywords.contains { keyword in
+                    let normalized = keyword.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "fr_CA"))
+                    return text.range(of: "\\b" + NSRegularExpression.escapedPattern(for: normalized) + "\\b", options: .regularExpression) != nil
+                }
+            }) {
+                record.segment = held.id
+                result.issues.append("Trade signals on the checked website require the configured licence review.")
+            }
+        }
         result.aiUse = AIUseEvidence.find(in: pages, organisation: candidate.name)
         if let evidence = result.aiUse.first, let page = pages.first(where: { $0.url == evidence.url }) {
             // Quick Scan qualification uses an actual AI-use statement, never the old broad keyword signals.

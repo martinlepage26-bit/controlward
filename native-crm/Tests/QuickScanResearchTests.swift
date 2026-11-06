@@ -128,11 +128,46 @@ enum QuickScanResearchTests {
                 let result = await researcher.research(candidate, segmentID: "construction_trades")
                 try expect(result.record.status == .conflictReview && result.draft(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now) == nil, "licence hold preserved")
             }),
+            ("Generic website discovery cannot bypass a trade licence hold", {
+                let (researcher, _, candidate) = try fixture("<h1>Toiture Exemple</h1><p>Nous utilisons ChatGPT pour préparer les documents.</p>")
+                let config = researcher.config.interactiveSearch()
+                guard let segment = config.segments.first(where: { $0.osmSelectors.contains("office=company") }) else { throw PortableCheckFailure(description: "generic segment missing") }
+                let result = await QuickScanResearcher(config: config, transport: researcher.transport, clock: researcher.clock).research(candidate, segmentID: segment.id)
+                try expect(result.record.status == .conflictReview && result.record.reasons.contains { $0.contains("rbq-licence-unverified") }, "generic input did not bypass held trade")
+                try expect(result.draft(config: config, suppression: SuppressionList(), now: researcher.clock.now) == nil, "no draft for an unverified construction firm")
+            }),
+            ("A construction client mentioned by a web agency is not the agency's trade", {
+                let (researcher, _, candidate) = try fixture("<h1>Agence web Exemple</h1><p>Client: Construction Exemple</p><p>Nous utilisons ChatGPT pour préparer les documents.</p>")
+                let config = researcher.config.interactiveSearch()
+                let segment = config.segments.first { $0.osmSelectors.contains("office=company") }!
+                let result = await QuickScanResearcher(config: config, transport: researcher.transport, clock: researcher.clock).research(candidate, segmentID: segment.id)
+                try expect(result.record.segment == segment.id && !result.record.reasons.contains { $0.contains("rbq-licence-unverified") }, "portfolio text did not change business identity")
+            }),
+            ("A printed multiline unit address remains verbatim own-site evidence", {
+                let (researcher, inner, candidate) = try fixture()
+                let address = "1201 - 200 Exemple-Nord\nMontréal, Qc\nH0H 0H0"
+                inner.respond("https://www.clinique-exemple.test/en/contact-us", body: "<address>1201 - 200 Exemple-Nord<br>Montréal, Qc<br>H0H 0H0</address><a href=\"mailto:info@clinique-exemple.test\">Contact</a>")
+                let result = await researcher.research(candidate, segmentID: "clinic")
+                try expect(result.record.address == address && AddressProvenance.check(result.record) == nil, "exact multiline source retained")
+                try expect(result.draft(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now) != nil, "address formatting does not withhold a grounded draft")
+                try expect(SiteExtractor.address(in: "514-555-0100\nMontréal, QC\nH0H 0H0") == nil, "a phone and postal code are not a street address")
+            }),
             ("Source evidence and dated research survive encoding", {
                 let (researcher, _, candidate) = try fixture()
                 let result = await researcher.research(candidate, segmentID: "clinic")
                 let restored = try JSONDecoder.iso.decode(QuickScanResearchResult.self, from: JSONEncoder.iso.encode(result))
                 try expect(restored == result && restored.email == result.email && restored.hasAIUseEvidence, "round trip")
+                var legacy = try JSONSerialization.jsonObject(with: JSONEncoder.iso.encode(result)) as! [String: Any]
+                legacy.removeValue(forKey: "researchVersion")
+                let earlier = try JSONDecoder.iso.decode(QuickScanResearchResult.self, from: JSONSerialization.data(withJSONObject: legacy))
+                try expect(earlier.researchVersion == nil && earlier.email == result.email, "older findings stay readable and can be rechecked")
+            }),
+            ("A withheld draft explains the unchanged address requirement", {
+                let (researcher, _, candidate) = try fixture()
+                var result = await researcher.research(candidate, segmentID: "clinic")
+                result.record.address = nil
+                let assessment = result.draftAssessment(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now)
+                try expect(assessment.draft == nil && assessment.reason?.lowercased().contains("address") == true, "missing address is explained, not bypassed")
             }),
             ("Only the explicitly selected Quick Scan price is allowed; other pricing stays blocked", {
                 let (researcher, _, candidate) = try fixture()

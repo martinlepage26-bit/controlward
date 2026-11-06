@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiscoveryView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var agentResearch: AgentResearchCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var location: DiscoveryLocation = .montreal
     @State private var category: DiscoveryCategory = .marketing
@@ -38,6 +39,17 @@ struct DiscoveryView: View {
             }
 
             SaveFailureNotice()
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Agent research").font(.headline)
+                    Text(agentResearch.summary).font(.caption).foregroundStyle(.secondary)
+                    Text("Ask your connected agent for a target market. It finds websites; ControlWard verifies the evidence and puts eligible drafts in Pipeline.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if agentResearch.running { Button("Cancel agent research") { agentResearch.cancel() } }
+                Button("Refresh findings") { reloadFindings() }
+            }
             HStack(alignment: .bottom, spacing: 12) {
                 Picker("Category", selection: $category) {
                     ForEach(DiscoveryCategory.allCases) { Text($0.label).tag($0) }
@@ -106,6 +118,9 @@ struct DiscoveryView: View {
                                 .font(.caption.weight(.semibold))
                             Text(research.email.map { "Website-published email: \($0)" } ?? "No website-published email found")
                                 .font(.caption)
+                            if let researchConfig, let reason = research.draftAssessment(config: researchConfig, suppression: SuppressionList(storageURL: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("suppression.json")), now: .now).reason {
+                                Text("Draft withheld: " + reason).font(.caption).foregroundStyle(.secondary)
+                            }
                             DisclosureGroup("Sources, contact checks and qualification") {
                                 ForEach(Array(research.lines.enumerated()), id: \.offset) { _, line in
                                     Text(line).font(.caption).textSelection(.enabled)
@@ -148,6 +163,7 @@ struct DiscoveryView: View {
                 self.error = "Saved research could not be read. It will not be overwritten. New findings stay in this window until saved as leads."
             }
         }
+        .onChange(of: agentResearch.recent) { _, _ in reloadFindings() }
         .onChange(of: location) { _, selected in
             let point = selected.coordinates
             if selected != .custom { latitude = String(point.0); longitude = String(point.1) }
@@ -159,6 +175,16 @@ struct DiscoveryView: View {
             catch { return }
             cooldownActive = false
         }
+    }
+
+    @MainActor
+    private func reloadFindings() {
+        guard !searching else { return }
+        do {
+            cached = try WebsiteResearchCache.load(cacheURL)
+            results = cached.candidates
+            researchResults = cached.results
+        } catch { self.error = "Saved findings could not be read; existing data was retained." }
     }
 
     @MainActor
@@ -214,9 +240,12 @@ struct DiscoveryView: View {
                                            latitude: candidate.latitude, longitude: candidate.longitude, discoveredVia: candidate.sourceURL)
                 let result = await researcher.research(source, segmentID: matching.id)
                 researchResults[candidate.sourceID] = result
-                cached.merge(candidate, result: result)
                 if cacheWritable {
-                    do { try cached.save(cacheURL) }
+                    do {
+                        cached = try WebsiteResearchCache.load(cacheURL)
+                        cached.merge(candidate, result: result)
+                        try cached.save(cacheURL)
+                    }
                     catch { self.error = "Research could not be saved. Keep this window open; findings remain available to save as leads." }
                 }
             }

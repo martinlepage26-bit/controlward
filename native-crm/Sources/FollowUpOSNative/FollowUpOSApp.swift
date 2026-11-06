@@ -5,6 +5,7 @@ import SwiftUI
 struct FollowUpOSApp: App {
     @StateObject private var store = makeStore()
     @StateObject private var mail = MailIntakeController()
+    @StateObject private var research = AgentResearchCoordinator()
 
     @MainActor private static func makeStore() -> AppStore {
 #if DEBUG && CONTEXTWARD_ACCEPTANCE
@@ -19,7 +20,11 @@ struct FollowUpOSApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(mail)
-                .task { mail.startPeriodic(store: store) }
+                .environmentObject(research)
+                .task {
+                    mail.startPeriodic(store: store)
+                    research.start(store: store, configDirectory: ICPConfig.defaultDirectory(bundle: AppResources.bundle))
+                }
                 .frame(minWidth: 940, minHeight: 680)
         }
         .windowStyle(.hiddenTitleBar)
