@@ -130,7 +130,16 @@ extension AppStore {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(ControlWardBackup(workspace: completeBackupWorkspace()))
         guard data.count <= 20_000_000 else { throw ControlWardError.invalid("This complete backup exceeds 20 MB. No partial backup was written.") }
-        try SecureFiles.writePrivate(data, to: url)
+        // NSSavePanel grants this file, not permission to chmod its parent. Start a new
+        // selected file privately, then replace it atomically; preserve existing backups
+        // if the replacement fails. Managed rollback/recovery folders use writePrivate.
+        if !FileManager.default.fileExists(atPath: url.path) {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw ControlWardError.invalid("The selected backup file could not be created. Nothing was exported.")
+            }
+        } else { try SecureFiles.restrict(url) }
+        try data.write(to: url, options: .atomic)
+        try SecureFiles.restrict(url)
     }
 
     func currentResearchRecoveryDigest() throws -> String? {
