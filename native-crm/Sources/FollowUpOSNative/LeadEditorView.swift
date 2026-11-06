@@ -20,7 +20,7 @@ struct LeadEditorView: View {
     private var emailDraftIssue: String? {
         let config = ICPConfig.defaultDirectory(bundle: AppResources.bundle).flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
         return LeadWorkflow.emailDraftIssue(for: draft, body: message, subject: store.groundedDraft(for: draft).subject,
-                                           config: config, suppression: SuppressionList(storageURL: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("suppression.json")), now: .now)
+                                           config: config, suppression: store.suppressionList, now: .now)
     }
 
     init(lead: Lead, isNew: Bool) {

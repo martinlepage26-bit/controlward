@@ -35,6 +35,7 @@ struct NativeSmokeTests {
         let mailPlantedRedsPassed = await MailControlPlantedReds.run()
         let buildInfoPassed = BuildInfoTests.run()
         let discoveryPassed = await DiscoveryTests.run()
+        guard await ResearchRecoveryTests.run() else { throw SmokeTestFailure.failed("Research recovery tests failed") }
         guard await AgentResearchTests.run() else { throw SmokeTestFailure.failed("Agent research tests failed") }
         guard await QuickScanResearchTests.run() else { throw SmokeTestFailure.failed("Quick Scan website research tests failed") }
         let gtmPassed = GTMTests.run()

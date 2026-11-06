@@ -5,6 +5,7 @@ PORTABLE_SOURCES=(
   CWAudit.swift
   LeadPipelineConfig.swift
   LeadPipelineModels.swift
+  DiscoveryModels.swift
   LeadDefinition.swift
   Outreach.swift
   LeadTransport.swift

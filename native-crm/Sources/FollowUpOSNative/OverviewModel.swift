@@ -101,7 +101,7 @@ struct ProspectingOverviewSnapshot: Equatable, Sendable {
     }
 
     /// A corrupt source produces an explicit partial-count warning; reading never rewrites it.
-    static func load(root: URL, leads: [Lead], config: ICPConfig, now: Date = .now) -> Self {
+    static func load(root: URL, leads: [Lead], config: ICPConfig, now: Date = .now, nativeResearch: WebsiteResearchCache? = nil, additionalSuppression: [SuppressionList.Entry] = [], researchFailure: String? = nil) -> Self {
         var warnings: [String] = []
         func read<T: Decodable>(_ name: String, as: T.Type, fallback: T) -> T {
             let url = root.appendingPathComponent(name)
@@ -114,9 +114,10 @@ struct ProspectingOverviewSnapshot: Equatable, Sendable {
         }
         let places = read("discovered.json", as: [DiscoveredPlace].self, fallback: [])
         let records = read("prospects.json", as: [ProspectRecord].self, fallback: [])
-        let cache = read("quick-scan-research.json", as: WebsiteResearchCache.self, fallback: WebsiteResearchCache())
-        let suppression = SuppressionList(storageURL: root.appendingPathComponent("suppression.json"))
+        let cache = nativeResearch ?? read("quick-scan-research.json", as: WebsiteResearchCache.self, fallback: WebsiteResearchCache())
+        let suppression = SuppressionList(storageURL: root.appendingPathComponent("suppression.json"), additionalEntries: additionalSuppression)
         if let reason = suppression.unavailableReason { warnings.append(reason) }
+        if let researchFailure { warnings.append(researchFailure) }
         var result = make(places: places, records: records, cache: cache, leads: leads, config: config,
                           suppression: suppression, now: now)
         result.warnings = warnings

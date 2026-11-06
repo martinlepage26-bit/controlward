@@ -446,6 +446,7 @@ struct LeadFunnelStrip: View {
             }
         }
         .onChange(of: store.leads) { _, _ in load() }
+        .onChange(of: store.websiteResearch) { _, _ in load() }
         .onChange(of: research.recent) { _, _ in load() }
     }
 
@@ -455,7 +456,7 @@ struct LeadFunnelStrip: View {
                 error = "Prospecting counts are unavailable: research settings are missing."; return
             }
             let config = try ICPConfig.load(directory: directory).interactiveSearch()
-            snapshot = ProspectingOverviewSnapshot.load(root: LeadPipelineEnvironment.defaultRoot(), leads: store.leads, config: config)
+            snapshot = ProspectingOverviewSnapshot.load(root: store.researchRoot, leads: store.leads, config: config, nativeResearch: store.websiteResearch, additionalSuppression: store.workspace.restoredSuppressionEntries, researchFailure: store.researchFailure)
             error = nil
         } catch { self.error = "Prospecting counts could not be refreshed. Existing figures may be stale." }
     }

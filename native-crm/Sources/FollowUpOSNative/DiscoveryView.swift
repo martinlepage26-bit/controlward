@@ -24,8 +24,6 @@ struct DiscoveryView: View {
     @State private var deadlineTask: Task<Void, Never>?
     @State private var websiteQueue = ""
     @State private var cached = WebsiteResearchCache()
-    @State private var cacheWritable = true
-    private var cacheURL: URL { LeadPipelineEnvironment.defaultRoot().appendingPathComponent("quick-scan-research.json") }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -39,6 +37,7 @@ struct DiscoveryView: View {
             }
 
             SaveFailureNotice()
+            if let reason = store.researchFailure { Text(reason).font(.caption).foregroundStyle(CRMTheme.rust) }
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Agent research").font(.headline)
@@ -118,7 +117,7 @@ struct DiscoveryView: View {
                                 .font(.caption.weight(.semibold))
                             Text(research.email.map { "Website-published email: \($0)" } ?? "No website-published email found")
                                 .font(.caption)
-                            if let researchConfig, let reason = research.draftAssessment(config: researchConfig, suppression: SuppressionList(storageURL: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("suppression.json")), now: .now).reason {
+                            if let researchConfig, let reason = research.draftAssessment(config: researchConfig, suppression: store.suppressionList, now: .now).reason {
                                 Text("Draft withheld: " + reason).font(.caption).foregroundStyle(.secondary)
                             }
                             DisclosureGroup("Sources, contact checks and qualification") {
@@ -151,7 +150,7 @@ struct DiscoveryView: View {
         .onDisappear { searchTask?.cancel(); deadlineTask?.cancel() }
         .task {
             do {
-                cached = try WebsiteResearchCache.load(cacheURL)
+                cached = try store.researchSnapshot().cache
                 results = cached.candidates
                 researchResults = cached.results
                 if let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle) {
@@ -159,10 +158,10 @@ struct DiscoveryView: View {
                 }
                 if !results.isEmpty { progress = "Saved website research. Sources and unknowns are retained; nothing sent." }
             } catch {
-                cacheWritable = false
                 self.error = "Saved research could not be read. It will not be overwritten. New findings stay in this window until saved as leads."
             }
         }
+        .onChange(of: store.websiteResearch) { _, _ in reloadFindings() }
         .onChange(of: agentResearch.recent) { _, _ in reloadFindings() }
         .onChange(of: location) { _, selected in
             let point = selected.coordinates
@@ -181,7 +180,8 @@ struct DiscoveryView: View {
     private func reloadFindings() {
         guard !searching else { return }
         do {
-            cached = try WebsiteResearchCache.load(cacheURL)
+            store.recoverResearchStorage()
+            cached = try store.researchSnapshot().cache
             results = cached.candidates
             researchResults = cached.results
         } catch { self.error = "Saved findings could not be read; existing data was retained." }
@@ -205,6 +205,9 @@ struct DiscoveryView: View {
             error = "Enter latitude from −90 to 90 and longitude from −180 to 180."
             return
         }
+        let token = store.beginResearch()
+        let generation = store.workspace.researchGeneration
+        defer { store.endResearch(token) }
         searching = true
         error = nil
         lastSearchAt = .now
@@ -217,18 +220,13 @@ struct DiscoveryView: View {
         do {
             if queued { results = try WebsiteResearchQueue.parse(websiteQueue) }
             else { results = try await DiscoveryClient().search(category: category.selector, latitude: lat, longitude: lon, radiusMeters: radius, limit: 50) }
-            if cacheWritable {
-                do {
-                    cached = try WebsiteResearchCache.load(cacheURL)
-                    cached.discover(results)
-                    try cached.save(cacheURL)
-                } catch { self.error = "Discovered listings could not be saved. Existing findings were retained." }
-            }
+            guard generation == store.workspace.researchGeneration else { return }
+            try store.recordDiscoveryCandidates(results)
             guard queued || researchEnabled, !Task.isCancelled else { return }
             guard let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle) else { error = "Website research configuration is missing."; return }
             let config = try ICPConfig.load(directory: directory).interactiveSearch()
             researchConfig = config
-            let audit = FileAuditSink(url: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("cw-audit.log"))
+            let audit = FileAuditSink(url: store.researchRoot.appendingPathComponent("cw-audit.log"))
             let guarded = GuardedLeadTransport(config: config, inner: InteractiveLeadTransport(inner: URLSessionLeadTransport()), audit: audit)
             let researcher = QuickScanResearcher(config: config, transport: guarded, clock: SystemLeadClock())
             if queued { researchResults = researchResults.filter { key, _ in results.contains { $0.sourceID == key } } }
@@ -247,14 +245,8 @@ struct DiscoveryView: View {
                                            latitude: candidate.latitude, longitude: candidate.longitude, discoveredVia: candidate.sourceURL)
                 let result = await researcher.research(source, segmentID: matching.id)
                 researchResults[candidate.sourceID] = result
-                if cacheWritable {
-                    do {
-                        cached = try WebsiteResearchCache.load(cacheURL)
-                        cached.merge(candidate, result: result)
-                        try cached.save(cacheURL)
-                    }
-                    catch { self.error = "Research could not be saved. Keep this window open; findings remain available to save as leads." }
-                }
+                guard generation == store.workspace.researchGeneration else { return }
+                try store.recordWebsiteResearch(candidate, result: result)
             }
             let evidenced = researchResults.values.filter(\.hasAIUseEvidence).count
             progress = "\(results.count) listings; \(researchResults.count) websites checked; \(evidenced) with AI-use evidence. Contact sources and unknowns are shown below. Nothing sent."

@@ -129,7 +129,7 @@ struct ProspectLeadsView: View {
             return
         }
         do {
-            let loaded = try LeadPipelineEnvironment.load(configDirectory: directory)
+            let loaded = try LeadPipelineEnvironment.load(configDirectory: directory, root: store.researchRoot)
             launchCount = loaded.recordLaunch(audit: loaded.audit)
             environment = loaded
             reload(loaded)
@@ -176,10 +176,11 @@ struct ProspectLeadsView: View {
     private func search(_ environment: LeadPipelineEnvironment) async {
         guard let lat = Double(latitude), let lon = Double(longitude) else { summary = "Enter numeric coordinates."; return }
         running = true
-        defer { running = false }
+        let token = store.beginResearch()
+        defer { running = false; store.endResearch(token) }
         let request = ProspectSearchRun.Request(segmentID: segmentID, latitude: lat, longitude: lon, radiusMeters: radius, limit: limit)
         let interactive = LeadPipelineEnvironment(config: environment.config.interactiveSearch(), root: environment.root)
-        let reports = await interactive.searchAndIngest([request], inner: InteractiveLeadTransport(inner: URLSessionLeadTransport()), audit: environment.audit)
+        let reports = await interactive.searchAndIngest([request], inner: InteractiveLeadTransport(inner: URLSessionLeadTransport()), audit: environment.audit, additionalSuppression: store.workspace.restoredSuppressionEntries)
         let found = reports.reduce(0) { $0 + $1.candidates }
         let kept = reports.reduce(0) { $0 + $1.prospects.count }
         let refused = reports.reduce(0) { $0 + $1.refusals.count }

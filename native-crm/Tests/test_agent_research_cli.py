@@ -53,13 +53,24 @@ class ResearchClientTests(unittest.TestCase):
     def test_stale_app_cannot_accept_a_submission(self):
         review = str(uuid.uuid4())
         inbox = self.root / "agent-inbox"
-        client.private_json(inbox / "available.json", {"schema": 1, "pid": 1, "mode": "review", "reviewID": review, "build": "test", "updatedAt": "2020-01-01T00:00:00Z"})
+        client.private_json(inbox / "available.json", {"schema": 2, "workspaceGeneration": str(uuid.uuid4()), "pid": 1, "mode": "review", "reviewID": review, "build": "test", "updatedAt": "2020-01-01T00:00:00Z"})
         args = argparse.Namespace(live=False, review_id=review, command="submit")
         with self.assertRaises(ValueError):
             client.select_workspace(args, [(inbox, review)])
         args.command = "status"
         _, availability = client.select_workspace(args, [(inbox, review)])
         self.assertFalse(availability["app_running"])
+
+    def test_old_protocol_or_missing_generation_cannot_be_selected(self):
+        review = str(uuid.uuid4())
+        inbox = self.root / "old-inbox"
+        args = argparse.Namespace(live=False, review_id=review, command="status")
+        for payload in ({"schema": 1}, {"schema": 2}, {"schema": 2, "workspaceGeneration": str(uuid.uuid1())}):
+            path = inbox / "available.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(dict(pid=1, mode="review", reviewID=review, build="test", updatedAt="2020-01-01T00:00:00Z", **payload)))
+            with self.assertRaises(ValueError):
+                client.select_workspace(args, [(inbox, review)])
 
     def test_normal_workspace_needs_explicit_flag(self):
         with patch.object(Path, "home", return_value=self.root):

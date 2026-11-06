@@ -38,15 +38,16 @@ final class SuppressionList: @unchecked Sendable {
     private var readFailed = false
     private var saveFailed = false
 
-    init(storageURL: URL? = nil) {
+    init(storageURL: URL? = nil, additionalEntries: [Entry] = []) {
         self.storageURL = storageURL
+        entries = Dictionary(additionalEntries.map { (MailAddress.bare($0.address), $0) }, uniquingKeysWith: { first, _ in first })
         if let storageURL {
             do {
                 let data = try Data(contentsOf: storageURL)
                 guard data.count <= 20_000_000 else { readFailed = true; return }
                 let stored = try JSONDecoder.iso.decode([Entry].self, from: data)
                 guard stored.allSatisfy({ MailAddress.domain($0.address) != nil }) else { readFailed = true; return }
-                entries = Dictionary(stored.map { (MailAddress.bare($0.address), $0) }, uniquingKeysWith: { first, _ in first })
+                for entry in stored { entries[MailAddress.bare(entry.address)] = entry }
             } catch {
                 let error = error as NSError
                 readFailed = !(error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError)
