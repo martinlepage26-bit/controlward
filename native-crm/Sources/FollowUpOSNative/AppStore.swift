@@ -1466,29 +1466,41 @@ final class AppStore: ObservableObject {
     /// not a penetration test or external intelligence scan.
     @discardableResult
     func runLocalExposureScan() -> Int {
-        workspace.exposureFindings.removeAll { !$0.resolved }
-        let sensitiveTerms = ["password", "secret", "token", "ssn", "sin", "credit card", "api key"]
-        for lead in leads {
-            let text = "\(lead.notes) \(lead.lastMessage)".lowercased()
-            if sensitiveTerms.contains(where: { text.contains($0) }) {
-                workspace.exposureFindings.append(ExposureFinding(lens: "AI / Privacy Exposure", severity: .high, title: "Sensitive-looking text in lead record", detail: "Review and remove credentials or identity numbers from notes and messages.", recordID: lead.id))
+        var count = 0
+        let saved = saveChange { next in
+            let previous = next.exposureFindings
+            var findings = previous.filter(\.resolved)
+            func record(_ candidate: ExposureFinding) {
+                let retained = previous.first { $0.recordID == candidate.recordID && $0.lens == candidate.lens && $0.title == candidate.title } ?? candidate
+                if !findings.contains(where: { $0.id == retained.id }) { findings.append(retained) }
             }
-            if lead.email.isEmpty && lead.phone.isEmpty {
-                workspace.exposureFindings.append(ExposureFinding(lens: "Identity Exposure", severity: .warning, title: "Lead lacks a contact channel", detail: "Confirm the source and retention need before keeping this record.", recordID: lead.id))
+            let sensitiveTerms = ["password", "secret", "token", "ssn", "sin", "credit card", "api key"]
+            for lead in next.leads {
+                let text = "\(lead.notes) \(lead.lastMessage)".lowercased()
+                if sensitiveTerms.contains(where: { text.contains($0) }) {
+                    record(ExposureFinding(lens: "AI / Privacy Exposure", severity: .high, title: "Sensitive-looking text in lead record", detail: "Review and remove credentials or identity numbers from notes and messages.", recordID: lead.id))
+                }
+                if lead.email.isEmpty && lead.phone.isEmpty {
+                    record(ExposureFinding(lens: "Identity Exposure", severity: .warning, title: "Lead lacks a contact channel", detail: "Confirm the source and retention need before keeping this record.", recordID: lead.id))
+                }
             }
+            for signal in next.signals where signal.sourceActive != false && signal.evidence.isEmpty {
+                record(ExposureFinding(lens: "Digital Exposure", severity: .warning, title: "Signal has no evidence trail", detail: "Add the source event, file, or operator note before routing.", recordID: signal.id))
+            }
+            next.exposureFindings = findings
+            count = findings.count
+            next.activity.insert(ActivityEvent(kind: "security_scan", message: "Ran local workspace exposure scan: \(count) finding\(count == 1 ? "" : "s")."), at: 0)
+            return "Local exposure scan complete."
         }
-        for signal in activeSignals where signal.evidence.isEmpty {
-            workspace.exposureFindings.append(ExposureFinding(lens: "Digital Exposure", severity: .warning, title: "Signal has no evidence trail", detail: "Add the source event, file, or operator note before routing.", recordID: signal.id))
-        }
-        workspace.activity.insert(ActivityEvent(kind: "security_scan", message: "Ran local workspace exposure scan: \(workspace.exposureFindings.count) finding\(workspace.exposureFindings.count == 1 ? "" : "s")."), at: 0)
-        persist(message: "Local exposure scan complete.")
-        return workspace.exposureFindings.count
+        return saved ? count : 0
     }
 
     func resolve(_ finding: ExposureFinding) {
-        guard let index = workspace.exposureFindings.firstIndex(where: { $0.id == finding.id }) else { return }
-        workspace.exposureFindings[index].resolved = true
-        persist(message: "Finding marked resolved.")
+        _ = saveChange { next in
+            guard let index = next.exposureFindings.firstIndex(where: { $0.id == finding.id }) else { throw ControlWardError.invalid("This finding is no longer available.") }
+            next.exposureFindings[index].resolved = true
+            return "Finding marked resolved."
+        }
     }
 
     /// Permission requests happen only after the owner selects Schedule reminders.
