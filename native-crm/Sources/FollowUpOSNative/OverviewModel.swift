@@ -1,5 +1,129 @@
 import Foundation
 
+/// Counts actual public discovery and research across both native discovery paths and saved CRM
+/// evidence. A business is counted once by its own domain (or source ID when no domain is known).
+/// The last stage means a draft passes the existing gates now, not that a sale or opportunity exists.
+struct ProspectingOverviewSnapshot: Equatable, Sendable {
+    var funnel = LeadFunnel()
+    var warnings: [String] = []
+    static let labels = ["Businesses discovered", "With a website", "Sourced contact found", "Draft-ready businesses"]
+    var stages: [(label: String, value: Int)] { Array(zip(Self.labels, funnel.values)).map { ($0.0, $0.1) } }
+
+    private struct Business {
+        var website = false
+        var closed = false
+        var record: ProspectRecord?
+        var research: QuickScanResearchResult?
+        var checkedAt = Date.distantPast
+    }
+
+    static func make(places: [DiscoveredPlace], records: [ProspectRecord], cache: WebsiteResearchCache,
+                     leads: [Lead], config: ICPConfig, suppression: SuppressionList, now: Date) -> Self {
+        var businesses: [String: Business] = [:]
+        func key(_ id: String, _ domain: String?) -> String {
+            if let domain = ProspectIdentity.normalizedDomain(domain) { return "domain:" + domain }
+            return "source:" + (id.hasPrefix("cw:") ? String(id.dropFirst(3)) : id).lowercased()
+        }
+        func websiteDomain(_ website: String?) -> String? {
+            guard let website, let url = ProspectSearchRun.siteURL(website),
+                  GuardedLeadTransport.ownSiteHostRefusal(url) == nil else { return nil }
+            return url.host.map(HostMatch.registrable)
+        }
+        func add(_ record: ProspectRecord, research: QuickScanResearchResult? = nil) {
+            guard !record.isTest, record.provenance != .test else { return }
+            let id = key(record.id, record.businessDomain)
+            var business = businesses[id] ?? Business()
+            business.website = business.website || websiteDomain(record.sourceURL) != nil
+            business.closed = business.closed || record.reasons.contains("closed business")
+            // checkedAt marks a research run's start; its pages can be fetched later. Compare the
+            // latest evidence time first, then run start, so a CRM copy cannot mask a newer finding.
+            let checked = max(research?.checkedAt ?? .distantPast, record.fetchedAt ?? .distantPast)
+            let laterAssessment = research != nil && (research?.checkedAt ?? .distantPast) >= (business.research?.checkedAt ?? .distantPast)
+            if business.record == nil || checked > business.checkedAt || (checked == business.checkedAt && laterAssessment) {
+                business.record = record; business.research = research; business.checkedAt = checked
+            }
+            businesses[id] = business
+        }
+        for place in places {
+            let id = key(place.placeID, place.domain)
+            var business = businesses[id] ?? Business()
+            business.website = business.website || place.usableWebsite
+            business.closed = business.closed || place.closed
+            businesses[id] = business
+        }
+        for candidate in cache.candidates {
+            let domain = websiteDomain(candidate.website)
+            let id = key(candidate.sourceID, domain)
+            var business = businesses[id] ?? Business()
+            business.website = business.website || domain != nil
+            businesses[id] = business
+        }
+        for record in records { add(record) }
+        for lead in leads { if let research = lead.quickScanResearch { add(research.record, research: research) } }
+        for research in cache.results.values { add(research.record, research: research) }
+        var result = Self()
+        for business in businesses.values where !business.closed {
+            result.funnel.discovered += 1
+            if business.website { result.funnel.withUsableWebsite += 1 }
+            guard let record = business.record, record.status != .drop,
+                  let domain = record.businessDomain, let person = record.contact,
+                  let personURL = person.sourceURL, let personHost = URL(string: personURL)?.host,
+                  HostMatch.belongs(personHost, to: domain), person.source == .ownSite,
+                  person.name.split(separator: " ").count >= 2, person.titleSource == .checkedDirect,
+                  ProspectResearcher.isEvidenced(.init(url: personURL, excerpt: person.name), in: record.snapshots),
+                  let route = record.route, route.source == .ownSite, !route.value.isEmpty,
+                  let routeHost = URL(string: route.sourceURL)?.host, HostMatch.belongs(routeHost, to: domain),
+                  routeSupported(route, in: record) else { continue }
+            result.funnel.appropriateContact += 1
+            if let research = business.research {
+                if research.draft(config: config, suppression: suppression, now: now) != nil { result.funnel.evidenceBackedOpportunity += 1 }
+            } else if record.status == .ready, LeadFunnel.isEvidenceBacked(record) {
+                let draft = OutreachDraftBuilder.build(for: record, config: config, language: "fr", messageID: "overview-" + record.id)
+                if MailAddress.domain(draft.to) != nil, OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: now) == nil {
+                    result.funnel.evidenceBackedOpportunity += 1
+                }
+            }
+        }
+        return result
+    }
+
+    private static func routeSupported(_ route: ProspectRoute, in record: ProspectRecord) -> Bool {
+        record.snapshots.contains { snapshot in
+            guard snapshot.url == route.sourceURL else { return false }
+            if SiteExtractor.normalizePrintedEmail(snapshot.text).range(of: route.value, options: .caseInsensitive) != nil { return true }
+            return (snapshot.links ?? []).contains { link in
+                if route.kind == .email, link.lowercased().hasPrefix("mailto:") {
+                    return MailAddress.bare(String(link.dropFirst(7)).components(separatedBy: "?")[0]) == MailAddress.bare(route.value)
+                }
+                return link == "tel:" + route.value || link == route.value
+            }
+        }
+    }
+
+    /// A corrupt source produces an explicit partial-count warning; reading never rewrites it.
+    static func load(root: URL, leads: [Lead], config: ICPConfig, now: Date = .now) -> Self {
+        var warnings: [String] = []
+        func read<T: Decodable>(_ name: String, as: T.Type, fallback: T) -> T {
+            let url = root.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: url.path) else { return fallback }
+            do {
+                let data = try Data(contentsOf: url)
+                guard data.count <= 20_000_000 else { throw DiscoverySearchError.responseTooLarge }
+                return try JSONDecoder.iso.decode(T.self, from: data)
+            } catch { warnings.append("\(name) could not be read. Counts are partial; the file was retained."); return fallback }
+        }
+        let places = read("discovered.json", as: [DiscoveredPlace].self, fallback: [])
+        let records = read("prospects.json", as: [ProspectRecord].self, fallback: [])
+        let cache = read("quick-scan-research.json", as: WebsiteResearchCache.self, fallback: WebsiteResearchCache())
+        let suppression = SuppressionList(storageURL: root.appendingPathComponent("suppression.json"))
+        if let reason = suppression.unavailableReason { warnings.append(reason) }
+        var result = make(places: places, records: records, cache: cache, leads: leads, config: config,
+                          suppression: suppression, now: now)
+        result.warnings = warnings
+        return result
+    }
+}
+
 /// Pure, testable figures for the Overview dashboard. Every number is derived
 /// from the workspace records passed in; nothing here invents data.
 struct OverviewSnapshot: Equatable, Sendable {

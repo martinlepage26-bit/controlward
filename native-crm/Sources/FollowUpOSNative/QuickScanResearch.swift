@@ -114,6 +114,9 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
         \(OutreachDraftBuilder.footer(config: config, language: "fr"))
         """
         if let refusal = OutreachDraftGate.check(draft, prospect: record, config: config, suppression: suppression, now: now) {
+            if refusal.code == "refused:address-provenance" { return (nil, "The business address has not been verified on its own website.") }
+            if refusal.code == "refused:anti-spam:suppression-unavailable" { return (nil, refusal.detail) }
+            if refusal.code == "refused:anti-spam:unsubscribed" { return (nil, "This address has unsubscribed.") }
             return (nil, refusal.description)
         }
         return (draft, nil)

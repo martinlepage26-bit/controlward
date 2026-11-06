@@ -35,28 +35,57 @@ final class SuppressionList: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
     private let storageURL: URL?
+    private var readFailed = false
+    private var saveFailed = false
 
     init(storageURL: URL? = nil) {
         self.storageURL = storageURL
-        if let storageURL, let data = try? Data(contentsOf: storageURL),
-           let stored = try? JSONDecoder.iso.decode([Entry].self, from: data) {
-            entries = Dictionary(stored.map { ($0.address, $0) }, uniquingKeysWith: { first, _ in first })
+        if let storageURL {
+            do {
+                let data = try Data(contentsOf: storageURL)
+                guard data.count <= 20_000_000 else { readFailed = true; return }
+                let stored = try JSONDecoder.iso.decode([Entry].self, from: data)
+                guard stored.allSatisfy({ MailAddress.domain($0.address) != nil }) else { readFailed = true; return }
+                entries = Dictionary(stored.map { (MailAddress.bare($0.address), $0) }, uniquingKeysWith: { first, _ in first })
+            } catch {
+                let error = error as NSError
+                readFailed = !(error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError)
+            }
         }
     }
 
-    func contains(_ address: String) -> Bool { lock.withLock { entries[MailAddress.bare(address)] != nil } }
+    var unavailableReason: String? {
+        lock.withLock {
+            if readFailed { return "Unsubscribe records could not be read. Drafting and sending are blocked until the file is repaired." }
+            if saveFailed { return "The unsubscribe could not be saved. Drafting and sending are blocked; restore storage access and retry." }
+            return nil
+        }
+    }
+
+    func contains(_ address: String) -> Bool { lock.withLock { readFailed || saveFailed || entries[MailAddress.bare(address)] != nil } }
 
     var all: [Entry] { lock.withLock { entries.values.sorted { $0.address < $1.address } } }
 
-    func record(_ address: String, at: Date, via: String) {
+    @discardableResult
+    func record(_ address: String, at: Date, via: String) -> Bool {
         lock.withLock {
+            guard !readFailed else { return false }
             let key = MailAddress.bare(address)
-            guard entries[key] == nil else { return }
-            entries[key] = Entry(address: key, at: at, via: via)
-            if let storageURL, let data = try? JSONEncoder.iso.encode(Array(entries.values)) {
-                try? FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? data.write(to: storageURL, options: .atomic)
+            guard MailAddress.domain(key) != nil else { return false }
+            if entries[key] != nil && !saveFailed { return true }
+            var next = entries
+            next[key] = Entry(address: key, at: at, via: via)
+            if let storageURL {
+                do {
+                    let data = try JSONEncoder.iso.encode(next.values.sorted { $0.address < $1.address })
+                    try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                    try data.write(to: storageURL, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storageURL.path)
+                } catch { saveFailed = true; return false }
             }
+            entries = next
+            saveFailed = false
+            return true
         }
     }
 
@@ -68,8 +97,7 @@ final class SuppressionList: @unchecked Sendable {
         let text = (subject + " " + firstLine).lowercased()
         let words = ["unsubscribe", "désabonner", "desabonner", "désabonnement", "desabonnement", "stop"]
         guard words.contains(where: { text.contains($0) }) else { return false }
-        record(sender, at: at, via: "reply-to-unsubscribe")
-        return true
+        return record(sender, at: at, via: "reply-to-unsubscribe")
     }
 }
 
@@ -226,6 +254,7 @@ enum OutreachDraftGate {
     /// CASL: identification, mailing address, a working unsubscribe, a consent basis, and no suppressed address.
     static func antiSpam(_ draft: OutreachDraft, config: ICPConfig, suppression: SuppressionList) -> LeadPipelineRefusal? {
         let sender = config.sender
+        if let reason = suppression.unavailableReason { return LeadPipelineRefusal(code: "refused:anti-spam:suppression-unavailable", detail: reason) }
         if suppression.contains(draft.to) { return LeadPipelineRefusal(code: "refused:anti-spam:unsubscribed") }
         if !draft.body.contains(sender.organization) || !draft.body.contains(sender.name) {
             return LeadPipelineRefusal(code: "refused:anti-spam:identification")

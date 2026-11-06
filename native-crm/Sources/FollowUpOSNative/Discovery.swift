@@ -52,9 +52,15 @@ struct WebsiteResearchCache: Codable, Equatable {
     }
 
     mutating func merge(_ candidate: DiscoveryCandidate, result: QuickScanResearchResult) {
-        candidates.removeAll { $0.sourceID == candidate.sourceID }
-        candidates.append(candidate)
+        discover([candidate])
         results[candidate.sourceID] = result
+    }
+
+    mutating func discover(_ incoming: [DiscoveryCandidate]) {
+        for candidate in incoming {
+            candidates.removeAll { $0.sourceID == candidate.sourceID }
+            candidates.append(candidate)
+        }
     }
 
     func save(_ url: URL) throws {

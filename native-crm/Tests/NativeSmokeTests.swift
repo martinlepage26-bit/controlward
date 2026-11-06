@@ -18,6 +18,7 @@ struct NativeSmokeTests {
         guard CRMSaveTests.run() else { throw SmokeTestFailure.failed("CRM save tests failed") }
         guard WorkspaceModuleTests.run() else { throw SmokeTestFailure.failed("Workspace module policy tests failed") }
         guard OverviewModelTests.run() else { throw SmokeTestFailure.failed("Overview model tests failed") }
+        guard await ProspectingOverviewTests.run() else { throw SmokeTestFailure.failed("Unified prospecting overview tests failed") }
         guard ControlWardTests.run() else { throw SmokeTestFailure.failed("ControlWard workflow tests failed") }
         let securityPassed = SecurityTests.run()
         let integrationPassed = await IntegrationTests.run()

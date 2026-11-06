@@ -220,6 +220,8 @@ final class AgentResearchCoordinator: ObservableObject {
             let candidates = try request.candidates(now: clock.now)
             guard let segment = config.segments.first(where: { $0.osmSelectors.contains("office=company") }) else { throw AgentResearchError.invalidRequest }
             var cache = try WebsiteResearchCache.load(root.appendingPathComponent("quick-scan-research.json"))
+            cache.discover(candidates)
+            try cache.save(root.appendingPathComponent("quick-scan-research.json"))
             let guarded = GuardedLeadTransport(config: config, inner: InteractiveLeadTransport(inner: inner), audit: FileAuditSink(url: root.appendingPathComponent("cw-audit.log")), clock: clock)
             let researcher = QuickScanResearcher(config: config, transport: guarded, clock: clock)
             let suppression = SuppressionList(storageURL: root.appendingPathComponent("suppression.json"))

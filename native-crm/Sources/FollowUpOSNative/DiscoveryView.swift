@@ -217,6 +217,13 @@ struct DiscoveryView: View {
         do {
             if queued { results = try WebsiteResearchQueue.parse(websiteQueue) }
             else { results = try await DiscoveryClient().search(category: category.selector, latitude: lat, longitude: lon, radiusMeters: radius, limit: 50) }
+            if cacheWritable {
+                do {
+                    cached = try WebsiteResearchCache.load(cacheURL)
+                    cached.discover(results)
+                    try cached.save(cacheURL)
+                } catch { self.error = "Discovered listings could not be saved. Existing findings were retained." }
+            }
             guard queued || researchEnabled, !Task.isCancelled else { return }
             guard let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle) else { error = "Website research configuration is missing."; return }
             let config = try ICPConfig.load(directory: directory).interactiveSearch()
