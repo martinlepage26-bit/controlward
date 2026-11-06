@@ -1,5 +1,11 @@
 import Foundation
 
+/// Martin's explicitly selected campaign offer. It permits only its exact price wording, not arbitrary
+/// pricing claims. Existing drafts decode without this optional designation.
+enum OutreachOffer: String, Codable, Equatable, Sendable {
+    case quickScan99CAD = "pharos-quick-scan-99-cad"
+}
+
 /// A cold-outreach draft. It is only ever saved as a draft; sending goes through `OutreachSendGate`.
 struct OutreachDraft: Codable, Equatable, Identifiable, Sendable {
     var messageID: String
@@ -15,6 +21,7 @@ struct OutreachDraft: Codable, Equatable, Identifiable, Sendable {
     /// 1 for the first message, 2+ for follow-ups. Follow-ups are drafts only.
     var step: Int = 1
     var parentMessageID: String?
+    var approvedOffer: OutreachOffer?
     var id: String { messageID }
 }
 
@@ -236,8 +243,13 @@ enum OutreachDraftGate {
     static func content(_ draft: OutreachDraft, config: ICPConfig) -> LeadPipelineRefusal? {
         let text = draft.subject + "\n" + draft.body
         for rule in config.draftForbidden {
+            let checked: String
+            if rule.rule == "pricing", draft.approvedOffer == .quickScan99CAD,
+               draft.body.contains("Quick Scan à 99 $ CA, plus taxes"), draft.subject.contains("99 $ CA") {
+                checked = text.replacingOccurrences(of: "99 $ CA", with: "[approved Quick Scan amount]")
+            } else { checked = text }
             for pattern in rule.patterns {
-                if text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
+                if checked.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
                     return LeadPipelineRefusal(code: "refused:draft-content:\(rule.rule)")
                 }
             }
@@ -307,7 +319,7 @@ struct OutreachApproval: Codable, Equatable, Sendable {
 
     static func contentHash(_ draft: OutreachDraft) -> String {
         // Length-prefixed fields, so moving text from one field to another changes the hash.
-        let fields = [draft.to, draft.subject, draft.body, draft.listUnsubscribe ?? ""]
+        let fields = [draft.to, draft.subject, draft.body, draft.listUnsubscribe ?? "", draft.approvedOffer?.rawValue ?? ""]
         let canonical = fields.map { "\($0.utf8.count):\($0)" }.joined(separator: "\n")
         return SHA256Hex.digest(Data(canonical.utf8))
     }

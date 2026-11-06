@@ -17,6 +17,7 @@ PORTABLE_SOURCES=(
   LeadProof.swift
   LeadPipelineEnvironment.swift
   ProspectResearch.swift
+  QuickScanResearch.swift
   MailActionRunner.swift
   MailActionPresentation.swift
   ProjectControlWrites.swift
@@ -26,6 +27,7 @@ PORTABLE_TESTS=(
   MailActionOutcomeTests.swift
   LeadPipelineTestKit.swift
   LeadPipelineTests.swift
+  QuickScanResearchTests.swift
   LeadPipelinePlantedReds.swift
   MailControlTestKit.swift
   MailControlTests.swift

@@ -214,6 +214,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
             try admit(url, host: host, purpose: purpose, method: method, body: body)
             if case .ownSite = purpose { try await checkRobots(url, host: host) }
             await pace(host: host, purpose: purpose)
+            try Task.checkCancellation()
             var request = URLRequest(url: url)
             request.httpMethod = method
             request.httpBody = body
@@ -339,6 +340,7 @@ final class GuardedLeadTransport: @unchecked Sendable {
             var parsed = RobotsRules(groups: [])
             if let robotsURL = components.url {
                 await pace(host: host, purpose: .ownSite(domain: host))
+                try Task.checkCancellation()
                 var request = URLRequest(url: robotsURL)
                 request.setValue(config.etiquette.userAgent, forHTTPHeaderField: "User-Agent")
                 request.timeoutInterval = 15
