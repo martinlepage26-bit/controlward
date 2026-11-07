@@ -123,8 +123,111 @@ enum ControlWardTests {
             try expect(hygiene.exposureFindings.count == 1 && hygiene.exposureFindings[0].resolved, "rescan discarded the operator resolution")
             let reopenedHygiene = AppStore(storageURL: hygiene.storageURL, secrets: InMemorySecretStore())
             try expect(reopenedHygiene.exposureFindings == hygiene.exposureFindings && reopenedHygiene.tasks.map(\.id) == taskIDs, "security decisions did not survive reopen")
+            try BackupIdentityTests.run()
             print("ControlWard workflow tests: \(count) assertions passed")
             return true
         } catch { print("FAIL ControlWard workflow tests: \(error)"); return false }
+    }
+}
+
+/// Exercises decoded backup boundaries, including records outside the original
+/// eight CRM collections. Historical references may repeat; record IDs may not.
+@MainActor
+private enum BackupIdentityTests {
+    static func run() throws {
+        var workspace = PersistentWorkspace()
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        let company = Company()
+        let profile = GTMProfile(name: "Synthetic offer", criteria: ["Sector", "Size", "Area", "Need"], createdAt: now)
+        var lead = Lead(); lead.history = [FollowUpEvent(date: "2026-11-07", message: "Synthetic history")]
+        var audit = BilingualAudit(); audit.name = "Synthetic audit"; audit.transcripts = [BAEATranscript()]
+        workspace.contacts = [Contact()]; workspace.companies = [company]
+        workspace.opportunities = [Opportunity()]; workspace.tasks = [CRMTask()]; workspace.notes = [CRMNote()]
+        workspace.leads = [lead]; workspace.signals = [Signal()]; workspace.audits = [audit]
+        workspace.activity = [ActivityEvent(kind: "fixture", message: "Synthetic event")]
+        workspace.syncJobs = [SyncJob(target: .pharos)]
+        workspace.exposureFindings = [ExposureFinding(lens: "fixture", severity: .warning, title: "Synthetic finding", detail: "Fixture")]
+        workspace.controlWard.mail = try MailMetadataImport.decode(ControlWardTests.metadata())
+        workspace.controlWard.projectLinks = [RecordProjectLink(recordKey: "companies:\(company.id)", register: "https://example.test", projectID: "fixture", projectTitle: "Synthetic project")]
+        workspace.controlWard.captures = [ProjectCaptureReceipt(recordKey: "companies:\(company.id)", register: "https://example.test", itemID: "fixture")]
+        workspace.accountIntelligence.profiles = [profile]
+        workspace.accountIntelligence.assessments = [GTMFitAssessment(companyID: company.id, profileID: profile.id, evidence: Array(repeating: GTMFitEvidence(), count: 4), assessedAt: now)]
+        let event = GTMEvent(profileID: profile.id, source: "fixture", sourceEventID: "event", sourceAccountID: "account", accountName: "Synthetic", actionKey: "action", candidateCompanyID: company.id, domain: "example.test", kind: .handRaise, occurredAt: now, receivedAt: now, reference: "Synthetic evidence", isBotOrInternal: false)
+        workspace.accountIntelligence.events = [event]
+        workspace.accountIntelligence.observations = [GTMObservation(companyID: company.id, profileID: profile.id, source: "fixture", startsAt: now, throughAt: now, reference: "Synthetic window")]
+        workspace.accountIntelligence.snapshots = [AccountScoring.evaluate(company: company, profile: profile, workspace: workspace, now: now)]
+        // Two reviews of one event are a valid journal, not duplicate records.
+        workspace.accountIntelligence.reviews = [GTMEventReview(eventID: event.id, companyID: company.id, reason: "First review", reviewedAt: now), GTMEventReview(eventID: event.id, companyID: company.id, reason: "Later review", reviewedAt: now.addingTimeInterval(1))]
+        let encoded = try JSONEncoder().encode(ControlWardBackup(workspace: workspace))
+        let original = try JSONSerialization.jsonObject(with: encoded)
+        let paths = [
+            ["contacts"], ["companies"], ["opportunities"], ["tasks"], ["notes"], ["leads"], ["signals"],
+            ["audits"], ["automationRules"], ["activity"], ["syncJobs"], ["exposureFindings"], ["savedViews"],
+            ["controlWard", "mail"], ["controlWard", "projectLinks"], ["controlWard", "captures"],
+            ["accountIntelligence", "profiles"], ["accountIntelligence", "assessments"], ["accountIntelligence", "events"],
+            ["accountIntelligence", "observations"], ["accountIntelligence", "snapshots"],
+            ["leads", "0", "history"], ["audits", "0", "transcripts"]
+        ]
+        func replacing(_ value: Any, path: ArraySlice<String>, change: ([Any]) -> [Any]) -> Any {
+            guard let key = path.first else { return change(value as! [Any]) }
+            if let index = Int(key) {
+                var array = value as! [Any]; array[index] = replacing(array[index], path: path.dropFirst(), change: change); return array
+            }
+            var object = value as! [String: Any]; object[key] = replacing(object[key]!, path: path.dropFirst(), change: change); return object
+        }
+        func modified(_ path: [String], change: ([Any]) -> [Any]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: replacing(original, path: (["workspace"] + path)[...], change: change))
+        }
+        func refuses(_ data: Data) -> Bool {
+            do { _ = try AppStore.readControlWardBackup(data); return false } catch { return true }
+        }
+        var checks = 0, failures: [String] = []
+        func check(_ passed: Bool, _ name: String) {
+            checks += 1
+            if passed { print("  PASS backup: \(name)") }
+            else { failures.append(name); print("  FAIL backup: \(name)") }
+        }
+        check(try AppStore.readControlWardBackup(encoded).workspace == workspace, "valid complete records and repeated review references round-trip")
+        for path in paths {
+            check(refuses(try modified(path) { $0 + [$0[0]] }), "refuse duplicate \(path.joined(separator: ".")) identities")
+        }
+        for path in [["contacts"], ["companies"], ["opportunities"], ["tasks"], ["notes"], ["leads"], ["signals"], ["controlWard", "mail"]] {
+            let oversized = try modified(path) { values in
+                (0...10_000).map { _ -> Any in var row = values[0] as! [String: Any]; row["id"] = UUID().uuidString; return row }
+            }
+            check(refuses(oversized), "retain 10000-record cap for \(path.joined(separator: "."))")
+        }
+        // Do not introduce a new history limit that rejects existing valid backups.
+        let longHistory = try modified(["activity"]) { values in
+            (0...10_000).map { _ -> Any in var row = values[0] as! [String: Any]; row["id"] = UUID().uuidString; return row }
+        }
+        check(!refuses(longHistory), "unique activity history beyond10000 remains readable within20MB")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("backup-refusal-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AppStore(storageURL: root.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore())
+        store.createWorkspace(name: "Keep this synthetic workspace", industry: "Consulting")
+        let before = store.workspace, durable = try Data(contentsOf: store.storageURL)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        var refused = false
+        do { try store.restoreControlWardBackup(modified(["audits"]) { $0 + [$0[0]] }, confirmed: true) } catch { refused = true }
+        let afterBytes = try Data(contentsOf: store.storageURL)
+        let afterFiles = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        check(refused && store.workspace == before && afterBytes == durable && afterFiles == files, "malformed confirmed restore changes no memory, bytes or rollback files")
+        try store.restoreControlWardBackup(encoded, confirmed: true)
+        let reopened = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        check(reopened.audits == workspace.audits && reopened.gtm.reviews == workspace.accountIntelligence.reviews, "valid retry restores audits and review history through restart")
+        try store.commitWorkspace { next in next.audits.append(next.audits[0]) }
+        let existingExport = root.appendingPathComponent("existing-export.json")
+        let untouched = Data("Existing private backup must stay".utf8)
+        try SecureFiles.writePrivate(untouched, to: existingExport)
+        let newExport = root.appendingPathComponent("new-export.json")
+        var exportRefusals = 0
+        for target in [existingExport, newExport] {
+            do { try store.exportControlWardBackup(to: target) } catch { exportRefusals += 1 }
+        }
+        let retainedExport = try Data(contentsOf: existingExport)
+        check(exportRefusals == 2 && retainedExport == untouched && !FileManager.default.fileExists(atPath: newExport.path), "invalid export preserves an existing backup and creates no new file")
+        print("Backup identity tests: \(checks - failures.count)/\(checks) passed")
+        if !failures.isEmpty { throw SmokeTestFailure.failed("Backup identity validation: \(failures.count) failed") }
     }
 }
