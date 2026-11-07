@@ -544,14 +544,16 @@ final class AppStore: ObservableObject {
         guard !conversation.id.isEmpty, !handle.isEmpty else { return .skipped }
         let sourceID = "kairos:\(conversation.id)"
         if let index = workspace.leads.firstIndex(where: { $0.sourceID == sourceID }) {
-            var lead = workspace.leads[index]
-            if let appliedAt = lead.sourceUpdatedAt, conversation.lastMessageAt < appliedAt { return .unchanged }
-            if lead.sourceUpdatedAt != conversation.lastMessageAt {
+            let original = workspace.leads[index]
+            if let appliedAt = original.sourceUpdatedAt, conversation.lastMessageAt < appliedAt { return .unchanged }
+            var lead = LeadWorkflow.normalizeKairosLead(original)
+            if lead.sourceUpdatedAt != conversation.lastMessageAt || original.sourceMessage == nil {
                 if let latestMessage = conversation.latestMessage, !latestMessage.isEmpty {
-                    lead.lastMessage = String(latestMessage.prefix(4_000))
+                    lead.sourceMessage = String(latestMessage.prefix(4_000))
                 }
                 lead.sourceUpdatedAt = conversation.lastMessageAt
             }
+            lead.sourcePlatform = String(conversation.platform.prefix(80))
             // Sending a reply changes Kairos status without advancing its inbound
             // message timestamp. Reconcile that status even when the message is unchanged.
             if lead.status == .new && conversation.status.lowercased() == "answered" { lead.status = .contacted }
@@ -562,8 +564,8 @@ final class AppStore: ObservableObject {
 
         var lead = Lead.blank()
         lead.name = handle
-        lead.service = "Kairos · \(conversation.platform)"
-        lead.lastMessage = String((conversation.latestMessage ?? "").prefix(4_000))
+        lead.sourcePlatform = String(conversation.platform.prefix(80))
+        lead.sourceMessage = conversation.latestMessage.map { String($0.prefix(4_000)) }
         lead.notes = "Imported from a Kairos conversation classified as a lead."
         lead.status = conversation.status.lowercased() == "answered" ? .contacted : .new
         lead.sourceID = sourceID
@@ -1953,7 +1955,8 @@ final class AppStore: ObservableObject {
         return text
     }
 
-    func generateMessage(for lead: Lead) async -> GeneratedMessage {
+    func generateMessage(for originalLead: Lead) async -> GeneratedMessage {
+        let lead = LeadWorkflow.normalizeKairosLead(originalLead)
         let grounded = groundedDraft(for: lead)
 #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead) }

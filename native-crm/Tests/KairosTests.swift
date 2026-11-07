@@ -74,6 +74,9 @@ enum KairosTests {
             try check(replay.status == "synced" && replay.detail == "0 new, 0 updated, 2 unchanged, 2 skipped." && store.leads.map(\.id) == identities, "actual HTTP replay keeps local IDs and creates no duplicates")
             var lead = store.leads.first { $0.sourceID == "kairos:\(openID)" }!
             lead.status = .quoteSent; lead.notes = "Owner decision retained across connected imports"
+            lead.lastMessage = "Synthetic previously logged reply"
+            lead.history = [FollowUpEvent(date: "2026-11-01", message: lead.lastMessage)]
+            lead.outreachDraft = "Unsent follow-up under review"
             try check(store.update(lead), "local workflow decision is durably saved")
             let directory = workspaceURL.deletingLastPathComponent(), retained = root.appendingPathComponent("retained-workspace")
             let before = try encoder.encode(store.workspace)
@@ -91,8 +94,10 @@ enum KairosTests {
             let imported = await store.importKairosLeads()
             let lead = store.leads.first { $0.sourceID == "kairos:\(openID)" }!
             try check(imported.status == "synced" && imported.detail == "0 new, 1 updated, 1 unchanged, 2 skipped.", "actual D1 inbound update imports once")
-            try check(lead.id == before.id && lead.lastMessage == "Nouveau message synthétique — aucune réponse envoyée" && lead.sourceUpdatedAt == "2026-11-02T10:00:00.000Z", "new backend text and timestamp preserve local identity exactly")
+            try check(lead.id == before.id && lead.sourceMessage == "Nouveau message synthétique — aucune réponse envoyée" && lead.sourceUpdatedAt == "2026-11-02T10:00:00.000Z", "new backend incoming text and timestamp preserve local identity exactly")
             try check(lead.status == .quoteSent && lead.notes == "Owner decision retained across connected imports", "new backend answer preserves the owner's workflow status and notes")
+            try check(lead.lastMessage == before.lastMessage && lead.history == before.history && lead.outreachDraft == before.outreachDraft,
+                      "new real-backend incoming message preserves the saved reply and sent history")
             let reloaded = AppStore(storageURL: workspaceURL, secrets: secrets, transport: transport, reviewMode: false)
             try check(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "updated real-backend data survives reload")
         }
@@ -110,6 +115,7 @@ enum KairosTests {
             ("Kairos: older inbox snapshot cannot change lead status or message", ignoresOlderSnapshot),
             ("Kairos: newer message imports while preserving local status", newerMessage),
             ("Kairos: a blocked save publishes no new or updated lead; retry survives reload", failedSaveAndRetry),
+            ("Kairos: a newer incoming message preserves the saved reply and sent history", preservesOutreach),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -181,7 +187,7 @@ enum KairosTests {
             try expect(store.saveFailure != nil, "storage failure was not surfaced")
             try fm.removeItem(at: directory); try fm.moveItem(at: retained, to: directory)
             let retry = await store.importKairosLeads()
-            try expect(retry.status == "synced" && store.leads.count == 1 && store.leads[0].lastMessage == "New synthetic inbound text", "retry lost or duplicated the lead")
+            try expect(retry.status == "synced" && store.leads.count == 1 && store.leads[0].sourceMessage == "New synthetic inbound text", "retry lost or duplicated the lead")
             if existing { try expect(store.leads[0].status == .quoteSent && store.leads[0].notes == "Owner decision retained", "retry overwrote owner fields") }
             let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
             try expect(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "successful retry did not survive reload")
@@ -198,7 +204,7 @@ enum KairosTests {
         try expect(update.status == "synced" && update.detail == "0 new, 1 updated, 0 unchanged, 0 skipped.", "status-only update not counted")
         try expect(store.leads.count == 1 && store.leads[0].id == first.id, "status update duplicated the lead")
         try expect(store.leads[0].status == .contacted, "answered lead still marked new")
-        try expect(store.leads[0].lastMessage == first.lastMessage && store.leads[0].sourceUpdatedAt == timestamp, "status-only update overwrote message data")
+        try expect(store.leads[0].sourceMessage == first.sourceMessage && store.leads[0].lastMessage.isEmpty && store.leads[0].service.isEmpty && store.leads[0].sourceUpdatedAt == timestamp, "status-only update overwrote incoming data or invented outgoing context")
         let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
         try expect(reloaded.leads[0].status == .contacted, "status change was not persisted")
         let repeated = await store.importKairosLeads()
@@ -239,7 +245,25 @@ enum KairosTests {
         store.update(lead)
         let job = await store.importKairosLeads()
         try expect(job.detail == "0 new, 1 updated, 0 unchanged, 0 skipped.", "new message not updated")
-        try expect(store.leads[0].lastMessage == "Updated brief" && store.leads[0].sourceUpdatedAt == later, "new message data missing")
+        try expect(store.leads[0].sourceMessage == "Updated brief" && store.leads[0].lastMessage.isEmpty && store.leads[0].sourceUpdatedAt == later, "new incoming data missing or stored as an outgoing message")
         try expect(store.leads[0].status == .quoteSent, "new message overwrote local status")
+    }
+
+    static func preservesOutreach() async throws {
+        let (store, directory) = try makeStore([conversation(), conversation(status: "answered", at: "2026-10-14T10:00:00Z", message: "A newer incoming question")])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = await store.importKairosLeads()
+        var lead = store.leads[0]
+        lead.status = .quoteSent; lead.service = "AI workflow review"
+        lead.lastMessage = "Synthetic previously logged reply"
+        lead.history = [FollowUpEvent(date: "2026-10-13", message: lead.lastMessage)]
+        lead.outreachDraft = "Unsent follow-up under review"
+        store.update(lead)
+        let job = await store.importKairosLeads()
+        try expect(job.status == "synced", "updated incoming message was not imported")
+        let current = store.leads[0]
+        try expect(current.lastMessage == lead.lastMessage && current.history == lead.history && current.outreachDraft == lead.outreachDraft,
+                   "a new incoming message replaced the owner's reply or sent-message context")
+        try expect(current.service == lead.service && current.status == lead.status, "import replaced the owner's request or workflow status")
     }
 }

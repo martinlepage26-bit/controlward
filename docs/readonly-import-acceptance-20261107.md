@@ -22,9 +22,32 @@ while workspace recovery is blocked.
 
 The regression cases exercise new and existing leads/signals, upstream updates,
 GAP retirement, owner decisions, actual blocked writes, retry and exact reload.
-The full native suite passed after the repair: GAP13/13 and KAIROS5/5, along with
-the other native suites. The original red and repaired green outputs are
-retained in the private completion evidence.
+Current native coverage includes13 GAP,6 KAIROS and26 CRM cases. The initial
+atomic-repair suite passed GAP13/13 and KAIROS5/5; final packaged results are in
+the current release receipt. Original red and repaired green outputs are retained
+in the private completion evidence.
+
+## Incoming messages, drafts and sent history
+
+An actual217 editor with a synthetic imported KAIROS record showed the incoming
+question in the outgoing Follow-up message editor and the channel in Service/ask.
+A CRM-core regression also failed because the grounded draft treated that channel
+as the requested service. Another native regression failed because a newer
+incoming message overwrote the previously logged outgoing-message context.
+
+`Lead.sourceMessage` and `Lead.sourcePlatform` now retain inbound text and channel
+provenance. Fresh KAIROS imports leave the requested service and outgoing text
+empty. Later imports preserve the owner's service, unsent draft and sent history.
+The editor displays the incoming text read-only and starts a fresh follow-up
+composer only when requested.
+
+For older KAIROS records, the editor prepares a copy using actual sent history
+for outgoing context and retaining the old incoming text separately. A recognized
+old channel marker moves from Service/ask to source provenance. An owner-entered
+service and any saved draft remain intact. Cancelling does not rewrite the file;
+Save or a later successful re-import persists the repaired fields. Missing new
+optional fields still decode, and the new fields round-trip. Current UI evidence
+is in the release receipt.
 
 ## Actual KAIROS Worker and disposable D1
 
@@ -35,7 +58,7 @@ local configuration on127.0.0.1:8883, temporary D1/KV/R2, generated disposable
 keys, revoked synthetic channels and no production bindings or cron triggers.
 The native client uses `URLSessionTransport`, not an HTTP fake.
 
-The run passed19 assertions over8 real GET requests:
+The run passed20 assertions over8 real GET requests:
 
 - Unknown key returns401; the current service's operator key returns403.
 - Customer-account verification and inbox reads succeed.
@@ -45,7 +68,7 @@ The run passed19 assertions over8 real GET requests:
 - Replay creates nothing; a blocked local save publishes no phantom data,
   success job or health result; retry preserves IDs and reload is exact.
 - A later inbound message written to the actual D1 database imports once while
-  retaining the owner's quote-sent status and notes.
+  retaining the owner's quote-sent status, notes, saved reply and sent history.
 - Client requests use only GET `/v1/me` and GET `/v1/inbox`. No test key is
   saved in the workspace or diagnostics.
 
@@ -55,7 +78,7 @@ connected phases actually ran before accepting their results. It terminates the
 local service and removes its temporary database; the private receipt records
 verified cleanup.
 
-These are19 assertions, not19 network requests. The service can update API-key
+These are20 assertions, not20 network requests. The service can update API-key
 last-use metadata during a GET; client read-only behavior does not mean that the
 server performs no internal bookkeeping.
 

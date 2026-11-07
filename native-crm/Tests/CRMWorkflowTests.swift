@@ -21,6 +21,8 @@ enum CRMWorkflowTests {
             ("Outcomes: won/lost mirrors between a converted lead and its opportunity", outcomeMirrors),
             ("Draft: states only recorded facts (no invented quote, intent or notes)", draftIsGrounded),
             ("Draft: a manually entered lead with no inbound interaction is never told it contacted us", manualLeadDraftDoesNotImplyInbound),
+            ("Draft: an imported KAIROS platform label is not a requested service", kairosPlatformIsNotRequestedService),
+            ("KAIROS: legacy incoming text, sent context and saved drafts keep separate roles", legacyKairosMessageRoles),
             ("AI draft: unrecorded contact, conversation, quote, numbers or placeholders fall back to the grounded draft", aiDraftIsGuarded),
             ("AI draft: recorded inbound contact and a recorded quote may be rephrased; record text cannot close the data block", aiDraftAllowsRecordedFacts),
             ("Reminder: 9 AM on the due date, explicit instant first, none when done or past", reminderTiming),
@@ -37,6 +39,42 @@ enum CRMWorkflowTests {
         try PortableCheck.expect(try condition(), message)
     }
     private static let now = ISO8601DateFormatter().date(from: "2026-11-05T15:00:00Z")!
+
+    static func kairosPlatformIsNotRequestedService() async throws {
+        var lead = Lead.blank()
+        lead.name = "Camille"
+        lead.sourceID = "kairos:\(UUID())"
+        lead.service = "Kairos · instagram"
+        lead.lastMessage = "Synthetic incoming question about an AI review"
+        let draft = LeadWorkflow.draft(for: lead, in: PersistentWorkspace(), business: BusinessProfile())
+        try expect(!draft.text.contains("Kairos") && !draft.subject.contains("instagram"), "a channel label was invented as the requested service")
+    }
+
+    static func legacyKairosMessageRoles() async throws {
+        var legacy = Lead.blank()
+        legacy.name = "Camille"
+        legacy.sourceID = "kairos:\(UUID())"
+        legacy.service = "Kairos · instagram"
+        legacy.lastMessage = "Synthetic incoming question"
+        let original = legacy
+        let incoming = LeadWorkflow.normalizeKairosLead(legacy)
+        try expect(incoming.sourceMessage == legacy.lastMessage && incoming.sourcePlatform == "instagram", "legacy incoming provenance lost")
+        try expect(incoming.lastMessage.isEmpty && incoming.outreachDraft == nil && incoming.service.isEmpty, "incoming text or platform became an outbound draft/service")
+        try expect(legacy == original && LeadWorkflow.normalizeKairosLead(incoming) == incoming, "preparing an editor copy changed the original or was not idempotent")
+        let oldData = try JSONEncoder().encode(legacy)
+        let decodedOld = try JSONDecoder().decode(Lead.self, from: oldData)
+        try expect(decodedOld.sourceMessage == nil && decodedOld.sourcePlatform == nil, "old JSON no longer decodes without the optional fields")
+        legacy.history = [FollowUpEvent(date: "2026-11-04", message: "Synthetic logged reply")]
+        legacy.outreachDraft = "Unsent owner draft"
+        legacy.service = "AI workflow review"
+        let repaired = LeadWorkflow.normalizeKairosLead(legacy)
+        try expect(repaired.lastMessage == legacy.history.last?.message && repaired.sourceMessage == legacy.lastMessage, "sent history and incoming context were conflated")
+        try expect(repaired.history == legacy.history && repaired.outreachDraft == legacy.outreachDraft && repaired.service == legacy.service, "owner content was overwritten")
+        let roundTrip = try JSONDecoder().decode(Lead.self, from: JSONEncoder().encode(repaired))
+        try expect(roundTrip == repaired, "separate source fields and owner content did not round-trip")
+        var manual = manualLead(); manual.lastMessage = "Owner context"
+        try expect(LeadWorkflow.normalizeKairosLead(manual) == manual, "ordinary correspondence was changed")
+    }
 
     static func reminderPlan() async throws {
         var workspace = PersistentWorkspace()

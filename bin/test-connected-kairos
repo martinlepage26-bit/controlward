@@ -84,10 +84,10 @@ finally {
   for(const child of children)try{process.kill(-child.pid,'SIGKILL');}catch{}
   await Promise.race([Promise.allSettled([...children].map(child=>child.done)),new Promise(resolve=>setTimeout(resolve,2500))]);
   if(temp)await fs.rm(temp,{recursive:true,force:true});
-  if(proof&&process.env.CONTROLWARD_KAIROS_REPORT) {
+  if(proof) {
     proof.cleanup_verified=children.size===0&&!(await fs.stat(temp).then(()=>true,()=>false));
     proof.completed_at=new Date().toISOString();
-    await fs.writeFile(process.env.CONTROLWARD_KAIROS_REPORT,JSON.stringify(proof,null,2)+'\n',{mode:0o600});
+    if(process.env.CONTROLWARD_KAIROS_REPORT) await fs.writeFile(process.env.CONTROLWARD_KAIROS_REPORT,JSON.stringify(proof,null,2)+'\n',{mode:0o600});
     if(!proof.cleanup_verified){console.error('Disposable KAIROS cleanup was not verified');process.exitCode=1;}
   }
 }

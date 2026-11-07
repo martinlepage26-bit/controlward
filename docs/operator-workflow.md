@@ -42,3 +42,9 @@ An import reads lead-intent entries from up to200 prioritized conversations.
 GAP and KAIROS publish imported records only after the complete local save
 succeeds. If storage is blocked, restore access to the workspace folder and
 retry. Owner decisions and existing records remain intact.
+
+KAIROS incoming text appears in **Latest incoming message**, with its channel
+and source timestamp. Use **Write follow-up message** to start an outgoing draft.
+Incoming updates retain the saved reply, sent history and owner-entered service.
+On older mixed records, the editor prepares a repaired copy; Cancel leaves the
+file unchanged, while Save retains the separate source fields.
