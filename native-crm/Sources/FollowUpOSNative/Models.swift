@@ -295,15 +295,17 @@ enum AuditLanguage: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 struct AuditDimensionScore: Codable, Equatable, Sendable {
-    var disclosure = 0
-    var escalation = 0
-    var contextTransfer = 0
-    var tone = 0
-    var hallucinations = 0
+    var disclosure: Double = 0
+    var escalation: Double = 0
+    var contextTransfer: Double = 0
+    var tone: Double = 0
+    var hallucinations: Double = 0
 
     var weightedTotal: Double {
-        Double(disclosure) * 0.15 + Double(escalation) * 0.30 + Double(contextTransfer) * 0.30 + Double(tone) * 0.10 + Double(hallucinations) * 0.15
+        disclosure * 0.15 + escalation * 0.30 + contextTransfer * 0.30 + tone * 0.10 + hallucinations * 0.15
     }
+
+    var isValid: Bool { [disclosure, escalation, contextTransfer, tone, hallucinations].allSatisfy { $0.isFinite && (0...100).contains($0) } }
 }
 
 struct BAEATranscript: Codable, Identifiable, Equatable, Sendable {
@@ -316,6 +318,8 @@ struct BAEATranscript: Codable, Identifiable, Equatable, Sendable {
     var taxonomyCodes = ""
     var notes = ""
     var source = ""
+    var sampleCount: Int?
+    var scoreFieldsComplete: Bool?
 }
 
 struct BilingualAudit: Codable, Identifiable, Equatable, Sendable {
@@ -334,10 +338,39 @@ struct BilingualAudit: Codable, Identifiable, Equatable, Sendable {
     var companyID: UUID?
     var methodologyVersion = "Lantern v1.0 (BAEA-compatible)"
     var createdAt = Date.now.ISO8601Format()
+    /// nil follows imported evidence (or a legacy single assessment). False is
+    /// an explicit owner decision to withhold comparison until review is done.
+    var frenchScoresComplete: Bool?
+    var englishScoresComplete: Bool?
 
-    var languageGap: Double { abs(english.weightedTotal - french.weightedTotal) }
+    var frenchAssessmentComplete: Bool { assessmentComplete(.french, declared: frenchScoresComplete, samples: sampleSizeFR, scores: french) }
+    var englishAssessmentComplete: Bool { assessmentComplete(.english, declared: englishScoresComplete, samples: sampleSizeEN, scores: english) }
+    var languageGap: Double? {
+        guard frenchAssessmentComplete && englishAssessmentComplete else { return nil }
+        return abs(english.weightedTotal - french.weightedTotal)
+    }
+    var unscoredReason: String? {
+        guard languageGap == nil else { return nil }
+        var reasons: [String] = []
+        if sampleSizeFR <= 0 { reasons.append("French sample count is missing or zero.") }
+        else if !frenchAssessmentComplete { reasons.append("French assessment needs complete scores or review of its source weights.") }
+        if sampleSizeEN <= 0 { reasons.append("English sample count is missing or zero.") }
+        else if !englishAssessmentComplete { reasons.append("English assessment needs complete scores or review of its source weights.") }
+        return reasons.joined(separator: " ")
+    }
+    private func assessmentComplete(_ language: AuditLanguage, declared: Bool?, samples: Int, scores: AuditDimensionScore) -> Bool {
+        guard samples > 0 && scores.isValid else { return false }
+        if let declared { return declared }
+        let evidence = transcripts.filter { $0.language == language && $0.sampleCount != 0 }
+        guard !evidence.isEmpty || transcripts.isEmpty else { return false }
+        // Old multi-row exports did not retain row weights and used the final
+        // row as the aggregate. Preserve them, but do not endorse that result.
+        if evidence.count > 1 && evidence.contains(where: { $0.sampleCount == nil || $0.scoreFieldsComplete == nil }) { return false }
+        return evidence.allSatisfy { $0.scoreFieldsComplete != false && $0.scores.isValid && ($0.sampleCount.map { $0 > 0 } ?? true) }
+    }
     var priority: String {
-        switch languageGap {
+        guard let languageGap else { return "Unscored" }
+        return switch languageGap {
         case 15...: "Critical"
         case 8..<15: "High"
         case 3..<8: "Moderate"

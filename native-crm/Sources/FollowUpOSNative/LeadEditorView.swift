@@ -160,7 +160,7 @@ struct LeadEditorView: View {
                             Label(note.title, systemImage: "note.text").font(.callout)
                         }
                         ForEach(linked.audits) { audit in
-                            Label("Lantern · \(audit.name) · FR/EN gap \(audit.languageGap.formatted(.number.precision(.fractionLength(1))))", systemImage: "checkmark.seal").font(.callout)
+                            Label("Lantern · \(audit.name) · \(audit.languageGap.map { "FR/EN gap \($0.formatted(.number.precision(.fractionLength(1))))" } ?? "unscored — both assessments need evidence")", systemImage: "checkmark.seal").font(.callout)
                         }
                         ForEach(linked.tasks) { task in
                             Label("\(task.title) · \(task.status.label) · \(CalendarCRM.display(task.dueDate))", systemImage: "checklist").font(.callout)
