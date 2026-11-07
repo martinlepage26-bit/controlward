@@ -130,6 +130,8 @@ extension AppStore {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(ControlWardBackup(workspace: completeBackupWorkspace()))
         guard data.count <= 20_000_000 else { throw ControlWardError.invalid("This complete backup exceeds 20 MB. No partial backup was written.") }
+        // Refuse an unrestorable snapshot before creating or replacing a file.
+        _ = try Self.readControlWardBackup(data)
         // NSSavePanel grants this file, not permission to chmod its parent. Start a new
         // selected file privately, then replace it atomically; preserve existing backups
         // if the replacement fails. Managed rollback/recovery folders use writePrivate.
@@ -202,8 +204,40 @@ extension AppStore {
         let backup = try JSONDecoder().decode(ControlWardBackup.self, from: data)
         guard [1, 2].contains(backup.schemaVersion) else { throw ControlWardError.invalid("Unsupported backup version.") }
         let w = backup.workspace
-        let groups = [w.contacts.map(\.id), w.companies.map(\.id), w.opportunities.map(\.id), w.tasks.map(\.id), w.notes.map(\.id), w.leads.map(\.id), w.signals.map(\.id), w.controlWard.mail.map(\.id)]
-        guard groups.allSatisfy({ $0.count <= 10_000 && Set($0).count == $0.count }) else { throw ControlWardError.invalid("Backup contains repeated identities or oversized collections.") }
+        func records<T: Identifiable>(_ rows: [T], _ name: String, maximum: Int? = nil) throws {
+            if let maximum, rows.count > maximum {
+                throw ControlWardError.invalid("The backup's \(name) collection exceeds \(maximum) records.")
+            }
+            var identities = Set<T.ID>()
+            guard rows.allSatisfy({ identities.insert($0.id).inserted }) else {
+                throw ControlWardError.invalid("The backup's \(name) collection contains repeated identities. Nothing was changed.")
+            }
+        }
+        // Retain the existing per-collection limits. Other history remains
+        // bounded by the file limit, without adding a new truncation policy.
+        try records(w.contacts, "contacts", maximum: 10_000)
+        try records(w.companies, "companies", maximum: 10_000)
+        try records(w.opportunities, "opportunities", maximum: 10_000)
+        try records(w.tasks, "tasks", maximum: 10_000)
+        try records(w.notes, "notes", maximum: 10_000)
+        try records(w.leads, "leads", maximum: 10_000)
+        try records(w.signals, "signals", maximum: 10_000)
+        try records(w.controlWard.mail, "mail", maximum: 10_000)
+        try records(w.audits, "audits")
+        try records(w.automationRules, "automation rules")
+        try records(w.activity, "activity")
+        try records(w.syncJobs, "sync jobs")
+        try records(w.exposureFindings, "security findings")
+        try records(w.savedViews, "saved views")
+        try records(w.controlWard.projectLinks, "project links")
+        try records(w.controlWard.captures, "capture receipts")
+        try records(w.accountIntelligence.profiles, "account profiles")
+        try records(w.accountIntelligence.assessments, "fit assessments")
+        try records(w.accountIntelligence.events, "account events")
+        try records(w.accountIntelligence.observations, "observation windows")
+        try records(w.accountIntelligence.snapshots, "score snapshots")
+        for lead in w.leads { try records(lead.history, "lead history") }
+        for audit in w.audits { try records(audit.transcripts, "audit transcripts") }
         // Backups must satisfy the same metadata/link boundary as a fresh import.
         let messages: [[String: Any]] = w.controlWard.mail.map { mail in
             ["source_id": mail.sourceID, "subject": mail.subject, "sender": mail.sender,

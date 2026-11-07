@@ -1,0 +1,13 @@
+# Complete backup identity validation — 2026-11-07
+
+Build207 accepted a synthetic backup containing a repeated Lantern audit ID for restore confirmation. The preview was cancelled; workspace bytes remained unchanged. The native regression suite also reproduced missing identity checks in15 collections, plus a confirmed malformed restore that changed records and created a rollback file. Original-reader result:19/35 checks passed. These were isolated test stores, never the normal owner workspace.
+
+The reader now validates identities for all persisted record collections: contacts, companies, opportunities, tasks, notes, leads, signals, audits, automation rules, activity, sync jobs, security findings, saved views, mail metadata, project links, capture receipts, account profiles, fit assessments, account events, observation windows and score snapshots. It checks each lead's history and each audit's transcripts within that parent. A repeated ID refuses the complete backup before confirmation or a restore write, with the affected collection named.
+
+The existing20MB file limit and10000-record limits for the original eight CRM/mail collections remain. Website research and exclusions keep their existing decoder validation. This repair introduces no new history truncation or collection cap: a unique10001-entry activity history remains readable. Repeated references in account-review journals remain valid because a later review may refer to the same event.
+
+Export validates its complete snapshot before creating or replacing the selected file, so invalid state cannot be presented as a restorable backup. Existing destination bytes are retained on validation failure. Restore still requires owner confirmation, saves a private rollback, preserves current connector destinations and exclusions, clears queued writes/cursors and rotates the research generation.
+
+The regression suite covers23 duplicate-identity paths, the eight existing collection limits, complete-record round trip, repeated review references, long valid history, unchanged memory/bytes/file set on refusal, valid restore/restart, and failed export to both new and existing destinations. Running-app acceptance must verify malformed-file refusal, visible audit counts, valid retry, private rollback and exact reopen. Final source, results and installed package evidence are maintained in the PR and the published ControlWard report.
+
+The full product goal remains open until its requirement audit is satisfied. Notification delivery remains explicitly deferred by Martin. Fixture and review-workspace checks do not establish live mailbox or production-register integration, notarization, outreach or revenue.

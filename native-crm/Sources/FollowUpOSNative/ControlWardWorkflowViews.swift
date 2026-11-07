@@ -409,7 +409,13 @@ struct WorkspaceRecoveryControls: View {
         do {
             guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= 20_000_000 else { throw ControlWardError.invalid("Backups must be under 20 MB.") }
             let data = try Data(contentsOf: url), backup = try AppStore.readControlWardBackup(data)
-            preview = "Backup from \(backup.createdAt): \(backup.workspace.contacts.count) contacts, \(backup.workspace.tasks.count) tasks, \(backup.workspace.controlWard.mail.count) messages, \(backup.workspace.websiteResearch.candidates.count) website findings and \(backup.workspace.restoredSuppressionEntries.count) exclusions. " + (backup.workspace.researchMigrationComplete ? "Native research is restored with these records." : "This older backup has no unreviewed research; current research will be retained.")
+            let w = backup.workspace
+            preview = "Backup from \(backup.createdAt):\n"
+                + "\(w.leads.count) leads, \(w.contacts.count) contacts, \(w.companies.count) companies, \(w.opportunities.count) opportunities, \(w.tasks.count) tasks and \(w.notes.count) notes.\n"
+                + "\(w.audits.count) Lantern audits, \(w.signals.count) signals, \(w.controlWard.mail.count) messages and \(w.websiteResearch.candidates.count) website findings.\n"
+                + "\(w.savedViews.count) saved views, \(w.exposureFindings.count) security findings, \(w.activity.count) activity entries and \(w.automationRules.count) local rules.\n"
+                + "Account intelligence: \(w.accountIntelligence.profiles.count) offers and \(w.accountIntelligence.events.count) events. \(w.restoredSuppressionEntries.count) exclusions.\n"
+                + (w.researchMigrationComplete ? "Native research is restored with these records." : "This older backup has no unreviewed research; current research will be retained.")
             pending = data; confirm = true
         } catch { message = error.localizedDescription }
     }
