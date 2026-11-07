@@ -4,6 +4,11 @@ The native connector passed26 assertions over14 GET requests against actual
 PostgreSQL/pgvector and PostgREST16.5. This is controlled local acceptance, not
 verification of the owner's configured Supabase project.
 
+The additional official Supabase Envoy gateway run now passes35 native assertions
+over19 native requests: the original26/14 direct database/API checks plus9/5
+through the gateway. Four explicit controls (three gateway requests and one direct PostgREST request)
+are separate. Shipping app source is unchanged from build224.
+
 ## Source and runtime
 
 - GAP source: `martinlepage26-bit/GAP` at
@@ -76,11 +81,72 @@ harness, because it may serve other work.
 
 This verifies the native read/import workflow against GAP's actual migrated
 schema, database privileges and PostgREST JWT/query semantics. It does not run
-GAP's extraction/embedding pipeline or verify its dashboard. It does not test
-Supabase's Kong gateway or the new `sb_publishable_` API-key translation; that
-native header behavior retains fixture coverage. The owner's saved hostname
+GAP's extraction/embedding pipeline or verify its dashboard. Legacy Kong and
+Supabase's managed platform are not tested. The owner's saved hostname
 and account remain external dependencies. No production database, owner key,
 provider activation, outreach or notification delivery is involved.
+
+## Official Supabase Envoy gateway
+
+Supabase's current self-hosted default is Envoy, rather than Kong. The additional
+acceptance uses the unmodified four gateway configuration/entrypoint files from
+`supabase/supabase` at `dc73b346c1f37eaae9e529fae81a4307b78fefe6` and the image
+specified there, pinned as:
+
+`envoyproxy/envoy@sha256:1fde8efee875e4e4f6a39a90fe49d9338e1caacce5762034ef9fb4bbb9ad6aed`.
+
+The harness checks the exact Git blob hashes before using those files:
+
+| File | Git blob |
+|---|---|
+| envoy.yaml | def443b68817921d98180b58d558006a2f86233f |
+| cds.yaml | a2bb565ae8360ef1388e7ad072850e6bb09c1eed |
+| lds.template.yaml | d5648c8287e62cfaddce37cbeb17370020172a7b |
+| docker-entrypoint.sh | 2c67584a30e151879e11b21939b9f1ed9857a38f |
+
+Fresh opaque publishable/secret keys, HS256 legacy keys and ES256 internal JWTs
+enable the official translation path. The EC private key stays in process memory;
+PostgREST receives only the public EC JWK and the disposable legacy symmetric key.
+The existing three direct phases run first. A fourth phase forwards native
+requests through the official Envoy listener and its unmodified authentication,
+translation and routing filters to the same real PostgREST/database:
+
+- Unknown publishable key gets401.
+- Legacy anon JWT still works.
+- Opaque publishable key verifies and reimports all502 records without changes.
+- The native client sends the opaque key only as `apikey`, with no Bearer value;
+  the gateway supplies an ES256 anon JWT, verified by actual PostgREST.
+- Native `sb_secret_` refusal occurs before any gateway request. This is a format
+  guard, not a claim that arbitrary elevated legacy JWTs were tested.
+- Exact reload, credential absence and second-page behavior remain verified.
+
+Three direct gateway controls verify401 without an API key,403 for the OpenAPI
+root with a public key, and401 for an invalid ES256 signature carried alongside
+a valid publishable key. A fourth control reaches PostgREST directly without a
+JWT and is refused. A fixture-only pre-request function requires an explicit
+Bearer header and verified anon claims with expiry on the gap route. Its root
+health probe remains usable. This prevents anonymous-role fallback from falsely
+proving JWT translation; the function does not alter the committed GAP policies
+or generate a response. Readiness probes are not included in native request counts. The final database audit remains503 clusters,502 active,
+500 score rows,0 corpus documents and0 jobs. Cleanup includes the Envoy container.
+
+To reproduce, obtain the four files from the exact Supabase commit above and pull
+the exact Envoy digest, in addition to the earlier prerequisites:
+
+```sh
+CONTROLWARD_GAP_SOURCE=/absolute/path/to/clean/GAP \
+CONTROLWARD_SUPABASE_GATEWAY_SOURCE=/absolute/path/to/docker/volumes/api/envoy \
+  ./bin/test-connected-gaps
+```
+
+The optional gateway phase uses loopback port8886. The fixture uses only the REST
+route; Auth, Storage, Realtime, Studio and the other Supabase services are not
+started or claimed as verified.
+
+[Supabase Envoy architecture](https://supabase.com/docs/guides/self-hosting/self-hosted-envoy)
+and [key translation](https://supabase.com/docs/guides/self-hosting/self-hosted-auth-keys)
+describe the contract tested here. Self-hosted acceptance does not establish
+the owner's managed Supabase project or credentials.
 
 Runtime references:
 [PostgREST installation](https://docs.postgrest.org/en/stable/explanations/install.html),

@@ -6,38 +6,48 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
-import {randomBytes,randomUUID,createHmac} from 'node:crypto';
+import {randomBytes,randomUUID,createHmac,createHash,generateKeyPairSync,sign} from 'node:crypto';
 import assert from 'node:assert/strict';
 
 const root=path.resolve(import.meta.dirname,'..'),source=process.env.CONTROLWARD_GAP_SOURCE;
 const pin='c5e24d5a29e7499ab30f8bfc49cc89428fd5acfe';
 const pgImage='pgvector/pgvector@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8';
 const restImage='postgrest/postgrest@sha256:1347d7552b88f17832912c06afbf7c43209af6eeeb60834b04aae12c9bd9d5cc';
-const fixtureID=randomUUID(),prefix='cw-gap-'+fixtureID,db=prefix+'-db',rest=prefix+'-rest';
+const envoyImage='envoyproxy/envoy@sha256:1fde8efee875e4e4f6a39a90fe49d9338e1caacce5762034ef9fb4bbb9ad6aed';
+const envoySource=process.env.CONTROLWARD_SUPABASE_GATEWAY_SOURCE;
+const supabasePin='dc73b346c1f37eaae9e529fae81a4307b78fefe6';
+const envoyFiles={'envoy.yaml':'def443b68817921d98180b58d558006a2f86233f','cds.yaml':'a2bb565ae8360ef1388e7ad072850e6bb09c1eed','lds.template.yaml':'d5648c8287e62cfaddce37cbeb17370020172a7b','docker-entrypoint.sh':'2c67584a30e151879e11b21939b9f1ed9857a38f'};
+const fixtureID=randomUUID(),prefix='cw-gap-'+fixtureID,db=prefix+'-db',rest=prefix+'-rest',envoy=prefix+'-envoy';
 const label='controlward.gap.fixture='+fixtureID,children=new Set(),secrets=[];
 const env={...process.env};for(const k of Object.keys(env))if(/^(PGRST_|PG|SUPABASE_|CONTROLWARD_TEST_GAPS)/.test(k))delete env[k];
 const redact=s=>secrets.reduce((text,key)=>text.replaceAll(key,'[disposable secret]'),s);
-function run(command,args,{input,quiet=true,cwd=root}={}) {
+function run(command,args,{input,quiet=true,cwd=root,includeStderr=false}={}) {
   const p=spawn(command,args,{cwd,env,detached:true,stdio:['pipe','pipe','pipe']});children.add(p);let out='',err='';
   p.stdout.on('data',b=>{out+=b;if(!quiet)process.stdout.write(redact(String(b)));});p.stderr.on('data',b=>{err+=b;if(!quiet)process.stderr.write(redact(String(b)));});
-  p.stdin.end(input);p.done=new Promise((resolve,reject)=>{p.once('error',reject);p.once('exit',code=>{children.delete(p);code===0?resolve(out):reject(Error('Disposable GAP '+command+' failed: '+redact(err.slice(-1600))));});});p.done.catch(()=>{});return p;
+  p.stdin.end(input);p.done=new Promise((resolve,reject)=>{p.once('error',reject);p.once('exit',code=>{children.delete(p);code===0?resolve(out+(includeStderr?err:'')):reject(Error('Disposable GAP '+command+' failed: '+redact(err.slice(-1600))));});});p.done.catch(()=>{});return p;
 }
-let temp,gateway,proof;
+let temp,gateway,proof,useEnvoy=false;
 const requests=[],startedAt=new Date().toISOString();
 try {
   assert(source,'Set CONTROLWARD_GAP_SOURCE to a clean GAP checkout at '+pin);
   assert.equal((await run('git',['rev-parse','HEAD'],{cwd:source}).done).trim(),pin);
   assert.equal((await run('git',['status','--porcelain','--untracked-files=all'],{cwd:source}).done).trim(),'','GAP source must be clean');
   for(const file of await fs.readdir(source))assert(!/^\.env(?:\.|$)|^\.dev\.vars(?:\.|$)/.test(file)||file.endsWith('.example'),'Source contains local environment state');
-  for(const port of [8884,8885]){const test=net.createServer();await new Promise((resolve,reject)=>{test.once('error',reject);test.listen(port,'127.0.0.1',resolve);});await new Promise(resolve=>test.close(resolve));}
-  for(const image of [pgImage,restImage])await run('docker',['image','inspect',image,'--format','{{.Id}}']).done;
+  for(const port of [8884,8885,...(envoySource?[8886]:[])]){const test=net.createServer();await new Promise((resolve,reject)=>{test.once('error',reject);test.listen(port,'127.0.0.1',resolve);});await new Promise(resolve=>test.close(resolve));}
+  for(const image of [pgImage,restImage,...(envoySource?[envoyImage]:[])])await run('docker',['image','inspect',image,'--format','{{.Id}}']).done;
+  if(envoySource)for(const [name,sha] of Object.entries(envoyFiles)){const b=await fs.readFile(path.join(envoySource,name));assert.equal(createHash('sha1').update('blob '+b.length+'\0').update(b).digest('hex'),sha,'Supabase gateway source changed: '+name);}
   temp=await fs.mkdtemp(path.join(os.tmpdir(),'controlward-gap-postgrest-'));
   const password=randomBytes(24).toString('hex'),secret=randomBytes(48).toString('hex');secrets.push(password,secret);
   const part=o=>Buffer.from(JSON.stringify(o)).toString('base64url');const unsigned=part({alg:'HS256',typ:'JWT'})+'.'+part({role:'anon',exp:Math.floor(Date.now()/1000)+3600});const key=unsigned+'.'+createHmac('sha256',secret).update(unsigned).digest('base64url');secrets.push(key);
+  const hsToken=role=>{const value=part({alg:'HS256',typ:'JWT'})+'.'+part({role,exp:Math.floor(Date.now()/1000)+3600});return value+'.'+createHmac('sha256',secret).update(value).digest('base64url');};
+  const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),kid=randomUUID();
+  const ecToken=role=>{const value=part({alg:'ES256',kid,typ:'JWT'})+'.'+part({role,exp:Math.floor(Date.now()/1000)+3600});return value+'.'+sign('sha256',Buffer.from(value),{key:pair.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64url');};
+  const legacyService=hsToken('service_role'),ecAnon=ecToken('anon'),ecService=ecToken('service_role'),publishable='sb_publishable_'+randomBytes(16).toString('base64url')+'_'+randomBytes(6).toString('base64url'),opaqueSecret='sb_secret_'+randomBytes(16).toString('base64url')+'_'+randomBytes(6).toString('base64url');secrets.push(legacyService,ecAnon,ecService,publishable,opaqueSecret);
+  const jwks=JSON.stringify({keys:[{...pair.publicKey.export({format:'jwk'}),kid,alg:'ES256',use:'sig'},{kty:'oct',k:Buffer.from(secret).toString('base64url'),alg:'HS256',use:'sig'}]});
   await fs.writeFile(path.join(temp,'anon.key'),key,{mode:0o600});
   const pgEnv=path.join(temp,'postgres.env'),restEnv=path.join(temp,'postgrest.env');
   await fs.writeFile(pgEnv,'POSTGRES_PASSWORD='+password+'\nPGPASSWORD='+password+'\nPOSTGRES_DB=gap_test\n',{mode:0o600});
-  await fs.writeFile(restEnv,`PGRST_DB_URI=postgres://authenticator:${password}@${db}:5432/gap_test\nPGRST_DB_SCHEMAS=public\nPGRST_JWT_SECRET=${secret}\nPGRST_SERVER_HOST=0.0.0.0\nPGRST_DB_MAX_ROWS=1000\nPGRST_LOG_LEVEL=crit\n`,{mode:0o600});
+  await fs.writeFile(restEnv,`PGRST_DB_URI=postgres://authenticator:${password}@${db}:5432/gap_test\nPGRST_DB_SCHEMAS=public\nPGRST_JWT_SECRET=${envoySource?jwks:secret}\n${envoySource?'PGRST_DB_ANON_ROLE=anon\nPGRST_DB_PRE_REQUEST=public.controlward_require_verified_anon\n':''}PGRST_SERVER_HOST=0.0.0.0\nPGRST_DB_MAX_ROWS=1000\nPGRST_LOG_LEVEL=crit\n`,{mode:0o600});
   // Dedicated bridge; DB has no published port and the API binds to host loopback only.
   // Docker suppresses published ports on an --internal network.
   await run('docker',['network','create','--label',label,prefix]).done;
@@ -49,27 +59,45 @@ try {
   await sql(`CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS; CREATE ROLE authenticator LOGIN NOINHERIT PASSWORD '${password}'; GRANT anon TO authenticator; GRANT USAGE ON SCHEMA public TO anon,authenticated; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon,authenticated; ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon,authenticated;`);
   const migrations=(await fs.readdir(path.join(source,'supabase/migrations'))).filter(f=>f.endsWith('.sql')).sort();
   for(const file of migrations)await sql(await fs.readFile(path.join(source,'supabase/migrations',file),'utf8'));
+  // db-anon-role keeps the official gateway's unauthenticated root health probe usable.
+  // GAP reads independently require authenticated claims, so opaque-key success cannot
+  // be explained by PostgREST's anonymous-role fallback.
+  if(envoySource)await sql(`CREATE FUNCTION public.controlward_require_verified_anon() RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF current_setting('request.path',true)='/gap_clusters' AND (COALESCE(current_setting('request.jwt.claims',true)::jsonb->>'role','') <> 'anon' OR NOT (current_setting('request.jwt.claims',true)::jsonb ? 'exp') OR COALESCE(current_setting('request.headers',true)::jsonb->>'authorization','') NOT LIKE 'Bearer %') THEN RAISE EXCEPTION 'Verified fixture anon JWT required' USING ERRCODE='PT403'; END IF; END $$; GRANT EXECUTE ON FUNCTION public.controlward_require_verified_anon() TO anon;`);
   const seed=`INSERT INTO gap_clusters(id,market_key,category,cluster_label,summary,status) SELECT n,'synthetic_qc_ai','geography_language_gap',CASE WHEN n=1 THEN 'Manque d’accompagnement français — Québec' ELSE 'Synthetic gap '||n END,'Synthetic public research input',CASE WHEN n=502 THEN 'retired' ELSE 'active' END FROM generate_series(1,502) AS n;
 INSERT INTO gap_scores(gap_cluster_id,algorithm_version,frequency_score,intensity_score,breadth_score,wtp_score,workaround_score,segment_score,feasibility_score,defensibility_score,total_score) SELECT n,'synthetic',0.8,0.6,0.5,0.7,0.4,0.9,0.5,0.5,0.82 FROM generate_series(1,500) AS n;`;
   await sql(seed);
   const baseline=await sql("SELECT row_to_json(t) FROM (SELECT count(*) clusters,(SELECT count(*) FROM gap_scores) scores FROM gap_clusters) t;");
   assert.deepEqual(JSON.parse(baseline),{clusters:502,scores:500});
   assert.equal((await sql("SELECT has_table_privilege('anon','gap_clusters','SELECT') AND NOT has_table_privilege('anon','gap_clusters','INSERT,UPDATE,DELETE') AND NOT has_table_privilege('anon','raw_documents','SELECT');")).trim(),'t','Committed read-only/corpus policies not enforced');
-  await run('docker',['run','-d','--name',rest,'--label',label,'--network',prefix,'-p','127.0.0.1:8885:3000','--env-file',restEnv,restImage]).done;
+  await run('docker',['run','-d','--name',rest,'--label',label,'--network',prefix,'--network-alias','rest','-p','127.0.0.1:8885:3000','--env-file',restEnv,restImage]).done;
   let lastFailure='';
   ready=false;for(let i=0;i<100;i++){try{const response=await fetch('http://127.0.0.1:8885/gap_clusters?select=id&limit=1',{headers:{Authorization:'Bearer '+key}});if(response.ok){ready=true;break;}lastFailure=response.status+': '+await response.text();}catch(error){lastFailure=error.message;}await new Promise(resolve=>setTimeout(resolve,200));}
   if(!ready){const logs=await run('docker',['logs','--tail','20',rest]).done.catch(error=>error.message);throw Error('PostgREST not ready: '+lastFailure+'; '+logs);}
   const runtime=(await run('docker',['run','--rm',restImage,'/bin/postgrest','--version']).done).trim();
+  if(envoySource){
+    assert.equal((await fetch('http://127.0.0.1:8885/gap_clusters?select=id&limit=1')).status,403,'PostgREST allowed anonymous GAP reads in the translation proof');
+    const dir=path.join(temp,'envoy');await fs.mkdir(dir,{mode:0o700});for(const file of Object.keys(envoyFiles))await fs.copyFile(path.join(envoySource,file),path.join(dir,file));
+    const conf=path.join(temp,'envoy.env');await fs.writeFile(conf,`ANON_KEY=${key}\nSERVICE_ROLE_KEY=${legacyService}\nSUPABASE_PUBLISHABLE_KEY=${publishable}\nSUPABASE_SECRET_KEY=${opaqueSecret}\nANON_KEY_ASYMMETRIC=${ecAnon}\nSERVICE_ROLE_KEY_ASYMMETRIC=${ecService}\nSUPABASE_PUBLIC_URL=http://127.0.0.1:8884\nDASHBOARD_USERNAME=synthetic\nDASHBOARD_PASSWORD=${password}\n`,{mode:0o600});
+    await run('docker',['create','--name',envoy,'--label',label,'--network',prefix,'-p','127.0.0.1:8886:8000','--env-file',conf,'--entrypoint','/bin/sh',envoyImage,'/etc/envoy/docker-entrypoint.sh']).done;
+    await run('docker',['cp',dir+'/.',envoy+':/etc/envoy/']).done;await run('docker',['start',envoy]).done;
+    ready=false;for(let i=0;i<150;i++){try{const response=await fetch('http://127.0.0.1:8886/rest/v1/gap_clusters?select=id&limit=1',{headers:{apikey:publishable}});if(response.ok){ready=true;break;}lastFailure=response.status+': '+await response.text();}catch(error){lastFailure=error.message;}await new Promise(resolve=>setTimeout(resolve,200));}
+    if(!ready)throw Error('Official Envoy not ready: '+lastFailure+'; '+await run('docker',['logs','--tail','20',envoy],{includeStderr:true}).done);
+    assert.equal((await fetch('http://127.0.0.1:8886/rest/v1/gap_clusters?select=id&limit=1')).status,401,'Gateway accepted no API key');
+    assert.equal((await fetch('http://127.0.0.1:8886/rest/v1/',{headers:{apikey:publishable}})).status,403,'Gateway exposed OpenAPI root to a public key');
+    const pieces=ecAnon.split('.');pieces[2]=(pieces[2][0]==='A'?'B':'A')+pieces[2].slice(1);const invalidSignature=pieces.join('.');secrets.push(invalidSignature);
+    assert.equal((await fetch('http://127.0.0.1:8886/rest/v1/gap_clusters?select=id&limit=1',{headers:{apikey:publishable,Authorization:'Bearer '+invalidSignature}})).status,401,'PostgREST accepted an invalid ES256 signature');
+  }
   gateway=http.createServer(async(req,res)=>{
-    const url=new URL(req.url,'http://127.0.0.1:8884');requests.push({method:req.method,path:url.pathname,query:url.search});
+    const url=new URL(req.url,'http://127.0.0.1:8884');requests.push({method:req.method,path:url.pathname,query:url.search,upstream:useEnvoy?'supabase_envoy':'postgrest'});
     if(req.method!=='GET'||url.pathname!=='/rest/v1/gap_clusters'){res.writeHead(405);res.end();return;}
-    try{const result=await fetch('http://127.0.0.1:8885/gap_clusters'+url.search,{headers:{Authorization:req.headers.authorization??'',apikey:req.headers.apikey??''}});res.writeHead(result.status,{'Content-Type':'application/json'});res.end(Buffer.from(await result.arrayBuffer()));}catch{res.writeHead(502);res.end('{}');}
+    try{const headers={};if(req.headers.authorization)headers.Authorization=req.headers.authorization;if(req.headers.apikey)headers.apikey=req.headers.apikey;const result=await fetch((useEnvoy?'http://127.0.0.1:8886/rest/v1/gap_clusters':'http://127.0.0.1:8885/gap_clusters')+url.search,{headers});res.writeHead(result.status,{'Content-Type':'application/json'});res.end(Buffer.from(await result.arrayBuffer()));}catch{res.writeHead(502);res.end('{}');}
   });await new Promise(resolve=>gateway.listen(8884,'127.0.0.1',resolve));
   Object.assign(env,{CONTROLWARD_TEST_GAPS:'http://127.0.0.1:8884',CONTROLWARD_TEST_GAPS_ROOT:temp,CONTROLWARD_TEST_GAPS_PHASE:'initial'});
   const totals=[];
-  for(const phase of ['initial','updated','reactivated']){
+  for(const phase of ['initial','updated','reactivated',...(envoySource?['gateway']:[])]){
     if(phase==='updated')await sql("UPDATE gap_clusters SET cluster_label='Accompagnement français mis à jour' WHERE id=1; UPDATE gap_scores SET total_score=0.91 WHERE gap_cluster_id=1; UPDATE gap_clusters SET status='retired' WHERE id=2; INSERT INTO gap_clusters(id,market_key,category,cluster_label,status) VALUES(503,'synthetic_qc_ai','other','Synthetic new gap','active');");
     if(phase==='reactivated')await sql("UPDATE gap_clusters SET status='active' WHERE id=2;");
+    if(phase==='gateway'){useEnvoy=true;env.CONTROLWARD_TEST_GAPS_GATEWAY='supabase-envoy';await fs.writeFile(path.join(temp,'legacy-anon.key'),key,{mode:0o600});await fs.writeFile(path.join(temp,'anon.key'),publishable,{mode:0o600});}
     env.CONTROLWARD_TEST_GAPS_PHASE=phase;
     const output=phase==='initial'?await run(path.join(root,'bin/test-native-app'),['--connected-gaps'],{quiet:false}).done:await run(path.join(root,'native-crm/.build/native-smoke-tests/FollowUpOSNativeSmokeTests'),['--connected-gaps'],{quiet:false}).done;
     const match=new RegExp('Connected GAP '+phase+': (\\d+) assertions; (\\d+) GET requests').exec(output);assert(match,'Native connected GAP phase did not run');totals.push({phase,assertions:Number(match[1]),get_requests:Number(match[2])});
@@ -78,7 +106,7 @@ INSERT INTO gap_scores(gap_cluster_id,algorithm_version,frequency_score,intensit
   assert.equal(requests.length,totals.reduce((n,p)=>n+p.get_requests,0));
   const audit=JSON.parse(await sql("SELECT row_to_json(t) FROM (SELECT count(*) clusters,count(*) FILTER (WHERE status='active') active,(SELECT count(*) FROM gap_scores) scores,(SELECT count(*) FROM raw_documents) corpus,(SELECT count(*) FROM queue_jobs) jobs FROM gap_clusters) t;"));
   assert.deepEqual(audit,{clusters:503,active:502,scores:500,corpus:0,jobs:0});
-  proof={started_at:startedAt,source_commit:pin,postgres_image:pgImage,postgrest_image:restImage,postgrest_version:runtime,migrations:migrations.length,phases:totals,assertions:totals.reduce((n,p)=>n+p.assertions,0),real_get_requests:requests.length,upstream:audit,real_database:true,real_postgrest:true,transparent_path_gateway:true,supabase_kong_tested:false,publishable_key_gateway_tested:false,read_only_policies_verified:true,owner_credentials:false,production_bindings:false};
+  proof={started_at:startedAt,source_commit:pin,postgres_image:pgImage,postgrest_image:restImage,postgrest_version:runtime,migrations:migrations.length,phases:totals,assertions:totals.reduce((n,p)=>n+p.assertions,0),real_get_requests:requests.length,upstream:audit,real_database:true,real_postgrest:true,transparent_path_gateway:true,supabase_kong_tested:false,publishable_key_gateway_tested:!!envoySource,supabase_envoy_source:envoySource?supabasePin:null,supabase_envoy_source_blobs:envoySource?envoyFiles:null,envoy_image:envoySource?envoyImage:null,envoy_native_get_requests:requests.filter(r=>r.upstream==='supabase_envoy').length,envoy_control_requests:envoySource?3:0,postgrest_anon_control_requests:envoySource?1:0,postgrest_requires_verified_jwt:!!envoySource,invalid_es256_signature_refused:!!envoySource,read_only_policies_verified:true,owner_credentials:false,production_bindings:false};
   console.log('Connected GAP independent DB audit:503 clusters,502 active,500 scores,0 corpus documents,0 jobs.');
 } catch(error){console.error(redact(error.message));process.exitCode=1;}
 finally {
@@ -87,7 +115,7 @@ finally {
   await Promise.race([Promise.allSettled([...children].map(p=>p.done)),new Promise(resolve=>setTimeout(resolve,2500))]);
   for(const child of children)try{process.kill(-child.pid,'SIGKILL');}catch{}
   let removed=true;
-  for(const name of [rest,db])try{const own=(await run('docker',['inspect',name,'--format','{{index .Config.Labels "controlward.gap.fixture"}}']).done).trim();assert.equal(own,fixtureID);await run('docker',['rm','-f','-v',name]).done;}catch{const exists=await run('docker',['ps','-aq','--filter','name=^/'+name+'$']).done.catch(()=>'?');if(exists.trim())removed=false;}
+  for(const name of [...(envoySource?[envoy]:[]),rest,db])try{const own=(await run('docker',['inspect',name,'--format','{{index .Config.Labels "controlward.gap.fixture"}}']).done).trim();assert.equal(own,fixtureID);await run('docker',['rm','-f','-v',name]).done;}catch{const exists=await run('docker',['ps','-aq','--filter','name=^/'+name+'$']).done.catch(()=>'?');if(exists.trim())removed=false;}
   try{await run('docker',['network','rm',prefix]).done;}catch{if((await run('docker',['network','ls','-q','--filter','name=^'+prefix+'$']).done.catch(()=>'?')).trim())removed=false;}
   if(temp)await fs.rm(temp,{recursive:true,force:true});
   if(proof){proof.cleanup_verified=removed&&children.size===0&&!(await fs.stat(temp).then(()=>true,()=>false));proof.completed_at=new Date().toISOString();if(process.env.CONTROLWARD_GAP_REPORT)await fs.writeFile(process.env.CONTROLWARD_GAP_REPORT,JSON.stringify(proof,null,2)+'\n',{mode:0o600});}
