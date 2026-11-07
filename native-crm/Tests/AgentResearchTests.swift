@@ -126,6 +126,52 @@ enum AgentResearchTests {
                 try expect(LeadWorkflow.emailSubject(for: manual, body: "Recorded warm follow-up", fallback: "Following up") == "Following up", "ordinary correspondence keeps grounded subject")
                 try expect(LeadWorkflow.emailDraftIssue(for: manual, body: "Recorded warm follow-up", subject: "Following up", config: nil, suppression: SuppressionList(), now: now) == nil, "ordinary owner-entered correspondence remains available")
             }),
+            ("Mail and Gmail composers preserve exact Unicode text and do not create extra headers", {
+                var lead = Lead.blank(); lead.email = "Paul <paul+review@example.test>"
+                let subject = "Quick Scan à 99 $ CA & suivi + résultats?"
+                let body = "Bonjour Paul,\n99 $ CA + taxes & détails : 50%\n?bcc=other@example.test # fragment\nÉrable • ✅"
+                let original = lead
+                let now = Date.now
+                for destination in LeadWorkflow.EmailDraftDestination.allCases {
+                    let url = try LeadWorkflow.emailDraftURL(for: lead, body: body, subject: subject, destination: destination,
+                                                            config: nil, suppression: SuppressionList(), now: now)
+                    let mailURL: URL
+                    if destination == .gmail {
+                        let gmail = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+                        try expect(gmail.scheme == "https" && gmail.host == "mail.google.com" && gmail.path == "/mail/", "fixed Gmail origin")
+                        try expect(gmail.queryItems?.map(\.name) == ["extsrc", "url"] && gmail.queryItems?.first?.value == "mailto", "only compose parameters")
+                        mailURL = URL(string: gmail.queryItems!.last!.value!)!
+                    } else { mailURL = url }
+                    let mail = URLComponents(url: mailURL, resolvingAgainstBaseURL: false)!
+                    try expect(mail.scheme == "mailto" && mail.path == "paul+review@example.test", "exact recipient including plus tag")
+                    try expect(mail.queryItems?.map(\.name) == ["subject", "body"], "message cannot add a bcc header")
+                    try expect(mail.queryItems?.first?.value == subject && mail.queryItems?.last?.value == body, "exact subject/body after both decoding layers")
+                    try expect(mail.percentEncodedQuery?.contains("+") == false, "literal plus cannot become a form-encoded space")
+                }
+                try expect(lead == original && lead.history.isEmpty && lead.outreachDraft == nil, "preparing composers does not log, send or save")
+            }),
+            ("Both draft destinations enforce current evidence, exclusions and valid message headers", {
+                let (researcher, _, candidate) = try QuickScanResearchTests.fixture()
+                let result = await researcher.research(candidate, segmentID: "clinic")
+                let config = researcher.config, now = researcher.clock.now
+                let draft = result.draft(config: config, suppression: SuppressionList(), now: now)!
+                var lead = Lead.blank(); lead.email = result.email!; lead.quickScanResearch = result; lead.outreachDraft = draft.body
+                let excluded = SuppressionList(); excluded.record(lead.email, at: now, via: "unsubscribe")
+                for destination in LeadWorkflow.EmailDraftDestination.allCases {
+                    func canPrepare(_ body: String = draft.body, subject: String = draft.subject,
+                                    list: SuppressionList = SuppressionList(), at: Date? = nil) -> Bool {
+                        (try? LeadWorkflow.emailDraftURL(for: lead, body: body, subject: subject, destination: destination,
+                                                        config: config, suppression: list, now: at ?? now)) != nil
+                    }
+                    try expect(canPrepare(), "valid sourced draft available in each destination")
+                    try expect(!canPrepare(list: excluded), "unsubscribe blocks both destinations")
+                    try expect(!canPrepare(at: now.addingTimeInterval(8 * 86_400)), "stale evidence blocks both destinations")
+                    try expect(!canPrepare(draft.body.replacingOccurrences(of: "99 $ CA", with: "199 $ CA")), "changed offer blocks both destinations")
+                    try expect(!canPrepare(" \n "), "empty text refused")
+                    try expect(!canPrepare(subject: draft.subject + "\r\nBcc: other@example.test"), "multiline subject refused")
+                }
+                try expect(lead.outreachDraft == draft.body && lead.history.isEmpty, "refused attempts preserve the unsent draft")
+            }),
             ("Cancellation performs no network request and creates no draft", {
                 let now = Date.now
                 let inner = FakeLeadTransport()

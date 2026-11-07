@@ -565,6 +565,47 @@ enum LeadWorkflow {
         return nil
     }
 
+    enum EmailDraftDestination: CaseIterable {
+        case defaultMail, gmail
+    }
+
+    private struct EmailDraftError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Both destinations recheck the same current policy before producing a URL. This only prepares
+    /// an unsent composer; it does not log a follow-up or claim that another application opened it.
+    static func emailDraftURL(for lead: Lead, body: String, subject: String,
+                              destination: EmailDraftDestination, config: ICPConfig?,
+                              suppression: SuppressionList, now: Date) throws -> URL {
+        if let issue = emailDraftIssue(for: lead, body: body, subject: subject, config: config,
+                                       suppression: suppression, now: now) {
+            throw EmailDraftError(message: issue)
+        }
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !subject.contains(where: { $0.isNewline || $0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }) else {
+            throw EmailDraftError(message: "Check the message and subject before opening a draft.")
+        }
+        var mail = URLComponents()
+        mail.scheme = "mailto"
+        mail.path = MailAddress.bare(lead.email)
+        mail.queryItems = [URLQueryItem(name: "subject", value: subject), URLQueryItem(name: "body", value: body)]
+        // Some webmail handlers decode query values as form data, where a literal + means a space.
+        mail.percentEncodedQuery = mail.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        guard let mailURL = mail.url else {
+            throw EmailDraftError(message: "This email draft could not be prepared. Check the recipient and message.")
+        }
+        if destination == .defaultMail { return mailURL }
+        // Google's documented mailto endpoint, without registering or changing an OS/browser handler:
+        // https://developer.chrome.com/blog/getting-gmail-to-handle-all-mailto-links-with-registerprotocolhandler
+        var gmail = URLComponents(string: "https://mail.google.com/mail/")!
+        gmail.queryItems = [URLQueryItem(name: "extsrc", value: "mailto"), URLQueryItem(name: "url", value: mailURL.absoluteString)]
+        gmail.percentEncodedQuery = gmail.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        guard let url = gmail.url else { throw EmailDraftError(message: "The Gmail draft could not be prepared. Use Copy instead.") }
+        return url
+    }
+
     /// A local draft that states only what the workspace records. It never claims a quote, a meeting or
     /// interest that is not recorded, and never quotes private notes.
     static func draft(for lead: Lead, in workspace: PersistentWorkspace, business: BusinessProfile) -> GroundedDraft {
