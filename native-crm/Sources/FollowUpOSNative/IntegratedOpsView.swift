@@ -193,9 +193,12 @@ private struct AuditQueueView: View {
             Section {
                 HStack(spacing: 12) {
                     OpsMetric(value: "\(store.audits.count)", label: "audits", symbol: "checkmark.seal")
-                    OpsMetric(value: store.averageLanguageGap.formatted(.number.precision(.fractionLength(1))), label: "avg FR/EN gap", symbol: "arrow.left.and.right")
+                    OpsMetric(value: store.averageLanguageGap.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "—", label: "avg FR/EN gap", symbol: "arrow.left.and.right")
                     OpsMetric(value: "\(store.audits.filter { $0.priority == "Critical" || $0.priority == "High" }.count)", label: "high priority", symbol: "exclamationmark.triangle")
                 }
+                .listRowBackground(Color.clear)
+                Text("Gap averages and priorities include only complete French and English assessments with positive sample counts.")
+                    .font(.caption).foregroundStyle(.secondary)
                 .listRowBackground(Color.clear)
             }
             Section("Evidence register") {
@@ -212,7 +215,7 @@ private struct AuditQueueView: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 3) {
-                                Text("gap \(audit.languageGap.formatted(.number.precision(.fractionLength(1))))").font(.callout.weight(.semibold))
+                                Text(audit.languageGap.map { "gap \($0.formatted(.number.precision(.fractionLength(1))))" } ?? "Gap unavailable").font(.callout.weight(.semibold))
                                 Text(audit.priority).font(.caption).foregroundStyle(audit.priority == "Critical" || audit.priority == "High" ? CRMTheme.rust : .secondary)
                             }
                         }
@@ -268,7 +271,11 @@ struct BilingualAuditEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: BilingualAudit
     private let existing: Bool
-    init(audit: BilingualAudit?) { _draft = State(initialValue: audit ?? BilingualAudit()); existing = audit != nil }
+    init(audit: BilingualAudit?) {
+        var initial = audit ?? BilingualAudit()
+        if audit == nil { initial.frenchScoresComplete = false; initial.englishScoresComplete = false }
+        _draft = State(initialValue: initial); existing = audit != nil
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack { Button("Cancel") { dismiss() }; Spacer(); Text(existing ? "Edit Lantern audit" : "New Lantern audit").font(.headline); Spacer(); Button("Save") { save() }.buttonStyle(.borderedProminent) }.padding(16).background(CRMTheme.ink).foregroundStyle(.white)
@@ -284,8 +291,11 @@ struct BilingualAuditEditor: View {
                     Stepper("French sample: \(draft.sampleSizeFR)", value: $draft.sampleSizeFR, in: 0...500)
                     Stepper("English sample: \(draft.sampleSizeEN)", value: $draft.sampleSizeEN, in: 0...500)
                 }
-                ScoreSection(title: "French", score: $draft.french)
-                ScoreSection(title: "English", score: $draft.english)
+                ScoreSection(title: "French", score: $draft.french, complete: Binding(get: { draft.frenchScoresComplete ?? draft.frenchAssessmentComplete }, set: { draft.frenchScoresComplete = $0 }))
+                ScoreSection(title: "English", score: $draft.english, complete: Binding(get: { draft.englishScoresComplete ?? draft.englishAssessmentComplete }, set: { draft.englishScoresComplete = $0 }))
+                if let reason = draft.unscoredReason {
+                    Section("Comparison unavailable") { Text(reason); Text("Review all five scores and the source sample weights, then mark each assessment complete. Legacy multi-row exports may need reimporting.") }
+                }
                 Section("Findings and remediation") { TextEditor(text: $draft.findings).frame(minHeight: 70).overlay(alignment: .topLeading) { if draft.findings.isEmpty { Text("Findings / quoted evidence").foregroundStyle(.secondary).padding(8) } }; TextEditor(text: $draft.remediation).frame(minHeight: 70).overlay(alignment: .topLeading) { if draft.remediation.isEmpty { Text("Remediation priority").foregroundStyle(.secondary).padding(8) } } }
             }.formStyle(.grouped)
         }.frame(width: 600, height: 680).onAppear { store.clearSaveFailure() }
@@ -299,13 +309,15 @@ struct BilingualAuditEditor: View {
 private struct ScoreSection: View {
     let title: String
     @Binding var score: AuditDimensionScore
+    @Binding var complete: Bool
     var body: some View {
         Section("\(title) scores (0–100)") {
-            Stepper("Disclosure: \(score.disclosure)", value: $score.disclosure, in: 0...100)
-            Stepper("Escalation: \(score.escalation)", value: $score.escalation, in: 0...100)
-            Stepper("Context transfer: \(score.contextTransfer)", value: $score.contextTransfer, in: 0...100)
-            Stepper("Tone / register: \(score.tone)", value: $score.tone, in: 0...100)
-            Stepper("Hallucinations: \(score.hallucinations)", value: $score.hallucinations, in: 0...100)
+            Stepper("Disclosure: \(score.disclosure.formatted(.number.precision(.fractionLength(0...2))))", value: $score.disclosure, in: 0...100)
+            Stepper("Escalation: \(score.escalation.formatted(.number.precision(.fractionLength(0...2))))", value: $score.escalation, in: 0...100)
+            Stepper("Context transfer: \(score.contextTransfer.formatted(.number.precision(.fractionLength(0...2))))", value: $score.contextTransfer, in: 0...100)
+            Stepper("Tone / register: \(score.tone.formatted(.number.precision(.fractionLength(0...2))))", value: $score.tone, in: 0...100)
+            Stepper("Hallucinations: \(score.hallucinations.formatted(.number.precision(.fractionLength(0...2))))", value: $score.hallucinations, in: 0...100)
+            Toggle("\(title) assessment complete", isOn: $complete)
         }
     }
 }

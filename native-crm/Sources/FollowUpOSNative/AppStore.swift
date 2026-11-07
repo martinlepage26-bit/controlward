@@ -840,9 +840,10 @@ final class AppStore: ObservableObject {
     }
 
     var qualifiedSignals: [Signal] { activeSignals.filter { $0.status == .qualified || $0.status == .routed }.sorted { $0.priority > $1.priority } }
-    var averageLanguageGap: Double {
-        guard !audits.isEmpty else { return 0 }
-        return audits.map(\.languageGap).reduce(0, +) / Double(audits.count)
+    var averageLanguageGap: Double? {
+        let gaps = audits.compactMap(\.languageGap)
+        guard !gaps.isEmpty else { return nil }
+        return gaps.reduce(0, +) / Double(gaps.count)
     }
 
     /// Totals from owner-entered values only. A converted lead's value and outcome come from its opportunity,
@@ -1203,7 +1204,8 @@ final class AppStore: ObservableObject {
                 }
             }
             if automationRules.contains(where: { $0.enabled && $0.trigger == .auditGap }) {
-                for audit in audits where audit.languageGap >= 8 {
+                for audit in audits {
+                    guard let gap = audit.languageGap, gap >= 8 else { continue }
                     let title = "Remediate Lantern gap: \(audit.name)"
                     let alreadyExists = tasks.contains { $0.title == title && $0.status != .done }
                     guard !alreadyExists else { continue }
@@ -1777,7 +1779,31 @@ final class AppStore: ObservableObject {
             return 0
         }
         let headers = rows[0].map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: " ", with: "_") }
+        struct ScoreSum {
+            var total = AuditDimensionScore()
+            var samples = 0
+            mutating func add(_ score: AuditDimensionScore, weight: Int, checkedTotal: Int) {
+                guard weight > 0 else { return }
+                let count = Double(weight)
+                total.disclosure += score.disclosure * count
+                total.escalation += score.escalation * count
+                total.contextTransfer += score.contextTransfer * count
+                total.tone += score.tone * count
+                total.hallucinations += score.hallucinations * count
+                samples = checkedTotal
+            }
+            var mean: AuditDimensionScore {
+                guard samples > 0 else { return AuditDimensionScore() }
+                let count = Double(samples)
+                // All input scores are in 0...100; keep floating-point boundary
+                // noise from making a mathematically valid mean look unscored.
+                func bounded(_ sum: Double) -> Double { min(100, max(0, sum / count)) }
+                return AuditDimensionScore(disclosure: bounded(total.disclosure), escalation: bounded(total.escalation),
+                    contextTransfer: bounded(total.contextTransfer), tone: bounded(total.tone), hallucinations: bounded(total.hallucinations))
+            }
+        }
         var grouped: [String: BilingualAudit] = [:]
+        var sums: [String: (french: ScoreSum, english: ScoreSum)] = [:]
         for (offset, row) in rows.dropFirst().enumerated() {
             func value(_ names: String...) -> String {
                 for name in names { if let i = headers.firstIndex(of: name), i < row.count { return row[i].trimmingCharacters(in: .whitespacesAndNewlines) } }
@@ -1791,17 +1817,16 @@ final class AppStore: ObservableObject {
                 ImportLimits.error(422, "\(source), row \(offset + 2), \(column): \(requirement). Nothing from this file was imported.")
             }
             guard language == "FR" || language == "EN" else { throw invalid("language", "use FR or EN") }
-            func scoreValue(_ raw: String, column: String, fallback: Int) throws -> Int {
-                guard !raw.isEmpty else { return fallback }
-                guard let number = Double(raw), number.isFinite, (0...100).contains(number), let whole = Int(exactly: number) else { throw invalid(column, "use a whole number from 0 to 100") }
-                return whole
+            func scoreValue(_ raw: String, column: String) throws -> Double {
+                guard !raw.isEmpty else { return 0 }
+                guard let number = Double(raw), number.isFinite, (0...100).contains(number) else { throw invalid(column, "use a number from 0 to 100") }
+                return number
             }
-            var score = language == "FR" ? audit.french : audit.english
-            score.disclosure = try scoreValue(value("disclosure"), column: "disclosure", fallback: score.disclosure)
-            score.escalation = try scoreValue(value("escalation"), column: "escalation", fallback: score.escalation)
-            score.contextTransfer = try scoreValue(value("context_transfer", "context"), column: "context_transfer", fallback: score.contextTransfer)
-            score.tone = try scoreValue(value("tone", "tone_register"), column: "tone", fallback: score.tone)
-            score.hallucinations = try scoreValue(value("hallucinations", "hallucination"), column: "hallucinations", fallback: score.hallucinations)
+            let rawScores = [value("disclosure"), value("escalation"), value("context_transfer", "context"), value("tone", "tone_register"), value("hallucinations", "hallucination")]
+            let complete = rawScores.allSatisfy { !$0.isEmpty }
+            let score = try AuditDimensionScore(disclosure: scoreValue(rawScores[0], column: "disclosure"),
+                escalation: scoreValue(rawScores[1], column: "escalation"), contextTransfer: scoreValue(rawScores[2], column: "context_transfer"),
+                tone: scoreValue(rawScores[3], column: "tone"), hallucinations: scoreValue(rawScores[4], column: "hallucinations"))
             let rawSamples = value("sample_size", "samples")
             let parsedSamples = Double(rawSamples).flatMap { $0.isFinite ? Int(exactly: $0) : nil }
             guard let samples = rawSamples.isEmpty ? 1 : (Int(rawSamples) ?? parsedSamples), samples >= 0 else {
@@ -1812,6 +1837,10 @@ final class AppStore: ObservableObject {
             guard !overflow else { throw invalid("sample_size", "the total sample count is too large") }
             if language == "FR" { audit.french = score; audit.sampleSizeFR = totalSamples }
             else { audit.english = score; audit.sampleSizeEN = totalSamples }
+            var weighted = sums[auditName] ?? (french: ScoreSum(), english: ScoreSum())
+            if language == "FR" { weighted.french.add(score, weight: samples, checkedTotal: totalSamples) }
+            else { weighted.english.add(score, weight: samples, checkedTotal: totalSamples) }
+            sums[auditName] = weighted
             audit.transcripts.append(BAEATranscript(
                 transcriptID: value("transcript_id", "id"),
                 language: language == "FR" ? .french : .english,
@@ -1820,9 +1849,16 @@ final class AppStore: ObservableObject {
                 scores: score,
                 taxonomyCodes: value("taxonomy_code(s)", "taxonomy_codes", "taxonomy"),
                 notes: value("notes_/_quoted_excerpt", "notes", "quoted_excerpt"),
-                source: source
+                source: source,
+                sampleCount: samples,
+                scoreFieldsComplete: complete
             ))
             grouped[auditName] = audit
+        }
+        for name in Array(grouped.keys) {
+            guard var audit = grouped[name], let weighted = sums[name] else { continue }
+            audit.french = weighted.french.mean; audit.english = weighted.english.mean
+            grouped[name] = audit
         }
         guard !grouped.isEmpty else { showNotice("No Lantern scores found."); return 0 }
         try commitWorkspace { next in
@@ -1837,6 +1873,10 @@ final class AppStore: ObservableObject {
                 audit.leadID = reviewed.leadID; audit.contactID = reviewed.contactID; audit.companyID = reviewed.companyID
                 audit.findings = reviewed.findings; audit.remediation = reviewed.remediation
                 audit.methodologyVersion = reviewed.methodologyVersion
+                // An explicit owner withholding decision survives a source refresh.
+                // Positive approval is rebound to the newly imported source evidence.
+                audit.frenchScoresComplete = reviewed.frenchScoresComplete == false ? false : nil
+                audit.englishScoresComplete = reviewed.englishScoresComplete == false ? false : nil
                 if audit.client.isEmpty { audit.client = reviewed.client }
                 // Keep identical transcript identities stable on replay, consuming each
                 // old identity once so repeated identical rows still remain distinct.
@@ -1844,6 +1884,8 @@ final class AppStore: ObservableObject {
                 for i in audit.transcripts.indices {
                     if let match = previous.firstIndex(where: { old in
                         var incoming = audit.transcripts[i]; incoming.id = old.id
+                        if old.sampleCount == nil { incoming.sampleCount = nil }
+                        if old.scoreFieldsComplete == nil { incoming.scoreFieldsComplete = nil }
                         return incoming == old
                     }) {
                         audit.transcripts[i].id = previous.remove(at: match).id

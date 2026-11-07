@@ -44,6 +44,18 @@ enum CSVImportTests {
             ("Lantern: canonical workbook preserves scaled scores and transcript evidence", baeaCanonicalEvidence),
             ("Lantern: invalid canonical scores never become zero scores", baeaCanonicalInvalid),
             ("Lantern: unfilled canonical template imports no scored evidence", baeaCanonicalTemplate),
+            ("Lantern rollup: CSV scores use sample weights and ignore row order", baeaWeightedScores),
+            ("Lantern rollup: large valid weights keep the boundary score valid", baeaWeightedBoundary),
+            ("Lantern rollup: canonical transcripts contribute equally", baeaCanonicalMean),
+            ("Lantern rollup: fractional scores retain their precision", baeaFractionalScores),
+            ("Lantern rollup: a missing language stays unscored with no task", baeaMissingLanguage),
+            ("Lantern rollup: partial score columns stay unscored", baeaIncompleteScores),
+            ("Lantern rollup: zero-sample rows do not affect the mean", baeaZeroWeight),
+            ("Lantern rollup: averages and automation exclude unscored audits", baeaComparableAverage),
+            ("Lantern rollup: genuine measured zero remains scored", baeaMeasuredZero),
+            ("Lantern rollup: an owner can mark an assessment incomplete", baeaOwnerIncomplete),
+            ("Lantern rollup: legacy integer scores and absent metadata still decode", baeaLegacyScores),
+            ("Lantern rollup: legacy multi-row evidence awaits source weights or review", baeaLegacyMultirow),
             ("CSV-1: organisation headers (EN/FR) fill company; first non-empty wins and is named", csv1OrganisationHeaders),
             ("CSV-2: nameless rows are skipped with their row numbers, not dropped", csv2NamelessRows),
             ("CSV-3: unrecognised columns are named in the result", csv3IgnoredColumns),
@@ -397,7 +409,7 @@ enum CSVImportTests {
         try expect(try workspaceBytes(store.workspace) == before, "ambiguous import deleted audits or imported part of the file")
     }
 
-    private static func canonicalWorkbook(in directory: URL, score: String = "4", template: Bool = false) throws -> URL {
+    private static func canonicalWorkbook(in directory: URL, score: String = "4", template: Bool = false, multirow: Bool = false) throws -> URL {
         let root = directory.appendingPathComponent("workbook-\(UUID())")
         let sheets = root.appendingPathComponent("xl/worksheets")
         try FileManager.default.createDirectory(at: sheets, withIntermediateDirectories: true)
@@ -413,8 +425,10 @@ enum CSVImportTests {
         try sheet([["Overview"]]).write(to: sheets.appendingPathComponent("sheet1.xml"), atomically: true, encoding: .utf8)
         let en = template ? ["synthetic-en"] + Array(repeating: "", count: 9) : ["synthetic-en", "support", "2026-11-06", score, "4", "4", "4", "4", "FIXTURE-EN", "Synthetic English excerpt"]
         let fr = template ? ["synthetic-fr"] + Array(repeating: "", count: 9) : ["synthetic-fr", "support", "2026-11-06", "3", "3", "3", "3", "3", "FIXTURE-FR", "Synthetic French excerpt"]
-        try sheet([headers, en]).write(to: sheets.appendingPathComponent("sheet2.xml"), atomically: true, encoding: .utf8)
-        try sheet([headers, fr]).write(to: sheets.appendingPathComponent("sheet3.xml"), atomically: true, encoding: .utf8)
+        let enRows = multirow ? [headers, ["synthetic-en-1", "support", "2026-11-06", "1", "1", "1", "1", "1", "FIXTURE-EN", "First English excerpt"], ["synthetic-en-2", "support", "2026-11-06", "5", "5", "5", "5", "5", "FIXTURE-EN", "Second English excerpt"]] : [headers, en]
+        let frRows = multirow ? [headers, ["synthetic-fr", "support", "2026-11-06", "2", "2", "2", "2", "2", "FIXTURE-FR", "French excerpt"]] : [headers, fr]
+        try sheet(enRows).write(to: sheets.appendingPathComponent("sheet2.xml"), atomically: true, encoding: .utf8)
+        try sheet(frRows).write(to: sheets.appendingPathComponent("sheet3.xml"), atomically: true, encoding: .utf8)
         let output = directory.appendingPathComponent("synthetic-canonical.xlsx")
         let zip = Process(); zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip"); zip.arguments = ["-qr", output.path, "xl"]; zip.currentDirectoryURL = root
         try zip.run(); zip.waitUntilExit()
@@ -452,6 +466,181 @@ enum CSVImportTests {
         try expect(try store.importBAEAXLSX(from: input) == 0, "unfilled template was counted as scored evidence")
         try expect(store.audits.isEmpty && store.notice == "No Lantern scores found.", "template created a misleading audit")
         try expect(!FileManager.default.fileExists(atPath: store.storageURL.path), "empty template wrote a workspace")
+    }
+
+    private static let rollupHeader = "audit,client,language,disclosure,escalation,context_transfer,tone,hallucinations,sample_size\n"
+    private static let weightedRows = [
+        "Weighted,Fixture,FR,20,20,20,20,20,1",
+        "Weighted,Fixture,FR,100,100,100,100,100,3",
+        "Weighted,Fixture,EN,60,60,60,60,60,4"
+    ]
+
+    static func baeaWeightedScores() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("weighted.csv", Data((rollupHeader + weightedRows.joined(separator: "\n")).utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let initial = store.audits[0]
+        let gap: Double? = initial.languageGap
+        try expect(Double(initial.french.disclosure) == 80 && Double(initial.english.disclosure) == 60 && gap == 20, "the last row replaced the sample-weighted language score")
+        try expect(initial.sampleSizeFR == 4 && initial.sampleSizeEN == 4 && initial.transcripts.count == 3, "sample or transcript evidence was lost")
+        let raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(initial)) as! [String: Any]
+        let traces = raw["transcripts"] as! [[String: Any]]
+        try expect(traces.compactMap { $0["sampleCount"] as? Int } == [1, 3, 4], "per-row sample weights were not retained with source evidence")
+        try (rollupHeader + weightedRows.reversed().joined(separator: "\n")).write(to: input, atomically: true, encoding: .utf8)
+        _ = try store.importBAEACSV(from: input)
+        let replay = store.audits[0]
+        try expect(Double(replay.french.disclosure) == 80 && Double(replay.english.disclosure) == 60, "row order changed the aggregate")
+        try expect(replay.id == initial.id && Set(replay.transcripts.map(\.id)) == Set(initial.transcripts.map(\.id)), "reordered identical evidence changed identities")
+    }
+
+    static func baeaWeightedBoundary() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let weights = [20159073515986425, 28328001726103041, 76792789922227480]
+        let rows = weights.map { "Boundary,Fixture,FR,100,100,100,100,100,\($0)" }
+            + ["Boundary,Fixture,EN,100,100,100,100,100,1"]
+        let input = try file("boundary.csv", Data((rollupHeader + rows.joined(separator: "\n")).utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let audit = store.audits[0]
+        try expect(audit.french.disclosure == 100 && audit.languageGap == 0 && audit.priority == "Low", "floating-point boundary noise invalidated a complete assessment")
+        try expect(audit.sampleSizeFR == weights.reduce(0, +), "large valid sample counts lost precision")
+    }
+
+    static func baeaCanonicalMean() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try store.importBAEAXLSX(from: canonicalWorkbook(in: directory, multirow: true))
+        let audit = store.audits[0]
+        let gap: Double? = audit.languageGap
+        try expect(Double(audit.english.disclosure) == 60 && Double(audit.french.disclosure) == 40 && gap == 20, "canonical transcripts were not averaged")
+        try expect(audit.sampleSizeEN == 2 && audit.sampleSizeFR == 1 && audit.transcripts.count == 3, "canonical sample counts changed")
+    }
+
+    static func baeaFractionalScores() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("fractional.csv", Data((rollupHeader + "Fractional,Fixture,FR,12.5,12.5,12.5,12.5,12.5,1\nFractional,Fixture,EN,10,10,10,10,10,1\n").utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let audit = store.audits[0]
+        let gap: Double? = audit.languageGap
+        try expect(Double(audit.french.disclosure) == 12.5 && gap.map { abs($0 - 2.5) < 0.000001 } == true, "fractional scores were refused or rounded")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        try expect(try workspaceBytes(reloaded.workspace) == workspaceBytes(store.workspace), "fractional precision did not survive reload")
+        let backup = directory.appendingPathComponent("fractional-backup.json")
+        try store.exportControlWardBackup(to: backup)
+        let restored = AppStore(storageURL: directory.appendingPathComponent("restored/workspace.json"), secrets: InMemorySecretStore())
+        try restored.restoreControlWardBackup(Data(contentsOf: backup), confirmed: true)
+        try expect(restored.audits == store.audits, "backup/restore lost fractional scores or source weights")
+        let reopened = AppStore(storageURL: restored.storageURL, secrets: InMemorySecretStore())
+        try expect(reopened.audits == store.audits, "restored fractional evidence did not survive restart")
+    }
+
+    static func baeaMissingLanguage() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("french-only.csv", Data((rollupHeader + "Unpaired,Fixture,FR,80,80,80,80,80,1\n").utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let gap: Double? = store.audits[0].languageGap
+        let average: Double? = store.averageLanguageGap
+        try expect(gap == nil && average == nil && store.audits[0].priority == "Unscored", "missing English was presented as a measured zero")
+        _ = store.runAutomations()
+        try expect(store.tasks.isEmpty, "missing-language evidence created a remediation task")
+    }
+
+    static func baeaIncompleteScores() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("partial.csv", Data("audit,client,language,escalation,samples\nPartial,Fixture,FR,20,1\nPartial,Fixture,EN,80,1\n".utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let gap: Double? = store.audits[0].languageGap
+        try expect(gap == nil && store.audits[0].priority == "Unscored", "missing score dimensions were invented as zeros in a comparison")
+        try expect(store.audits[0].transcripts.count == 2, "partial source evidence was dropped")
+        _ = store.runAutomations()
+        try expect(store.tasks.isEmpty, "incomplete scores created a remediation task")
+    }
+
+    static func baeaZeroWeight() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rows = weightedRows + ["Weighted,Fixture,FR,0,0,0,0,0,0"]
+        let input = try file("zero-weight.csv", Data((rollupHeader + rows.joined(separator: "\n")).utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let audit = store.audits[0]
+        let gap: Double? = audit.languageGap
+        try expect(Double(audit.french.disclosure) == 80 && gap == 20 && audit.sampleSizeFR == 4, "zero-sample evidence changed the mean")
+        try expect(audit.transcripts.count == 4, "zero-sample source row was lost")
+    }
+
+    static func baeaComparableAverage() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rows = ["Known,Fixture,FR,80,80,80,80,80,1", "Known,Fixture,EN,60,60,60,60,60,1", "Unpaired,Fixture,FR,100,100,100,100,100,1"]
+        let input = try file("averages.csv", Data((rollupHeader + rows.joined(separator: "\n")).utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let average: Double? = store.averageLanguageGap
+        try expect(average == 20, "unscored audit inflated the average")
+        _ = store.runAutomations()
+        try expect(store.tasks.count == 1 && store.tasks[0].title.contains("Known"), "automation did not restrict remediation to measured gaps")
+    }
+
+    static func baeaMeasuredZero() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("measured-zero.csv", Data((rollupHeader + "Measured,Fixture,FR,0,0,0,0,0,1\nMeasured,Fixture,EN,10,10,10,10,10,1\n").utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        let gap: Double? = store.audits[0].languageGap
+        try expect(gap == 10 && store.audits[0].priority == "High", "genuine measured zero was confused with absent evidence")
+    }
+
+    static func baeaOwnerIncomplete() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("owner-review.csv", Data(lanternCSV.utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        var raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(store.audits[0])) as! [String: Any]
+        raw["frenchScoresComplete"] = false
+        let reviewed = try JSONDecoder().decode(BilingualAudit.self, from: JSONSerialization.data(withJSONObject: raw))
+        try expect(store.update(reviewed), "owner review failed to save")
+        let gap: Double? = store.audits[0].languageGap
+        try expect(gap == nil && store.audits[0].priority == "Unscored", "owner's incomplete-assessment decision was ignored")
+        _ = try store.importBAEACSV(from: input)
+        let refreshedGap: Double? = store.audits[0].languageGap
+        try expect(refreshedGap == nil, "source refresh erased the owner's withholding decision")
+        _ = store.runAutomations()
+        try expect(store.tasks.isEmpty, "owner-unscored audit created a task")
+    }
+
+    static func baeaLegacyScores() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("legacy.csv", Data((rollupHeader + "Legacy,Fixture,FR,80,80,80,80,80,1\nLegacy,Fixture,EN,60,60,60,60,60,1\n").utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        var raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(store.audits[0])) as! [String: Any]
+        raw.removeValue(forKey: "frenchScoresComplete"); raw.removeValue(forKey: "englishScoresComplete")
+        var traces = raw["transcripts"] as! [[String: Any]]
+        for i in traces.indices { traces[i].removeValue(forKey: "sampleCount"); traces[i].removeValue(forKey: "scoreFieldsComplete") }
+        raw["transcripts"] = traces
+        let legacy = try JSONDecoder().decode(BilingualAudit.self, from: JSONSerialization.data(withJSONObject: raw))
+        let gap: Double? = legacy.languageGap
+        try expect(gap == 20 && legacy.sampleSizeFR == 1 && legacy.sampleSizeEN == 1, "legacy integer assessment no longer decodes")
+    }
+
+    static func baeaLegacyMultirow() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("legacy-rows.csv", Data((rollupHeader + weightedRows.joined(separator: "\n")).utf8), in: directory)
+        _ = try store.importBAEACSV(from: input)
+        var raw = try JSONSerialization.jsonObject(with: JSONEncoder().encode(store.audits[0])) as! [String: Any]
+        raw["french"] = ["disclosure": 100, "escalation": 100, "contextTransfer": 100, "tone": 100, "hallucinations": 100]
+        raw.removeValue(forKey: "frenchScoresComplete"); raw.removeValue(forKey: "englishScoresComplete")
+        var traces = raw["transcripts"] as! [[String: Any]]
+        for i in traces.indices { traces[i].removeValue(forKey: "sampleCount"); traces[i].removeValue(forKey: "scoreFieldsComplete") }
+        raw["transcripts"] = traces
+        let legacy = try JSONDecoder().decode(BilingualAudit.self, from: JSONSerialization.data(withJSONObject: raw))
+        let gap: Double? = legacy.languageGap
+        try expect(gap == nil && legacy.priority == "Unscored", "legacy last-row score was endorsed without its missing weights")
+        try expect(Double(legacy.french.disclosure) == 100 && legacy.transcripts.count == 3, "legacy evidence was modified or lost")
     }
 
     // MARK: - Slice CSV (Water 9:42 AM ET). Made-up rows only.
