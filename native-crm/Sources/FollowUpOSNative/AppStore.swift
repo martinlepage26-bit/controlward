@@ -28,6 +28,9 @@ final class AppStore: ObservableObject {
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
     @Published private(set) var busyTargets: Set<SyncTarget> = []
+    /// Latest read-only import attempt, including a failure that storage could not retain.
+    /// Kept outside the workspace so reporting a failed save cannot publish partial records.
+    @Published private var readImportJobs: [SyncTarget: SyncJob] = [:]
     /// Dry-run result that must exist before a Twenty push is allowed.
     @Published private(set) var twentyPreview: TwentyPlan?
     @Published private(set) var pharosPreviewFingerprint: String?
@@ -499,6 +502,7 @@ final class AppStore: ObservableObject {
         var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.inbox.v1")
         guard case .ready = recoveryState else {
             job.status = "failed"; job.error = "Workspace recovery is blocked; no Kairos data was imported."
+            readImportJobs[.kairos] = job
             return job
         }
         guard !busyTargets.contains(.kairos) else {
@@ -506,6 +510,7 @@ final class AppStore: ObservableObject {
             return job
         }
         busyTargets.insert(.kairos); defer { busyTargets.remove(.kairos) }
+        readImportJobs[.kairos] = job
         var created = 0, updated = 0, unchanged = 0, skipped = 0
         do {
             let inbox = try await kairosClient().pullInbox()
@@ -528,6 +533,7 @@ final class AppStore: ObservableObject {
                 next.activity.insert(ActivityEvent(kind: "kairos_import", message: "Imported Kairos leads: \(job.detail ?? "")", sourceID: job.id), at: 0)
             }
             saveFailure = nil
+            readImportJobs[.kairos] = job
             showNotice("Kairos import complete: \(job.detail ?? "")")
             Self.syncLog.notice("kairos import ok created=\(created) updated=\(updated) unchanged=\(unchanged) skipped=\(skipped)")
         } catch {
@@ -779,6 +785,7 @@ final class AppStore: ObservableObject {
         var job = SyncJob(target: .gaps, status: "sending", snapshotSchema: "gap_clusters")
         guard case .ready = recoveryState else {
             job.status = "failed"; job.error = "Workspace recovery is blocked; no market gaps were imported."
+            readImportJobs[.gaps] = job
             return job
         }
         guard !busyTargets.contains(.gaps) else {
@@ -786,6 +793,7 @@ final class AppStore: ObservableObject {
             return job
         }
         busyTargets.insert(.gaps); defer { busyTargets.remove(.gaps) }
+        readImportJobs[.gaps] = job
         var created = 0, updated = 0, unchanged = 0, retired = 0
         do {
             let clusters = try await gapClient().activeClusters()
@@ -806,6 +814,7 @@ final class AppStore: ObservableObject {
                 next.activity.insert(ActivityEvent(kind: "gap_import", message: "Imported market gaps: \(job.detail ?? "")", sourceID: job.id), at: 0)
             }
             saveFailure = nil
+            readImportJobs[.gaps] = job
             showNotice("Market gaps: \(job.detail ?? "")")
             logSync("gap import ok created=\(created) updated=\(updated) unchanged=\(unchanged) retired=\(retired)")
         } catch {
@@ -833,7 +842,12 @@ final class AppStore: ObservableObject {
             saveFailure = "Changes were not saved. \(error.localizedDescription)"
             showNotice(saveFailure ?? summary)
         }
+        readImportJobs[job.target] = job
         return job
+    }
+
+    func latestSyncJob(for target: SyncTarget) -> SyncJob? {
+        readImportJobs[target] ?? syncJobs.first { $0.target == target && $0.status != "queued" && $0.status != "staged" }
     }
 
     private static func applyGap(_ cluster: GapCluster, to workspace: inout PersistentWorkspace) -> LeadPullCounts.Outcome {

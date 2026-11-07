@@ -279,12 +279,14 @@ enum GapAnalysisTests {
             try Data("synthetic storage blocker".utf8).write(to: directory)
             let failed = await store.importGaps()
             try expect(failed.status == "failed", "blocked write reported a synced import")
+            try expect(store.latestSyncJob(for: .gaps) == failed, "the connector panel would show an older success instead of the failed attempt")
             try expect(try encoder.encode(store.workspace) == before, "failed import published new/updated/retired signals or healthy status")
             try expect(try Data(contentsOf: retained.appendingPathComponent("workspace.json")) == disk, "failed import changed durable data")
             try expect(store.saveFailure != nil, "storage failure was not surfaced")
             try fm.removeItem(at: directory); try fm.moveItem(at: retained, to: directory)
             let retry = await store.importGaps()
             try expect(retry.status == "synced" && store.activeSignals.count == 2, "retry lost or duplicated signals")
+            try expect(store.latestSyncJob(for: .gaps) == retry, "successful retry did not replace the failed-attempt display")
             if existing {
                 let current = store.signals.first { $0.sourceID == "gap:c1" }!
                 try expect(current.owner == "Martin" && current.status == .routed && current.title == "Market gap: Updated", "retry overwrote owner decisions or lost upstream update")

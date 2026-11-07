@@ -20,6 +20,11 @@ surfaces the error, and allows retry after storage is restored. A failed read
 can save a failed-job diagnostic when storage is available. GAP refuses imports
 while workspace recovery is blocked.
 
+The latest attempt is also retained outside the saved workspace for the connector
+panel. A failed save therefore remains visible after the short notice disappears,
+instead of exposing an older synced job as the latest result. Retry replaces this
+display. A restart can show only job diagnostics that were durably saved.
+
 The regression cases exercise new and existing leads/signals, upstream updates,
 GAP retirement, owner decisions, actual blocked writes, retry and exact reload.
 Current native coverage includes13 GAP,6 KAIROS and26 CRM cases. The initial

@@ -42,6 +42,8 @@ An import reads lead-intent entries from up to200 prioritized conversations.
 GAP and KAIROS publish imported records only after the complete local save
 succeeds. If storage is blocked, restore access to the workspace folder and
 retry. Owner decisions and existing records remain intact.
+The connector panel keeps the latest failed attempt visible while the app is open,
+even when storage could not save its diagnostic. A successful retry replaces it.
 
 KAIROS incoming text appears in **Latest incoming message**, with its channel
 and source timestamp. Use **Write follow-up message** to start an outgoing draft.

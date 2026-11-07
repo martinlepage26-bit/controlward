@@ -291,10 +291,11 @@ struct IntegrationCenterView: View {
     }
 
     @ViewBuilder private func lastJobText(_ target: SyncTarget) -> some View {
-        if let job = store.syncJobs.first(where: { $0.target == target && $0.status != "queued" && $0.status != "staged" }) {
+        if let job = store.latestSyncJob(for: target) {
             Text(job.status == "failed" ? "Last: failed. \(job.error ?? "")" : "Last: \(job.status). \(job.detail ?? "")")
                 .font(.caption).foregroundStyle(job.status == "failed" ? CRMTheme.rust : .secondary)
-                .lineLimit(2)
+                .lineLimit(job.status == "failed" ? nil : 2)
+                .help(job.error ?? job.detail ?? "")
                 .frame(maxWidth: 360, alignment: .trailing)
         }
     }
