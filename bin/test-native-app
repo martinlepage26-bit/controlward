@@ -16,6 +16,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/Integrations.swift" \
   "${SOURCE_ROOT}/Discovery.swift" \
   "${SOURCE_ROOT}/DiscoveryModels.swift" \
+  "${SOURCE_ROOT}/DiscoveryIntelligence.swift" \
   "${SOURCE_ROOT}/AgentResearch.swift" \
   "${SOURCE_ROOT}/GTMModels.swift" \
   "${SOURCE_ROOT}/AccountIdentity.swift" \
@@ -65,6 +66,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/MailboxTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/BuildInfoTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/DiscoveryIntelligenceTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/AgentResearchTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ResearchRecoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GTMTests.swift" \
@@ -88,7 +90,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
-if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos || "${1:-}" == --connected-gaps ]]; then
+if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos || "${1:-}" == --connected-gaps || "${1:-}" == --discovery-intelligence ]]; then
   "${TEST_BINARY}" "$@"
   exit
 fi

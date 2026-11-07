@@ -217,6 +217,11 @@ struct KairosConversation: Decodable, Sendable {
 
 struct KairosInbox: Decodable, Sendable {
     var conversations: [KairosConversation]
+    var disabledPlatforms: [String]?
+    var discoveryStates: [String: KairosEnquiryState] {
+        Dictionary(conversations.map { ("kairos:" + $0.id, KairosEnquiryState(intent: $0.intent, status: $0.status, lastMessageAt: $0.lastMessageAt,
+            hasIncomingText: !($0.latestMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)) }, uniquingKeysWith: { _, new in new })
+    }
 }
 
 /// Read-only client for the Kairos account API. ControlWard calls only GET /v1/me
@@ -277,7 +282,33 @@ struct KairosClient: Sendable {
         guard let inbox = try? JSONDecoder().decode(KairosInbox.self, from: response.body) else {
             throw IntegrationError.unexpected("Kairos inbox response could not be read")
         }
+        guard inbox.conversations.count <= 200, Set(inbox.conversations.map(\.id)).count == inbox.conversations.count,
+              inbox.conversations.allSatisfy({ !$0.id.isEmpty && $0.id.count <= 500 && $0.intent.count <= 80 && $0.status.count <= 80 && $0.lastMessageAt.count <= 80 }) else {
+            throw IntegrationError.unexpected("Kairos inbox identities or bounds could not be validated")
+        }
         return inbox
+    }
+
+    private func contextData(_ path: String) async throws -> Data {
+        let response = try await send(request(baseURL.appendingPathComponent(path)), context: "Kairos Discovery context")
+        guard response.body.count <= Self.maximumInboxBytes else {
+            throw IntegrationError.unexpected("Kairos context exceeded the 2 MB safety limit")
+        }
+        return response.body
+    }
+
+    func strategy() async throws -> KairosStrategy? {
+        struct Envelope: Decodable { var strategy: KairosStrategy? }
+        let data = try await contextData("v1/strategy")
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object.keys.contains("strategy") else {
+            throw IntegrationError.unexpected("Kairos strategy response could not be read")
+        }
+        return try JSONDecoder().decode(Envelope.self, from: data).strategy
+    }
+
+    func insights() async throws -> KairosInsights {
+        let data = try await contextData("v1/insights")
+        return try JSONDecoder().decode(KairosInsights.self, from: data)
     }
 }
 

@@ -13,7 +13,7 @@ BUILD_ROOT="${PROJECT_ROOT}/native-crm/.build/crm-core-tests"
 mkdir -p "${BUILD_ROOT}"
 
 source "${SCRIPT_DIR}/portable-sources.sh"
-CRM_CORE_SOURCES=(Models.swift GTMModels.swift AccountIdentity.swift AccountScoring.swift ControlWardModels.swift LeadWorkflow.swift)
+CRM_CORE_SOURCES=(Models.swift GTMModels.swift AccountIdentity.swift AccountScoring.swift ControlWardModels.swift LeadWorkflow.swift DiscoveryIntelligence.swift)
 
 SHIM_FLAGS=()
 if [ "$(uname -s)" != "Darwin" ]; then

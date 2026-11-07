@@ -64,7 +64,7 @@ enum KairosTests {
             catch IntegrationError.http(let status, _, _) { operatorRefused = status == 403 }
             try check(operatorRefused, "current Worker refuses operator API keys on the account route")
             let verified = await store.verifyConnector(.kairos)
-            try check(verified, "native customer-account verification reaches the actual Worker")
+            try check(verified, "native customer-account verification reaches the actual Worker: " + (store.workspace.connectorHealth[SyncTarget.kairos.rawValue]?.detail ?? "no result"))
             let imported = await store.importKairosLeads()
             try check(imported.status == "synced" && imported.detail == "2 new, 0 updated, 0 unchanged, 2 skipped.", "actual inbox imports two lead-intent conversations and skips ignored/non-lead entries")
             try check(Set(store.leads.compactMap(\.sourceID)) == ["kairos:\(openID)", "kairos:\(answeredID)"], "customer scope excludes the other account's lead")
@@ -89,6 +89,13 @@ enum KairosTests {
             try check(retry.status == "synced" && store.leads.map(\.id) == identities, "connected retry preserves identities after a real local write failure")
             let reloaded = AppStore(storageURL: workspaceURL, secrets: secrets, transport: transport, reviewMode: false)
             try check(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "complete connected import survives workspace reload")
+            let priorLeadIDs = store.leads.map(\.id)
+            let refreshed = await store.refreshKairosDiscovery()
+            try check(refreshed && store.websiteResearch.kairosContext?.strategy?.audience == "Synthetic clinic audience", "actual strategy route returns only the customer's targeting context")
+            try check(store.websiteResearch.kairosContext?.disabledPlatforms == ["instagram"] && store.websiteResearch.kairosContext?.insights.window == "30d" && store.websiteResearch.kairosContext?.insights.totals.posts == 0,
+                      "actual inbox pause state and nullable/empty aggregate insight contract are retained")
+            try check(store.leads.map(\.id) == priorLeadIDs && store.leads.first { $0.sourceID == "kairos:\(openID)" }?.outreachDraft == lead.outreachDraft,
+                      "actual context refresh reuses enquiries and preserves owner outreach")
         } else {
             let before = store.leads.first { $0.sourceID == "kairos:\(openID)" }!
             let imported = await store.importKairosLeads()
@@ -102,7 +109,7 @@ enum KairosTests {
             try check(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "updated real-backend data survives reload")
         }
         let requestSummary = transport.summary
-        try check(requestSummary.readOnly && requestSummary.paths.allSatisfy { ["/v1/me", "/v1/inbox"].contains($0) }, "native client used only the two allowed GET routes on the disposable service")
+        try check(requestSummary.readOnly && requestSummary.paths.allSatisfy { ["/v1/me", "/v1/inbox", "/v1/strategy", "/v1/insights"].contains($0) }, "native client used only the allowed account/context GET routes on the disposable service")
         let data = try String(contentsOf: workspaceURL, encoding: .utf8)
         try check(!data.contains(key), "test key is absent from the durable workspace and diagnostics")
         print("Connected KAIROS \(phase): \(checked) assertions; \(requestSummary.paths.count) GET requests to the real Worker.")

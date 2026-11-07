@@ -8,6 +8,14 @@ Start in **Pipeline**. Import an existing lead CSV, add a lead by hand, or use *
 
 The desktop's evidence search stops after 90 seconds and offers **Cancel search**. Completed research records are kept. Public providers can return sparse results or fail; inspect the recorded source/refusal evidence and qualify a business before treating it as a sales opportunity.
 
+Discovery's **KAIROS targeting and enquiries** panel reads the saved audience,
+positioning, content-performance context and inbox availability. Use **Review
+enquiry links** to confirm an enquiry's researched business. Suggestions require
+review, and manual links require a reason. **Review fit** records your explained
+offer-fit decision. Fit, recorded interest and website-published contactability
+stay separate; content metrics never establish buyer intent. Paused collection
+and an empty inbox leave interest unknown. See the [matching and evidence rules](kairos-discovery.md).
+
 Open a lead and check its name, source evidence, contact details, service or ask, and next follow-up date. Enter a value only when you have one. Choose **Review conversion…**, check the proposed company, contact, opportunity and follow-up task, then confirm. A business without a named person creates no invented contact. A second conversion reuses its links.
 
 Choose **Write follow-up message**. Read the draft and its recorded facts/unknowns. Apple Intelligence may rephrase it; unsupported output falls back to the grounded draft. **Save & close** retains the unsent text separately from contact history. Reopen the lead to continue editing it. **Copy** places the draft on the macOS clipboard. **Email** offers **Default mail app** and **Gmail in browser…**. Both recheck the saved draft, published contact route and current exclusion policy at the action. A visible reason explains a refused handoff. Gmail receives the recipient, subject and message, uses the account signed in to your browser, and may save an unsent draft. Check the sending account, recipient and text there. Opening either destination does not send or log a follow-up. If no composer appears, use Copy or choose the other destination. Record the actual follow-up in ControlWard only after it happened; this moves the draft into sent history.

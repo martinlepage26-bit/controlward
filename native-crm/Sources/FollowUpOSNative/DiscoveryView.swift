@@ -24,6 +24,13 @@ struct DiscoveryView: View {
     @State private var deadlineTask: Task<Void, Never>?
     @State private var websiteQueue = ""
     @State private var cached = WebsiteResearchCache()
+    @State private var fitReview: DiscoveryFitSelection?
+
+    private var attention: [DiscoveryAttention] {
+        var cache = store.websiteResearch
+        cache.candidates = results; cache.results = researchResults
+        return DiscoveryIntelligence.attention(cache: cache, leads: store.leads)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -49,6 +56,7 @@ struct DiscoveryView: View {
                 if agentResearch.running { Button("Cancel agent research") { agentResearch.cancel() } }
                 Button("Refresh findings") { reloadFindings() }
             }
+            DiscoveryContextPanel()
             HStack(alignment: .bottom, spacing: 12) {
                 Picker("Category", selection: $category) {
                     ForEach(DiscoveryCategory.allCases) { Text($0.label).tag($0) }
@@ -101,15 +109,21 @@ struct DiscoveryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            List(results) { candidate in
+            Text("Attention order: recent open enquiries, reviewed offer fit, then website-published contact routes. Outside-offer businesses come last. Unknown interest stays unknown; content metrics do not affect it.")
+                .font(.caption).foregroundStyle(.secondary)
+            List(attention) { assessment in
+                let candidate = assessment.business.candidate
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: "building.2.crop.circle").foregroundStyle(CRMTheme.steel).padding(.top, 2)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(candidate.name).font(.headline)
                         Text([candidate.category, candidate.address].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("Research priority \(candidate.researchPriority)/100 · category/area \(candidate.categoryLocationPoints), website \(candidate.websitePoints), phone \(candidate.phonePoints), email \(candidate.emailPoints) · intent unknown")
+                        Text("Listing completeness \(candidate.researchPriority)/100 · category/area \(candidate.categoryLocationPoints), website \(candidate.websitePoints), phone \(candidate.phonePoints), email \(candidate.emailPoints)")
                             .font(.caption.monospacedDigit()).foregroundStyle(CRMTheme.steel)
+                        DiscoveryAssessmentView(attention: assessment, review: store.websiteResearch.fitReviews?[assessment.id]) {
+                            fitReview = DiscoveryFitSelection(attention: assessment, review: store.websiteResearch.fitReviews?[assessment.id], strategyRevision: store.websiteResearch.kairosContext?.strategyRevision)
+                        }
                         if let website = candidate.website { Text(website).font(.caption).lineLimit(1) }
                         Text("\(candidate.sourceID.hasPrefix("website:") ? "Website research input" : "Evidence from OpenStreetMap") · \(candidate.sourceURL)").font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
                         if let research = researchResults[candidate.sourceID] {
@@ -148,6 +162,9 @@ struct DiscoveryView: View {
         .padding(22)
         .frame(minWidth: 900, minHeight: 620)
         .onDisappear { searchTask?.cancel(); deadlineTask?.cancel() }
+        .sheet(item: $fitReview) { selection in
+            DiscoveryFitReviewView(attention: selection.attention, review: selection.review, strategyRevision: selection.strategyRevision)
+        }
         .task {
             do {
                 cached = try store.researchSnapshot().cache

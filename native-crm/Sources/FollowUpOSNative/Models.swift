@@ -123,7 +123,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     var autoPilotEnabled = false
     /// Epoch of the inbox the cursor belongs to; a different epoch resets the cursor.
     var leadInboxEpoch: String?
-    /// LeadGen source ids of leads deleted in Contextward, so later updates do not recreate them. Ids only.
+    /// Imported source ids of deleted LeadGen/KAIROS leads, so later reads do not recreate them. Ids only.
     var dismissedLeadSources: [String] = []
 
     init() {}

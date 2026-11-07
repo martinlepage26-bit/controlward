@@ -45,7 +45,13 @@ signature, clean source stamp and isolated review checks are recorded separately
 in the current release receipt. Existing build224 is retained until that
 replacement passes its release gate.
 
-Native ControlWard Gmail OAuth, real mailbox actions and delivery remain
-unverified until the owner completes the app’s own Connect/Reconnect flow. No
-owner Keychain inspection, new permission grant or outreach was performed.
+The component check above did not verify a real account. Later on installed228,
+Martin completed the native connection. Successful live refresh, a real
+self-forwarded message body and a prefilled Reply followed by Cancel were
+observed. The secondary account initially added43 messages; repeating refresh
+added0. The read preserved mail metadata and CRM/research records and added one
+read audit. Send/delivery, saved-draft, archive and trash writes remain
+unexercised. See the [current ledger](completion-ledger-20261106.md) and
+[published receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research).
+No owner Keychain inspection or outreach was performed by the agent.
 Notification delivery remains deferred by Martin.
