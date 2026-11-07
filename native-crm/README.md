@@ -102,7 +102,7 @@ Integrations → **Mail accounts** pulls message metadata into Email → Local r
   archive, and mark read/unread call the Gmail connector. Sending and Trash ask for
   confirmation first. Trash uses `messages.trash` and does not erase the message.
   A connector that cannot perform an action disables that button and says why.
-  An existing read-only sign-in must use Connect again before mailbox changes work.
+  An expired or existing read-only sign-in can use **Reconnect** directly. Cancelled, failed or wrong-account sign-ins keep the previous token. Signing into Chrome or another Gmail app does not connect this native inbox.
 - Last 14 days, up to 100 messages per account per refresh; manual **Refresh** and every
   10 minutes while the app is open. Dedupe by `source_id` (`gmail:<id>`); review state,
   contact/company links and tasks are kept on refresh.

@@ -16,6 +16,7 @@ enum MailIntakeTests {
             ("Mail: refresh token round trips; 401 asks to reconnect", tokens),
             ("Mail: Keychain service names are per account", keychainNames),
             ("Mail: sign-in as a different Google account is rejected, nothing stored", mismatch),
+            ("Mail: reconnect preserves an existing sign-in on cancellation and failure, then replaces only the matching account", reconnect),
             ("Mail: re-intake of existing ids keeps review state, links and task", mergeKeepsState),
             ("Mail: disconnect deletes the token and resets state", disconnect),
             ("Mail: shipped client ID is default, reversed scheme, overridable", shippedClient),
@@ -259,6 +260,54 @@ enum MailIntakeTests {
         fake.profile = "ML@Infrafabric.io"
         try await engine.completeSignIn(email: "ml@infrafabric.io", code: "c", verifier: "v")
         try expect(tokens.exists("ml@infrafabric.io"), "case-insensitive match stored")
+    }
+    static func reconnect() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cw-mail-reconnect-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = AppStore(storageURL: dir.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(), reviewMode: true)
+        try expect(store.createWorkspace(name: "Synthetic reconnect", industry: "Consulting"), "workspace")
+        let saved = try Data(contentsOf: store.storageURL)
+        let account = MailAccount.personalGmail
+        let tokens = InMemoryMailTokenStore()
+        try tokens.write("synthetic-previous", for: account.email)
+        try tokens.write("synthetic-other-account", for: MailAccount.infrafabric.email)
+        let fake = FakeGoogle([])
+        let suiteName = "cw-mail-reconnect-\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let mail = MailIntakeController(tokens: tokens, transport: fake, defaults: defaults, accessMode: .live, reviewMode: false)
+        try mail.saveClientID(clientID)
+
+        fake.tokenStatus = 400
+        await mail.refresh(account, store: store)
+        try expect(mail.state(account) == .failed(MailIntakeError.reauthorize.localizedDescription), "expired sign-in needs renewal")
+        try expect(try tokens.read(account.email) == "synthetic-previous", "refresh failure deleted the sign-in")
+        let beforeCancel = fake.requests.count
+        await mail.connect(account, store: store) { _, _ in throw MailIntakeError.cancelled }
+        try expect(mail.state(account) == .failed(MailIntakeError.cancelled.localizedDescription), "cancellation status")
+        try expect(try tokens.read(account.email) == "synthetic-previous" && fake.requests.count == beforeCancel, "cancel changed the token or contacted Google")
+
+        let authorize: (URL, String) async throws -> URL = { url, scheme in
+            let state = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "state" }!.value!
+            return URL(string: "\(scheme):/oauth2redirect?state=\(state)&code=synthetic-code")!
+        }
+        await mail.connect(account, store: store, authorize: authorize)
+        try expect(mail.state(account) == .failed(MailIntakeError.signInFailed.localizedDescription), "exchange failure status")
+        try expect(try tokens.read(account.email) == "synthetic-previous", "exchange failure replaced the previous sign-in")
+
+        fake.tokenStatus = 200
+        fake.profile = "someone.else@example.test"
+        await mail.connect(account, store: store, authorize: authorize)
+        try expect(mail.state(account) == .failed(MailIntakeError.accountMismatch(fake.profile).localizedDescription), "wrong account status")
+        try expect(try tokens.read(account.email) == "synthetic-previous" && !tokens.exists(fake.profile), "wrong account replaced or saved a sign-in")
+        try expect(try Data(contentsOf: store.storageURL) == saved, "failed reconnect changed CRM data")
+
+        fake.profile = account.email
+        await mail.connect(account, store: store, authorize: authorize)
+        guard case .synced(_, let added) = mail.state(account) else { throw SmokeTestFailure.failed("successful reconnect did not refresh") }
+        try expect(added == 0 && (try tokens.read(account.email)) == "synthetic-refresh", "matching sign-in was not replaced")
+        try expect(try tokens.read(MailAccount.infrafabric.email) == "synthetic-other-account", "reconnect changed another account")
+        try expect(try Data(contentsOf: store.storageURL) == saved, "empty reconnect refresh changed CRM data")
     }
     static func mergeKeepsState() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cw-mail-\(UUID().uuidString)")
