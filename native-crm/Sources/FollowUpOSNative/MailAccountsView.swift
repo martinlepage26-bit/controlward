@@ -38,7 +38,7 @@ struct MailAccountsSection: View {
                     if account.isSignIn {
                         let connected = mail.isConfigured(account.email)
                         if connected {
-                            Button(mail.state(account) == .accessRequired ? "Check access" : "Refresh") { Task { await mail.refresh(account, store: store) } }
+                            Button([MailAccountState.accessRequired, .checkingAccess].contains(mail.state(account)) ? "Check access" : "Refresh") { Task { await mail.refresh(account, store: store) } }
                         }
                         Button(connected ? "Reconnect" : "Connect") {
                             Task { await mail.connect(account, store: store) { try await authorizer.authorize($0, callbackScheme: $1) } }
@@ -61,7 +61,7 @@ struct MailAccountsSection: View {
         switch state {
         case .failed, .accessRequired: CWPalette.red
         case .synced, .idle: CWPalette.green
-        case .syncing: CWPalette.blue
+        case .syncing, .checkingAccess: CWPalette.blue
         case .notConnected: CWPalette.gray
         }
     }

@@ -164,6 +164,7 @@ protocol MailTokenStore: Sendable {
     func delete(_ email: String) throws
     func exists(_ email: String) -> Bool
     func availability(_ email: String) -> CredentialAvailability
+    func cachedAvailability(_ email: String) -> CredentialAvailability?
     func readWithoutInteraction(_ email: String) throws -> String?
 }
 
@@ -201,6 +202,7 @@ struct KeychainMailTokenStore: MailTokenStore {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretStoreError.keychain(status) }
     }
     func availability(_ email: String) -> CredentialAvailability { lookup.availability(query(email)) }
+    func cachedAvailability(_ email: String) -> CredentialAvailability? { nil }
     func exists(_ email: String) -> Bool { availability(email) == .available }
 }
 
@@ -210,6 +212,7 @@ final class InMemoryMailTokenStore: MailTokenStore, @unchecked Sendable {
     func read(_ email: String) throws -> String? { lock.withLock { values[email] } }
     func readWithoutInteraction(_ email: String) throws -> String? { try read(email) }
     func availability(_ email: String) -> CredentialAvailability { exists(email) ? .available : .missing }
+    func cachedAvailability(_ email: String) -> CredentialAvailability? { availability(email) }
     func write(_ token: String, for email: String) throws {
         guard !token.isEmpty else { throw SecretStoreError.empty }
         lock.withLock { values[email] = token }
@@ -294,8 +297,13 @@ struct MailIntakeEngine: Sendable {
     let tokens: MailTokenStore
     let transport: HTTPTransport
 
-    func accessToken(for email: String, userInitiated: Bool = true) async throws -> String {
-        let value = try userInitiated ? tokens.read(email) : tokens.readWithoutInteraction(email)
+    func accessToken(for email: String, userInitiated: Bool = true,
+                     credentialIsCurrent: @Sendable () async -> Bool = { true }) async throws -> String {
+        let reader = tokens
+        let value = try await CredentialIO.read {
+            try userInitiated ? reader.read(email) : reader.readWithoutInteraction(email)
+        }
+        guard !Task.isCancelled, await credentialIsCurrent() else { throw CredentialLookupError.superseded }
         guard let refresh = value else { throw MailIntakeError.notConnected }
         let response = try await transport.send(config.refreshRequest(refreshToken: refresh))
         if response.status == 400 || response.status == 401 { throw MailIntakeError.reauthorize }
@@ -317,8 +325,11 @@ struct MailIntakeEngine: Sendable {
     }
 
     /// Pulls metadata for messages not already in `known` (source IDs).
-    func pull(email: String, known: Set<String>, userInitiated: Bool = true) async throws -> [MailMetadata] {
-        let client = GmailMetadataClient(accessToken: try await accessToken(for: email, userInitiated: userInitiated), transport: transport)
+    func pull(email: String, known: Set<String>, userInitiated: Bool = true,
+              credentialIsCurrent: @Sendable () async -> Bool = { true }) async throws -> [MailMetadata] {
+        let token = try await accessToken(for: email, userInitiated: userInitiated, credentialIsCurrent: credentialIsCurrent)
+        guard !Task.isCancelled, await credentialIsCurrent() else { throw CredentialLookupError.superseded }
+        let client = GmailMetadataClient(accessToken: token, transport: transport)
         let ids = try await client.listMessageIDs(query: Self.query, max: Self.maxPerPull)
         var out: [MailMetadata] = []
         for id in ids where !known.contains("gmail:\(id)") {
@@ -361,11 +372,12 @@ extension AppStore {
 // MARK: - Controller
 
 enum MailAccountState: Equatable, Sendable {
-    case notConnected, accessRequired, idle, syncing, synced(at: Date, added: Int), failed(String)
+    case notConnected, checkingAccess, accessRequired, idle, syncing, synced(at: Date, added: Int), failed(String)
     var label: String {
         switch self {
         case .notConnected: "Not connected"
         case .accessRequired: "Access needed. Choose Check access to use the saved sign-in. Automatic refresh is paused."
+        case .checkingAccess: "Checking saved access… Local mail metadata remains available."
         case .idle: "Connected"
         case .syncing: "Refreshing…"
         case .synced(let at, let added): "Updated \(at.formatted(date: .omitted, time: .shortened)) · \(added) new"
@@ -403,6 +415,8 @@ final class MailIntakeController: ObservableObject {
     let transport: HTTPTransport
     private let defaults: UserDefaults
     private var timer: Timer?
+    private var credentialRevisions: [String: UUID] = [:]
+    private var credentialProbeTasks: [String: Task<Void, Never>] = [:]
     let accessMode: MailAccessMode
 
     init(tokens: MailTokenStore? = nil, transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard,
@@ -416,14 +430,42 @@ final class MailIntakeController: ObservableObject {
         clientID = selectedMode == .isolated ? GoogleOAuthConfig.defaultClientID
             : (defaults.string(forKey: GoogleOAuthConfig.defaultsKey) ?? GoogleOAuthConfig.defaultClientID)
         for account in MailAccount.signIns {
-            let availability = self.tokens.availability(account.email)
-            credentialAvailability[account.email] = availability
-            states[account.email] = switch availability {
-            case .available: .idle
-            case .missing: .notConnected
-            case .accessRequired: .accessRequired
-            }
+            let availability = self.tokens.cachedAvailability(account.email) ?? .checking
+            applyAvailability(availability, email: account.email)
         }
+        for account in MailAccount.signIns where credentialAvailability[account.email] == .checking { startCredentialProbe(account.email) }
+    }
+
+    private func applyAvailability(_ value: CredentialAvailability, email: String) {
+        credentialAvailability[email] = value
+        states[email] = switch value {
+        case .checking: .checkingAccess
+        case .available: .idle
+        case .missing: .notConnected
+        case .accessRequired: .accessRequired
+        }
+    }
+
+    @discardableResult private func advanceCredentialRevision(_ email: String) -> UUID {
+        let revision = UUID()
+        credentialRevisions[email] = revision
+        credentialProbeTasks.removeValue(forKey: email)?.cancel()
+        return revision
+    }
+
+    private func startCredentialProbe(_ email: String) {
+        let revision = advanceCredentialRevision(email), reader = tokens
+        credentialProbeTasks[email] = Task { [weak self] in
+            let value = await CredentialIO.perform { reader.availability(email) }
+            guard let self, !Task.isCancelled, self.credentialRevisions[email] == revision else { return }
+            self.applyAvailability(value, email: email)
+            self.credentialProbeTasks.removeValue(forKey: email)
+        }
+    }
+
+    func waitForCredentialChecks() async {
+        let pending = Array(credentialProbeTasks.values)
+        for task in pending { await task.value }
     }
 
     func state(_ account: MailAccount) -> MailAccountState { states[account.forwardsInto ?? account.email] ?? .notConnected }
@@ -455,6 +497,7 @@ final class MailIntakeController: ObservableObject {
             let callback = try await authorize(url, engine.config.callbackScheme)
             let code = try engine.config.code(fromCallback: callback, expectedState: state)
             try await engine.completeSignIn(email: account.email, code: code, verifier: verifier)
+            advanceCredentialRevision(account.email)
             credentialAvailability[account.email] = .available
             states[account.email] = .idle
             await refresh(account, store: store)
@@ -463,27 +506,34 @@ final class MailIntakeController: ObservableObject {
 
     func disconnect(_ account: MailAccount) {
         guard account.isSignIn else { return }
+        advanceCredentialRevision(account.email)
         do { try tokens.delete(account.email); credentialAvailability[account.email] = .missing; states[account.email] = .notConnected }
         catch { states[account.email] = .failed(message(error)) }
     }
 
     func refresh(_ account: MailAccount, store: AppStore, userInitiated: Bool = true) async {
         guard accessMode == .live, account.isSignIn else { return }
-        if userInitiated { credentialAvailability[account.email] = tokens.availability(account.email) }
+        if !userInitiated, let pending = credentialProbeTasks[account.email] { await pending.value }
         guard isConfigured(account.email), states[account.email] != .syncing else { return }
         guard userInitiated || credentialAvailability[account.email] == .available else { return }
+        let revision = advanceCredentialRevision(account.email)
         states[account.email] = .syncing
         do {
             let known = Set(store.mail.map(\.sourceID))
-            let pulled = try await engine().pull(email: account.email, known: known, userInitiated: userInitiated)
+            let pulled = try await engine().pull(email: account.email, known: known, userInitiated: userInitiated) { [weak self] in
+                await self?.credentialIsCurrent(account.email, revision: revision) == true
+            }
+            guard credentialRevisions[account.email] == revision, !Task.isCancelled else { return }
             let added = try store.mergeMail(pulled, activity: "Mail intake (\(account.email))")
             credentialAvailability[account.email] = .available
             states[account.email] = .synced(at: .now, added: added)
         } catch let error as SecretStoreError {
+            guard credentialRevisions[account.email] == revision else { return }
             if case .keychain = error {
                 credentialAvailability[account.email] = .accessRequired; states[account.email] = .accessRequired
             } else { states[account.email] = .failed(message(error)) }
         } catch {
+            guard credentialRevisions[account.email] == revision else { return }
             if (error as? MailIntakeError) == .notConnected { credentialAvailability[account.email] = .missing }
             states[account.email] = .failed(message(error))
         }
@@ -491,6 +541,10 @@ final class MailIntakeController: ObservableObject {
 
     func refreshAll(store: AppStore, userInitiated: Bool = true) async {
         for account in MailAccount.signIns { await refresh(account, store: store, userInitiated: userInitiated) }
+    }
+
+    private func credentialIsCurrent(_ email: String, revision: UUID) -> Bool {
+        credentialRevisions[email] == revision
     }
 
     func startPeriodic(store: AppStore) {

@@ -8,6 +8,11 @@ data with the same interactive behavior as an explicit action.
 
 The implementation separates these operations:
 
+- Constructors use only memory hints and return without waiting for Keychain.
+  Synchronous lookups run on background dispatch workers, including explicit
+  key reads. Pending checks have a visible Checking access state. Per-target
+  revisions discard late probes after a credential replacement/removal, and
+  changed endpoint/key pairs cannot reuse a pending read.
 - Presence probes and automatic data reads use a per-request `LAContext` with
   `interactionNotAllowed = true`. Denied access remains denied.
 - Only an item-not-found response establishes missing credentials. Other probe
@@ -26,15 +31,21 @@ This is a failure-handling change, not an authentication bypass.
 
 Apple documents the [authentication-context query key](https://developer.apple.com/documentation/security/ksecuseauthenticationcontext)
 and [noninteractive context property](https://developer.apple.com/documentation/localauthentication/lacontext/interactionnotallowed).
+Its [lookup performance guidance](https://developer.apple.com/documentation/security/secitemcopymatching(_:_:))
+also requires keeping this blocking call away from the main thread.
 
 ## Verification scope
 
-Four injected Security-call cases pass: query/status policy; denied startup with
+Seven injected/memory-only cases cover: query/status policy; denied startup with
 unchanged workspace/Auto-Pilot; successful attributes followed by denied automatic
 PHAROS data access and explicit retry; and the actual mail periodic-start task
-with denied data access followed by an explicit single-account retry. They use
-synthetic credentials and in-process HTTP fakes. No real Keychain round trip is
-enabled. The app also compiles completely on this Mac.
+with denied data access followed by an explicit single-account retry; controlled
+delays proving main-actor progress and stale-probe rejection; and a delayed
+manual read whose endpoint/key changes before release, with zero outbound
+requests; and Stop/Disconnect during pending data reads, with zero later requests
+or restarted Auto-Pilot. Mutation races use a wholly in-memory store, including write/delete.
+Synthetic credentials and in-process HTTP fakes are used; no real Keychain
+round trip is enabled. A complete Mac application build remains a release gate.
 
 The focused entry is `bin/test-native-app --credential-access`. Local verification
 also compiles the same complete native source/test list with Swift6 whole-module

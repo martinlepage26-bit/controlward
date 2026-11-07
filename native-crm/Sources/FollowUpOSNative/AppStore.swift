@@ -28,6 +28,11 @@ final class AppStore: ObservableObject {
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
     @Published private(set) var keyAccessNeeded: Set<SyncTarget> = []
+    @Published private(set) var keyAccessChecking: Set<SyncTarget> = []
+    private var credentialConfigurationRevisions = Dictionary(uniqueKeysWithValues: SyncTarget.keyed.map { ($0, UUID()) })
+    private var credentialReadRevisions: [SyncTarget: UUID] = [:]
+    private var credentialProbeIDs: [SyncTarget: UUID] = [:]
+    private var credentialProbeTasks: [SyncTarget: Task<Void, Never>] = [:]
     @Published private(set) var busyTargets: Set<SyncTarget> = []
     /// Latest read-only import attempt, including a failure that storage could not retain.
     /// Kept outside the workspace so reporting a failed save cannot publish partial records.
@@ -81,11 +86,7 @@ final class AppStore: ObservableObject {
         self.workspace = loaded.workspace
         self.recoveryState = loaded.recovery
         for target in SyncTarget.keyed {
-            switch selectedSecrets.availability(target) {
-            case .available: self.savedKeys.insert(target)
-            case .accessRequired: self.keyAccessNeeded.insert(target)
-            case .missing: break
-            }
+            applyCredentialAvailability(selectedSecrets.cachedAvailability(target) ?? .checking, for: target)
         }
         if FileManager.default.fileExists(atPath: storageURL.path) {
             try? SecureFiles.ensurePrivateDirectory(storageURL.deletingLastPathComponent())
@@ -93,6 +94,7 @@ final class AppStore: ObservableObject {
         }
         if case .ready = recoveryState { scrubStoredEndpointSecrets(); recoverResearchStorage() }
         Self.log.notice("Loaded workspace (sandboxed: \(StorageLocation.isSandboxed, privacy: .public)): leads=\(self.workspace.leads.count, privacy: .public) contacts=\(self.workspace.contacts.count, privacy: .public) companies=\(self.workspace.companies.count, privacy: .public) tasks=\(self.workspace.tasks.count, privacy: .public)")
+        for target in SyncTarget.keyed where keyAccessChecking.contains(target) { startCredentialProbe(target) }
     }
 
     private static let log = Logger(subsystem: "com.pharos.contextward", category: "storage")
@@ -270,7 +272,42 @@ final class AppStore: ObservableObject {
 
     func hasKey(_ target: SyncTarget) -> Bool { savedKeys.contains(target) }
 
+    private func applyCredentialAvailability(_ value: CredentialAvailability, for target: SyncTarget) {
+        savedKeys.remove(target); keyAccessNeeded.remove(target); keyAccessChecking.remove(target)
+        switch value {
+        case .available: savedKeys.insert(target)
+        case .accessRequired: keyAccessNeeded.insert(target)
+        case .checking: keyAccessChecking.insert(target)
+        case .missing: break
+        }
+    }
+
+    private func cancelCredentialProbe(_ target: SyncTarget) {
+        credentialProbeIDs[target] = UUID()
+        credentialProbeTasks.removeValue(forKey: target)?.cancel()
+    }
+
+    private func startCredentialProbe(_ target: SyncTarget) {
+        cancelCredentialProbe(target)
+        let reader = secrets, revision = credentialConfigurationRevisions[target], id = UUID()
+        credentialProbeIDs[target] = id
+        applyCredentialAvailability(.checking, for: target)
+        credentialProbeTasks[target] = Task { [weak self] in
+            let value = await CredentialIO.perform { reader.availability(target) }
+            guard let self, !Task.isCancelled, self.credentialProbeIDs[target] == id,
+                  self.credentialConfigurationRevisions[target] == revision else { return }
+            self.applyCredentialAvailability(value, for: target)
+            self.credentialProbeTasks.removeValue(forKey: target)
+        }
+    }
+
+    func waitForCredentialChecks() async {
+        let pending = Array(credentialProbeTasks.values)
+        for task in pending { await task.value }
+    }
+
     func connectorStatus(_ target: SyncTarget) -> ConnectorStatus {
+        if keyAccessChecking.contains(target), !endpoint(for: target).isEmpty { return .checkingAccess }
         if keyAccessNeeded.contains(target), !endpoint(for: target).isEmpty {
             return .accessRequired("Credential access could not be checked. Choose Verify to retry. Automatic checks are paused.")
         }
@@ -284,8 +321,7 @@ final class AppStore: ObservableObject {
         guard !value.isEmpty else { showNotice("\(target.label) key is empty. Nothing was saved."); return }
         do {
             try secrets.write(value, for: target)
-            savedKeys.insert(target)
-            keyAccessNeeded.remove(target)
+            applyCredentialAvailability(.available, for: target)
             invalidateConnector(target)
             workspace.activity.insert(ActivityEvent(kind: "credential", message: "Saved the \(target.label) API key to the Keychain."), at: 0)
             persist(message: "\(target.label) key saved to the Keychain. Run Verify to activate it.")
@@ -297,8 +333,7 @@ final class AppStore: ObservableObject {
     func removeAPIKey(for target: SyncTarget) {
         do {
             try secrets.delete(target)
-            savedKeys.remove(target)
-            keyAccessNeeded.remove(target)
+            applyCredentialAvailability(.missing, for: target)
             invalidateConnector(target)
             workspace.activity.insert(ActivityEvent(kind: "credential", message: "Removed the \(target.label) API key from the Keychain."), at: 0)
             persist(message: "\(target.label) key removed from the Keychain.")
@@ -308,6 +343,10 @@ final class AppStore: ObservableObject {
     }
 
     private func invalidateConnector(_ target: SyncTarget) {
+        let wasChecking = keyAccessChecking.contains(target)
+        credentialConfigurationRevisions[target] = UUID()
+        cancelCredentialProbe(target)
+        if wasChecking { startCredentialProbe(target) }
         workspace.connectorHealth.removeValue(forKey: target.rawValue)
         if target == .twenty { twentyPreview = nil }
         if target == .kairos {
@@ -320,36 +359,57 @@ final class AppStore: ObservableObject {
         workspace.connectorHealth[target.rawValue] = ConnectorHealth(ok: ok, detail: detail)
     }
 
-    private func apiKey(for target: SyncTarget, userInitiated: Bool = true) throws -> String {
+    private func apiKey(for target: SyncTarget, userInitiated: Bool = true) async throws -> String {
+        cancelCredentialProbe(target)
+        let reader = secrets, configuration = credentialConfigurationRevisions[target], readID = UUID()
+        credentialReadRevisions[target] = readID
         do {
-            let value = try userInitiated ? secrets.read(target) : secrets.readWithoutInteraction(target)
+            let value = try await CredentialIO.read {
+                try userInitiated ? reader.read(target) : reader.readWithoutInteraction(target)
+            }
+            guard !Task.isCancelled, credentialConfigurationRevisions[target] == configuration,
+                  credentialReadRevisions[target] == readID else { throw CredentialLookupError.superseded }
             guard let key = value, !key.isEmpty else {
-                savedKeys.remove(target); keyAccessNeeded.remove(target)
+                applyCredentialAvailability(.missing, for: target)
                 throw IntegrationError.missingKey
             }
-            savedKeys.insert(target); keyAccessNeeded.remove(target)
+            applyCredentialAvailability(.available, for: target)
             return key
         } catch let error as SecretStoreError {
-            if case .keychain = error { savedKeys.remove(target); keyAccessNeeded.insert(target) }
+            guard credentialConfigurationRevisions[target] == configuration,
+                  credentialReadRevisions[target] == readID else { throw CredentialLookupError.superseded }
+            if case .keychain = error { applyCredentialAvailability(.accessRequired, for: target) }
             throw error
         }
     }
 
-    private func pharosClient(userInitiated: Bool = true) throws -> PharosClient {
-        try PharosClient(endpoint: endpoint(for: .pharos), apiKey: try apiKey(for: .pharos, userInitiated: userInitiated), transport: transport)
+    private func pharosClient(userInitiated: Bool = true) async throws -> PharosClient {
+        let url = endpoint(for: .pharos), revision = credentialConfigurationRevisions[.pharos]
+        let key = try await apiKey(for: .pharos, userInitiated: userInitiated)
+        guard credentialConfigurationRevisions[.pharos] == revision else { throw CredentialLookupError.superseded }
+        return try PharosClient(endpoint: url, apiKey: key, transport: transport)
     }
 
-    private func gapClient() throws -> GapClient {
-        try GapClient(endpoint: endpoint(for: .gaps), apiKey: try apiKey(for: .gaps), transport: transport)
+    private func gapClient() async throws -> GapClient {
+        let url = endpoint(for: .gaps), revision = credentialConfigurationRevisions[.gaps]
+        let key = try await apiKey(for: .gaps)
+        guard credentialConfigurationRevisions[.gaps] == revision else { throw CredentialLookupError.superseded }
+        return try GapClient(endpoint: url, apiKey: key, transport: transport)
     }
 
-    private func twentyClient() throws -> TwentyClient {
-        try TwentyClient(endpoint: endpoint(for: .twenty), apiKey: try apiKey(for: .twenty), transport: transport,
+    private func twentyClient() async throws -> TwentyClient {
+        let url = endpoint(for: .twenty), revision = credentialConfigurationRevisions[.twenty]
+        let key = try await apiKey(for: .twenty)
+        guard credentialConfigurationRevisions[.twenty] == revision else { throw CredentialLookupError.superseded }
+        return try TwentyClient(endpoint: url, apiKey: key, transport: transport,
                          interval: twentyPacing, maxBackoffSeconds: twentyMaxBackoffSeconds)
     }
 
-    private func kairosClient() throws -> KairosClient {
-        try KairosClient(endpoint: endpoint(for: .kairos), apiKey: try apiKey(for: .kairos), transport: transport)
+    private func kairosClient() async throws -> KairosClient {
+        let url = endpoint(for: .kairos), revision = credentialConfigurationRevisions[.kairos]
+        let key = try await apiKey(for: .kairos)
+        guard credentialConfigurationRevisions[.kairos] == revision else { throw CredentialLookupError.superseded }
+        return try KairosClient(endpoint: url, apiKey: key, transport: transport)
     }
 
     private func message(for error: Error) -> String {
@@ -363,6 +423,8 @@ final class AppStore: ObservableObject {
     @discardableResult
     func verifyConnector(_ target: SyncTarget) async -> Bool {
         guard SyncTarget.keyed.contains(target) else { await probeEndpoint(target); return false }
+        guard !busyTargets.contains(target) else { return false }
+        let configuration = credentialConfigurationRevisions[target]
         busyTargets.insert(target); defer { busyTargets.remove(target) }
         do {
             switch target {
@@ -372,11 +434,13 @@ final class AppStore: ObservableObject {
             case .gaps: try await gapClient().verify()
             case .kairos: try await kairosClient().verify()
             }
+            guard credentialConfigurationRevisions[target] == configuration else { return false }
             recordHealth(target, ok: true, detail: "Verified \(Date.now.formatted(date: .abbreviated, time: .shortened)): endpoint reachable and key accepted.")
             Self.syncLog.notice("verify target=\(target.rawValue, privacy: .public) ok")
             persist(message: "\(target.label) verified. The key is accepted.")
             return true
         } catch {
+            guard credentialConfigurationRevisions[target] == configuration, !(error is CredentialLookupError) else { return false }
             let reason = message(for: error)
             recordHealth(target, ok: false, detail: reason)
             Self.syncLog.error("verify target=\(target.rawValue, privacy: .public) failed")
@@ -411,7 +475,7 @@ final class AppStore: ObservableObject {
         workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.pharos); defer { busyTargets.remove(.pharos) }
         do {
-            let client = try pharosClient()
+            let client = try await pharosClient()
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let receipt = try await client.push(try encoder.encode(snapshot), idempotencyKey: key)
             job.status = "synced"
@@ -476,7 +540,7 @@ final class AppStore: ObservableObject {
         do {
             // Refuse remote writes when the workspace cannot retain their identities.
             try persistOrThrow()
-            let client = try twentyClient()
+            let client = try await twentyClient()
             for object in TwentyObject.allCases {
                 for operation in TwentyMapper.plan(workspace, links: workspace.twentyLinks, only: object).operations {
                     var durableLink = workspace.twentyLinks[operation.localKey]
@@ -589,7 +653,7 @@ final class AppStore: ObservableObject {
         let researchGeneration = workspace.researchGeneration
         var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.discovery.v1")
         do {
-            let client = try kairosClient()
+            let client = try await kairosClient()
             let strategy = try await client.strategy()
             let inbox = try await client.pullInbox()
             let insights = try await client.insights()
@@ -736,7 +800,7 @@ final class AppStore: ObservableObject {
     /// is acked, so a failed ack re-delivers the page and dedupe makes that harmless.
     /// Activity, the job, and logs record counts only.
     @discardableResult
-    func pullLeads(userInitiated: Bool = true) async -> SyncJob {
+    func pullLeads(userInitiated: Bool = true, requiresAutoPilot: Bool = false) async -> SyncJob {
         var job = SyncJob(target: .leadgen, status: "sending", snapshotSchema: LeadInboxPage.schema)
         guard case .ready = recoveryState else {
             job.status = "failed"; job.error = "Workspace recovery is blocked; no inbox leads were imported."
@@ -751,7 +815,13 @@ final class AppStore: ObservableObject {
         busyTargets.insert(.leadgen); defer { busyTargets.remove(.leadgen) }
         var counts = LeadPullCounts()
         do {
-            let client = try pharosClient(userInitiated: userInitiated)
+            let client = try await pharosClient(userInitiated: userInitiated)
+            // The owner can stop Auto-Pilot while credential I/O is pending.
+            guard !Task.isCancelled, !((!userInitiated || requiresAutoPilot) && !workspace.autoPilotEnabled) else {
+                job.status = "cancelled"
+                readImportJobs[.leadgen] = job
+                return job
+            }
             var cursor = workspace.leadInboxCursor ?? 0
             for _ in 0..<Self.maxInboxPages {
                 var page = try await client.pullLeads(since: cursor)
@@ -820,9 +890,10 @@ final class AppStore: ObservableObject {
 
     /// Runs when the app opens: if Auto-Pilot is on and PHAROS is set up, pull now and keep pulling.
     func pullLeadsOnLaunch() async {
+        if let pending = credentialProbeTasks[.pharos] { await pending.value }
         guard workspace.autoPilotEnabled, pharosConfigured else { return }
         await pullLeads(userInitiated: false)
-        if pharosConfigured { startPullLoop() }
+        if workspace.autoPilotEnabled && pharosConfigured { startPullLoop() }
     }
 
     /// "Start Auto-Pilot": saves the choice, pulls now, then every `leadPullInterval` while the app is open.
@@ -833,8 +904,8 @@ final class AppStore: ObservableObject {
         }
         workspace.autoPilotEnabled = true
         persist()
-        await pullLeads()
-        if pharosConfigured { startPullLoop() }
+        await pullLeads(requiresAutoPilot: true)
+        if workspace.autoPilotEnabled && pharosConfigured { startPullLoop() }
     }
 
     /// "Stop Auto-Pilot": saves the choice and stops the periodic pull. Leads already pulled stay.

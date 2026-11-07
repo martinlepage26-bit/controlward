@@ -28,6 +28,7 @@ struct IntegrationCenterView: View {
         let state: IntegrationState = switch status {
         case .needsSetup: .needsSetup
         case .notVerified: .ready
+        case .checkingAccess: .ready
         case .active: .connected
         case .error, .accessRequired: .error
         }

@@ -88,7 +88,7 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .disabled((keyDrafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            Text(store.keyAccessNeeded.contains(target) ? "Access needed: use Integrations → Verify" : (store.hasKey(target) ? "Saved" : "Not set"))
+                            Text(store.keyAccessChecking.contains(target) ? "Checking access…" : (store.keyAccessNeeded.contains(target) ? "Access needed: use Integrations → Verify" : (store.hasKey(target) ? "Saved" : "Not set")))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(store.hasKey(target) ? .green : .secondary)
                                 .frame(width: 52)

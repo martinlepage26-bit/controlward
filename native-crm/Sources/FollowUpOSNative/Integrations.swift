@@ -13,10 +13,30 @@ protocol SecretStore: Sendable {
     func delete(_ target: SyncTarget) throws
     func exists(_ target: SyncTarget) -> Bool
     func availability(_ target: SyncTarget) -> CredentialAvailability
+    /// Memory-only hint; return nil when a background probe is needed. Never perform I/O here.
+    func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability?
     func readWithoutInteraction(_ target: SyncTarget) throws -> String?
 }
 
-enum CredentialAvailability: Equatable, Sendable { case available, missing, accessRequired }
+enum CredentialAvailability: Equatable, Sendable { case checking, available, missing, accessRequired }
+
+enum CredentialIO {
+    static func perform<T: Sendable>(_ operation: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { continuation.resume(returning: operation()) }
+        }
+    }
+    static func read<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { continuation.resume(with: Result(catching: operation)) }
+        }
+    }
+}
+
+enum CredentialLookupError: LocalizedError {
+    case superseded
+    var errorDescription: String? { "The connection changed while credential access was checked. Retry the current connection." }
+}
 
 /// Only the copy-matching call is injectable. Credential writes, identities and ACLs are unchanged.
 struct KeychainLookup: Sendable {
@@ -115,6 +135,7 @@ struct KeychainSecretStore: SecretStore {
 
     /// A failed noninteractive probe means access is unknown, not that the saved key was removed.
     func availability(_ target: SyncTarget) -> CredentialAvailability { lookup.availability(query(target)) }
+    func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability? { nil }
     func exists(_ target: SyncTarget) -> Bool { availability(target) == .available }
 }
 
@@ -126,6 +147,7 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
     func read(_ target: SyncTarget) throws -> String? { lock.withLock { values[target] } }
     func readWithoutInteraction(_ target: SyncTarget) throws -> String? { try read(target) }
     func availability(_ target: SyncTarget) -> CredentialAvailability { exists(target) ? .available : .missing }
+    func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability? { availability(target) }
     func write(_ secret: String, for target: SyncTarget) throws {
         guard !secret.isEmpty else { throw SecretStoreError.empty }
         lock.withLock { values[target] = secret }
@@ -555,6 +577,7 @@ enum ConnectorStatus: Equatable {
     case active(String)
     case error(String)
     case accessRequired(String)
+    case checkingAccess
 
     var label: String {
         switch self {
@@ -563,6 +586,7 @@ enum ConnectorStatus: Equatable {
         case .active: "Active"
         case .error: "Error"
         case .accessRequired: "Access needed"
+        case .checkingAccess: "Checking access"
         }
     }
 
@@ -570,6 +594,7 @@ enum ConnectorStatus: Equatable {
         switch self {
         case .needsSetup(let reason), .active(let reason), .error(let reason), .accessRequired(let reason): reason
         case .notVerified: "Configured. Run Verify to confirm the endpoint accepts the key."
+        case .checkingAccess: "Checking saved credential availability. Local CRM remains available."
         }
     }
 
