@@ -34,6 +34,7 @@ final class AppStore: ObservableObject {
     /// Dry-run result that must exist before a Twenty push is allowed.
     @Published private(set) var twentyPreview: TwentyPlan?
     @Published private(set) var pharosPreviewFingerprint: String?
+    private var kairosDiscoveryGeneration = UUID()
 
     let storageURL: URL
     let researchRoot: URL
@@ -297,6 +298,10 @@ final class AppStore: ObservableObject {
     private func invalidateConnector(_ target: SyncTarget) {
         workspace.connectorHealth.removeValue(forKey: target.rawValue)
         if target == .twenty { twentyPreview = nil }
+        if target == .kairos {
+            kairosDiscoveryGeneration = UUID()
+            workspace.websiteResearch.kairosContext = nil
+        }
     }
 
     private func recordHealth(_ target: SyncTarget, ok: Bool, detail: String) {
@@ -525,6 +530,13 @@ final class AppStore: ObservableObject {
                     case .skipped: skipped += 1
                     }
                 }
+                if var context = next.websiteResearch.kairosContext {
+                    context.enquiryStates = inbox.discoveryStates
+                    context.inboxFetchedAt = Date.now.ISO8601Format()
+                    context.disabledPlatforms = inbox.disabledPlatforms
+                    try context.validate()
+                    next.websiteResearch.kairosContext = context
+                }
                 job.status = "synced"
                 job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged, \(skipped) skipped."
                 job.completedAt = Date.now.ISO8601Format()
@@ -543,12 +555,119 @@ final class AppStore: ObservableObject {
         return job
     }
 
+    /// Strategy, aggregate performance and inbound enquiries form one durable snapshot.
+    /// A failed route/save or changed connection publishes none of the new snapshot.
+    @discardableResult
+    func refreshKairosDiscovery() async -> Bool {
+        guard !isReviewMode else { showNotice("Account refresh is off in review mode."); return false }
+        guard case .ready = recoveryState else { showNotice("Recover the workspace before refreshing KAIROS context."); return false }
+        guard !busyTargets.contains(.kairos) else { showNotice("Wait for the current KAIROS request."); return false }
+        busyTargets.insert(.kairos); defer { busyTargets.remove(.kairos) }
+        let generation = kairosDiscoveryGeneration
+        let researchGeneration = workspace.researchGeneration
+        var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.discovery.v1")
+        do {
+            let client = try kairosClient()
+            let strategy = try await client.strategy()
+            let inbox = try await client.pullInbox()
+            let insights = try await client.insights()
+            guard generation == kairosDiscoveryGeneration, researchGeneration == workspace.researchGeneration else {
+                throw ControlWardError.invalid("The connection or workspace changed during refresh. Refresh the current connection again.")
+            }
+            let old = workspace.websiteResearch.kairosContext
+            let base = client.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let context = KairosDiscoveryContext(endpoint: base, fetchedAt: Date.now.ISO8601Format(),
+                strategyRevision: old?.endpoint == base && old?.strategy?.audience == strategy?.audience && old?.strategy?.positioning == strategy?.positioning ? old!.strategyRevision : UUID(),
+                strategy: strategy, insights: insights, disabledPlatforms: inbox.disabledPlatforms,
+                inboxFetchedAt: Date.now.ISO8601Format(), enquiryStates: inbox.discoveryStates)
+            try context.validate()
+            var created = 0, updated = 0, unchanged = 0, skipped = 0
+            try commitWorkspace { next in
+                for conversation in inbox.conversations {
+                    guard conversation.intent.lowercased() == "lead", conversation.status.lowercased() != "ignored" else { skipped += 1; continue }
+                    switch Self.applyKairosLead(conversation, to: &next) {
+                    case .created: created += 1
+                    case .updated: updated += 1
+                    case .unchanged: unchanged += 1
+                    case .skipped: skipped += 1
+                    }
+                }
+                next.websiteResearch.kairosContext = context
+                try next.websiteResearch.validate()
+                job.status = "synced"; job.completedAt = Date.now.ISO8601Format()
+                job.detail = "Discovery context: \(created) new, \(updated) updated, \(unchanged) unchanged, \(skipped) skipped."
+                next.syncJobs.insert(job, at: 0)
+                next.connectorHealth[SyncTarget.kairos.rawValue] = ConnectorHealth(ok: true, detail: "Discovery context refreshed; collection availability is shown in Discovery.")
+                next.activity.insert(ActivityEvent(kind: "discovery_context", message: job.detail ?? "KAIROS context refreshed.", sourceID: job.id), at: 0)
+            }
+            readImportJobs[.kairos] = job
+            saveFailure = nil
+            showNotice(job.detail ?? "KAIROS context saved.")
+            return true
+        } catch {
+            _ = failedReadOnlyImport(job, error: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func linkDiscoveryEnquiry(sourceID: String, businessKey: String?, reason: String = "") -> Bool {
+        guard let enquiry = workspace.leads.first(where: { $0.sourceID == sourceID }), sourceID.hasPrefix("kairos:") else {
+            showNotice("This KAIROS enquiry is no longer available."); return false
+        }
+        let explanation = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let business = DiscoveryIntelligence.businesses(workspace.websiteResearch).first { $0.id == businessKey && $0.verifiedWebsite }
+        if businessKey != nil {
+            guard business != nil else {
+                showNotice("Research this business website before linking an enquiry."); return false
+            }
+        }
+        let old = workspace.websiteResearch.enquiryBusinessLinks?[sourceID]
+        if old?.businessKey == businessKey && (explanation.isEmpty || old?.reason == explanation) { return true }
+        let supportedReason = business.flatMap { DiscoveryIntelligence.suggestion(enquiry, for: $0) }
+        guard explanation.count <= 2_000, businessKey == nil || !explanation.isEmpty || supportedReason != nil else {
+            showNotice("Give a reason for linking this enquiry to this business."); return false
+        }
+        return saveChange { next in
+            if next.websiteResearch.enquiryBusinessLinks == nil { next.websiteResearch.enquiryBusinessLinks = [:] }
+            next.websiteResearch.enquiryBusinessLinks?[sourceID] = DiscoveryEnquiryLink(businessKey: businessKey, confirmedAt: Date.now.ISO8601Format(),
+                reason: businessKey == nil ? "Owner removed the association." : (explanation.isEmpty ? supportedReason : explanation),
+                incomingExcerpt: enquiry.sourceMessage.map { String($0.prefix(4_000)) }, incomingAt: enquiry.sourceUpdatedAt,
+                businessSourceURL: business?.candidate.sourceURL)
+            try next.websiteResearch.validate()
+            next.activity.insert(ActivityEvent(kind: "discovery_link", message: businessKey == nil ? "Removed one enquiry-to-business association." : "Confirmed one enquiry-to-researched-business association.", sourceID: enquiry.id), at: 0)
+            return businessKey == nil ? "Enquiry unlinked. Its CRM history was retained." : "Enquiry linked. CRM identities and outreach were retained."
+        }
+    }
+
+    @discardableResult
+    func reviewDiscoveryFit(businessKey: String, decision: DiscoveryFit, reason: String, strategyRevision: UUID?) -> Bool {
+        let explanation = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard strategyRevision == workspace.websiteResearch.kairosContext?.strategyRevision else {
+            showNotice("Targeting changed while this review was open. Close it and review the current audience and offer."); return false
+        }
+        guard DiscoveryIntelligence.businesses(workspace.websiteResearch).contains(where: { $0.id == businessKey }),
+              explanation.count <= 2_000, decision == .unassessed || !explanation.isEmpty else {
+            showNotice("Use the current targeting context and give a reason for a fit decision."); return false
+        }
+        let old = workspace.websiteResearch.fitReviews?[businessKey]
+        if old?.decision == decision && old?.reason == explanation && old?.strategyRevision == strategyRevision { return true }
+        return saveChange { next in
+            if next.websiteResearch.fitReviews == nil { next.websiteResearch.fitReviews = [:] }
+            next.websiteResearch.fitReviews?[businessKey] = DiscoveryFitReview(decision: decision, reason: explanation, reviewedAt: Date.now.ISO8601Format(), strategyRevision: strategyRevision)
+            try next.websiteResearch.validate()
+            next.activity.insert(ActivityEvent(kind: "discovery_fit", message: "Saved one explained offer-fit review."), at: 0)
+            return "Fit review saved. Interest and contact evidence are unchanged."
+        }
+    }
+
     private enum KairosLeadOutcome { case created, updated, unchanged, skipped }
 
     private static func applyKairosLead(_ conversation: KairosConversation, to workspace: inout PersistentWorkspace) -> KairosLeadOutcome {
         let handle = conversation.authorHandle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !conversation.id.isEmpty, !handle.isEmpty else { return .skipped }
         let sourceID = "kairos:\(conversation.id)"
+        guard !workspace.dismissedLeadSources.contains(sourceID) else { return .skipped }
         if let index = workspace.leads.firstIndex(where: { $0.sourceID == sourceID }) {
             let original = workspace.leads[index]
             if let appliedAt = original.sourceUpdatedAt, conversation.lastMessageAt < appliedAt { return .unchanged }
