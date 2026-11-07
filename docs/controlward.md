@@ -160,6 +160,8 @@ credentials to a backup-supplied endpoint.
 ./bin/test-crm-core
 # Optional real WebKit-to-Worker check; requires npm ci in that Worker checkout:
 ./bin/test-connected-workspace /path/to/project-control
+# Optional native HTTP-to-Worker/D1 check; uses only disposable loopback data:
+./bin/test-connected-pharos
 ./bin/preview-controlward
 CONTEXTWARD_SIGN_IDENTITY=- ./bin/package-native-app
 ```
