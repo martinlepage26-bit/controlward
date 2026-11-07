@@ -22,6 +22,10 @@ struct NativeSmokeTests {
             try await TwentyConnectedTests.run()
             return
         }
+        if CommandLine.arguments.dropFirst() == ["--connected-kairos"] {
+            try await KairosTests.connected()
+            return
+        }
         guard await ReleaseReviewTests.run() else { throw SmokeTestFailure.failed("Release review tests failed") }
         guard RecordDeletionTests.run() else { throw SmokeTestFailure.failed("Record deletion tests failed") }
         guard CRMSaveTests.run() else { throw SmokeTestFailure.failed("CRM save tests failed") }

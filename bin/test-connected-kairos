@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+// Native read-only acceptance against the actual pinned KAIROS Worker and disposable local D1.
+// Supply a clean checkout with npm ci already run. No production bindings or owner keys are used.
+import {spawn} from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import net from 'node:net';
+import {randomBytes,randomUUID,createHash} from 'node:crypto';
+import assert from 'node:assert/strict';
+
+const root=path.resolve(import.meta.dirname,'..');
+const source=process.env.CONTROLWARD_KAIROS_SOURCE;
+const pinned='b37e1f792b0ca3f11a760779d0eb5b0047f8ec35';
+const endpoint='http://127.0.0.1:8883';
+const children=new Set();
+const env={...process.env,WRANGLER_SEND_METRICS:'false',CI:'true'};
+for(const key of Object.keys(env)) if(/^(CLOUDFLARE_|CF_|ANTHROPIC_|OPENAI_|GEMINI_|GROQ_|OPENROUTER_|STRIPE_)/.test(key)) delete env[key];
+function run(command,args,{quiet=false,cwd=root}={}) {
+  const child=spawn(command,args,{cwd,env,detached:true,stdio:['ignore','pipe','pipe']});
+  children.add(child);let stdout='',stderr='';
+  child.stdout.on('data',b=>{stdout+=b;if(!quiet)process.stdout.write(b);});
+  child.stderr.on('data',b=>{stderr+=b;if(!quiet)process.stderr.write(b);});
+  child.done=new Promise((resolve,reject)=>{
+    child.once('error',reject);
+    child.once('exit',code=>{children.delete(child);code===0?resolve(stdout):reject(new Error('Disposable KAIROS process exited '+code+': '+stderr.slice(-1400)));});
+  });child.done.catch(()=>{});return child;
+}
+const quote=value=>"'"+String(value).replaceAll("'","''")+"'";
+let temp,proof;
+const startedAt=new Date().toISOString();
+try {
+  assert(source,'Set CONTROLWARD_KAIROS_SOURCE to a clean checkout of martinlepage26-bit/kairos at '+pinned);
+  assert.equal((await run('git',['rev-parse','HEAD'],{quiet:true,cwd:source}).done).trim(),pinned,'KAIROS source changed; review its contract before updating the pin');
+  assert.equal((await run('git',['status','--porcelain','--untracked-files=all'],{quiet:true,cwd:source}).done).trim(),'','Use a clean source checkout without local credentials');
+  for(const name of await fs.readdir(source)) assert(!/^\.dev\.vars(?:\.|$)|^\.env(?:\.|$)/.test(name)||name.endsWith('.example'),'Source checkout contains a local environment file');
+  const wrangler=path.join(source,'node_modules/wrangler/bin/wrangler.js');await fs.access(wrangler);
+  const pkg=JSON.parse(await fs.readFile(path.join(source,'node_modules/wrangler/package.json'),'utf8'));assert.equal(pkg.version,'4.85.0');
+  const port=net.createServer();await new Promise((resolve,reject)=>{port.once('error',reject);port.listen(8883,'127.0.0.1',resolve);});await new Promise(resolve=>port.close(resolve));
+  temp=await fs.mkdtemp(path.join(os.tmpdir(),'controlward-kairos-d1-'));
+  const ids=Object.fromEntries(['account','operator','other','channel','otherChannel','open','answered','ignored','question','foreign'].map(k=>[k,randomUUID()]));
+  const key='kai_sk_'+randomBytes(24).toString('hex'),operatorKey='kai_sk_'+randomBytes(24).toString('hex');
+  const config=path.join(temp,'wrangler.jsonc'),keyFile=path.join(temp,'customer.key'),operatorKeyFile=path.join(temp,'operator.key');
+  await fs.writeFile(keyFile,key,{mode:0o600});await fs.writeFile(operatorKeyFile,operatorKey,{mode:0o600});
+  await fs.writeFile(config,JSON.stringify({name:'controlward-kairos-test',main:path.join(source,'src/index.ts'),compatibility_date:'2026-04-27',compatibility_flags:['nodejs_compat'],vars:{ENVIRONMENT:'disposable-test',DRY_RUN:'true',JOB_BATCH_SIZE:'1',PUBLIC_BASE_URL:endpoint,SIGNUP_ENABLED:'false',OPERATOR_ACCOUNT_ID:ids.operator},d1_databases:[{binding:'DB',database_name:'controlward-kairos-test',database_id:randomUUID(),migrations_dir:path.join(source,'migrations')}],kv_namespaces:[{binding:'CACHE',id:randomBytes(16).toString('hex')}],r2_buckets:[{binding:'MEDIA',bucket_name:'controlward-kairos-test'}]}),{mode:0o600});
+  const args=[wrangler,'--config',config];
+  await run(process.execPath,[...args,'d1','migrations','apply','controlward-kairos-test','--local','--persist-to',temp],{quiet:true}).done;
+  const now='2026-11-01T10:00:00.000Z';
+  const sql=[];
+  for(const name of ['account','operator','other']) sql.push(`INSERT INTO accounts(id,email,display_name,plan,status,referral_code,created_at,updated_at) VALUES(${quote(ids[name])},${quote(name+'@disposable.example.test')},'ControlWard synthetic','solo','active',${quote(randomUUID())},${quote(now)},${quote(now)});`);
+  for(const [account,fixtureKey] of [[ids.account,key],[ids.operator,operatorKey]]) sql.push(`INSERT INTO api_keys(id,account_id,name,key_hash,prefix,created_at) VALUES(${quote(randomUUID())},${quote(account)},'ControlWard disposable',${quote(createHash('sha256').update(fixtureKey).digest('hex'))},'kai_sk_test',${quote(now)});`);
+  for(const [id,account] of [[ids.channel,ids.account],[ids.otherChannel,ids.other]]) sql.push(`INSERT INTO channels(id,account_id,platform,handle,status,connected_at,updated_at) VALUES(${quote(id)},${quote(account)},'instagram','synthetic','revoked',${quote(now)},${quote(now)});`);
+  for(const [name,intent,status] of [['open','lead','open'],['answered','lead','answered'],['ignored','lead','ignored'],['question','question','open'],['foreign','lead','open']]) {
+    const account=name==='foreign'?ids.other:ids.account,channel=name==='foreign'?ids.otherChannel:ids.channel;
+    sql.push(`INSERT INTO conversations(id,account_id,channel_id,platform_thread_id,author_handle,intent,priority,status,last_message_at,created_at,updated_at) VALUES(${quote(ids[name])},${quote(account)},${quote(channel)},${quote(randomUUID())},${quote('Synthetic '+name)},${quote(intent)},1,${quote(status)},${quote(now)},${quote(now)},${quote(now)});`);
+    sql.push(`INSERT INTO messages(id,conversation_id,account_id,direction,body,created_at) VALUES(${quote(randomUUID())},${quote(ids[name])},${quote(account)},'inbound',${quote('Demande synthétique '+name+' — à vérifier')},${quote(now)});`);
+  }
+  const seed=path.join(temp,'seed.sql');await fs.writeFile(seed,sql.join('\n'),{mode:0o600});
+  const execute=async(file)=>JSON.parse(await run(process.execPath,[...args,'d1','execute','controlward-kairos-test','--local','--persist-to',temp,'--file',file,'--json'],{quiet:true}).done);
+  await execute(seed);
+  const fixture=path.join(temp,'fixture.json');await fs.writeFile(fixture,JSON.stringify({ids,workspace:path.join(temp,'workspace','workspace.json')}),{mode:0o600});
+  const server=run(process.execPath,[...args,'dev','--local','--ip','127.0.0.1','--port','8883','--inspector-port','0','--persist-to',temp],{quiet:true});
+  let ready=false;
+  for(let i=0;i<100;i++) {if(!children.has(server))throw Error('Disposable KAIROS exited before readiness');try{if((await fetch(endpoint+'/health')).ok){ready=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,200));}
+  assert(ready,'Disposable KAIROS did not become ready');
+  Object.assign(env,{CONTROLWARD_TEST_KAIROS:endpoint,CONTROLWARD_TEST_KAIROS_KEY_FILE:keyFile,CONTROLWARD_TEST_KAIROS_OPERATOR_KEY_FILE:operatorKeyFile,CONTROLWARD_TEST_KAIROS_FIXTURE:fixture,CONTROLWARD_TEST_KAIROS_PHASE:'initial'});
+  const initialLog=await run(path.join(root,'bin/test-native-app'),['--connected-kairos']).done;
+  const initialSummary=/Connected KAIROS initial: (\d+) assertions; (\d+) GET requests/.exec(initialLog);
+  assert(initialSummary,'Native connected initial phase did not run');
+  const update=path.join(temp,'update.sql'),later='2026-11-02T10:00:00.000Z';
+  await fs.writeFile(update,`UPDATE conversations SET status='answered',last_message_at=${quote(later)},updated_at=${quote(later)} WHERE id=${quote(ids.open)};\nINSERT INTO messages(id,conversation_id,account_id,direction,body,created_at) VALUES(${quote(randomUUID())},${quote(ids.open)},${quote(ids.account)},'inbound','Nouveau message synthétique — aucune réponse envoyée',${quote(later)});`,{mode:0o600});await execute(update);
+  env.CONTROLWARD_TEST_KAIROS_PHASE='updated';
+  const updatedLog=await run(path.join(root,'native-crm/.build/native-smoke-tests/FollowUpOSNativeSmokeTests'),['--connected-kairos']).done;
+  const updatedSummary=/Connected KAIROS updated: (\d+) assertions; (\d+) GET requests/.exec(updatedLog);
+  assert(updatedSummary,'Native connected update phase did not run');
+  const audit=path.join(temp,'audit.sql');await fs.writeFile(audit,"SELECT (SELECT count(*) FROM conversations) AS conversations,(SELECT count(*) FROM messages WHERE direction='outbound') AS outbound,(SELECT count(*) FROM reply_drafts) AS replies,(SELECT count(*) FROM posts) AS posts,(SELECT count(*) FROM jobs) AS jobs;",{mode:0o600});
+  const result=await execute(audit);assert.deepEqual(result[0].results[0],{conversations:5,outbound:0,replies:0,posts:0,jobs:0});
+  proof={started_at:startedAt,source_commit:pinned,wrangler:pkg.version,real_worker:true,local_d1:true,customer_account_scoped:true,operator_key_refused:true,initial_assertions:Number(initialSummary[1]),updated_assertions:Number(updatedSummary[1]),real_get_requests:Number(initialSummary[2])+Number(updatedSummary[2]),upstream_counts:result[0].results[0],production_bindings:false,owner_credentials:false};
+  console.log('Connected KAIROS D1 verified:5 fixture conversations,0 outbound messages,0 replies,0 posts,0 jobs.');
+} catch(error) {console.error(error.message);process.exitCode=1;}
+finally {
+  for(const child of children)try{process.kill(-child.pid,'SIGTERM');}catch{}
+  await Promise.race([Promise.allSettled([...children].map(child=>child.done)),new Promise(resolve=>setTimeout(resolve,2500))]);
+  for(const child of children)try{process.kill(-child.pid,'SIGKILL');}catch{}
+  await Promise.race([Promise.allSettled([...children].map(child=>child.done)),new Promise(resolve=>setTimeout(resolve,2500))]);
+  if(temp)await fs.rm(temp,{recursive:true,force:true});
+  if(proof&&process.env.CONTROLWARD_KAIROS_REPORT) {
+    proof.cleanup_verified=children.size===0&&!(await fs.stat(temp).then(()=>true,()=>false));
+    proof.completed_at=new Date().toISOString();
+    await fs.writeFile(process.env.CONTROLWARD_KAIROS_REPORT,JSON.stringify(proof,null,2)+'\n',{mode:0o600});
+    if(!proof.cleanup_verified){console.error('Disposable KAIROS cleanup was not verified');process.exitCode=1;}
+  }
+}

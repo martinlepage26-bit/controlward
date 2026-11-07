@@ -14,7 +14,10 @@ transcript-level language scores, taxonomy codes, and quoted notes. This is a lo
 multi-user sync service or the full Twenty server platform.
 Kairos can be connected as a read-only source: a user-triggered import copies
 only lead-intent conversations into local leads, deduplicated by conversation id.
-The Kairos API key is stored in macOS Keychain; Contextward never sends replies
+Use a KAIROS customer-account API key. The current service deliberately refuses operator
+API keys on inbox/account routes; an operator's interactive browser session is not imported
+into ControlWard. The inbox endpoint returns up to 200 prioritized conversations. The
+Kairos API key is stored in macOS Keychain; Contextward never sends replies
 or publishing actions back to Kairos.
 Due follow-ups can also be scheduled as explicit native macOS notifications;
 the app does not send outbound messages automatically.

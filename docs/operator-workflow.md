@@ -35,3 +35,10 @@ Lantern combines rows using each row's sample count; canonical transcript rows e
 A converted lead exports to Twenty through its linked opportunity, so it represents one deal. If the lead was pushed before conversion, the existing remote deal is reused. After an interrupted push, review a fresh preview and retry: pending creations resume their saved record identities. The app stops if it cannot save progress. Several local opportunities competing for one prior remote deal block the push for relationship review. Already separate remote duplicates are retained; ControlWard never deletes them automatically. The adapter does not map native Lost to a remote stage; review that outcome in Twenty.
 
 Integration Center labels LeadGen imports and Lantern audits **Local**. Imported records do not activate a provider connection. PHAROS, Twenty, GAP and KAIROS display their own setup, verification or error status; use the PHAROS status for the live lead inbox.
+
+KAIROS imports require a customer-account API key. Its current service refuses
+operator API keys on inbox routes; the operator's browser sign-in is separate.
+An import reads lead-intent entries from up to200 prioritized conversations.
+GAP and KAIROS publish imported records only after the complete local save
+succeeds. If storage is blocked, restore access to the workspace folder and
+retry. Owner decisions and existing records remain intact.

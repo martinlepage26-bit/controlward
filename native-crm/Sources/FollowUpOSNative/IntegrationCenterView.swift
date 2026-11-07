@@ -14,7 +14,7 @@ struct IntegrationCenterView: View {
         [
             IntegrationCheck(name: "Native workspace", detail: "SwiftUI app and atomic local JSON persistence", state: .ready, symbol: "checkmark.circle.fill"),
             IntegrationCheck(name: "LeadGen imports", detail: "Import LeadGen event files into this workspace. Check PHAROS backend for live inbox connection status.", state: .ready, symbol: "dot.radiowaves.left.and.right", labelOverride: "Local"),
-            connectorCheck(.kairos, name: "Kairos", purpose: "Reads lead-intent conversations into this local workspace when you choose Import. Nothing is sent back.", symbol: "bubble.left.and.bubble.right"),
+            connectorCheck(.kairos, name: "Kairos", purpose: "Imports lead-intent entries from Kairos's prioritized inbox (up to 200 conversations). Requires a customer-account API key; operator keys cannot read this inbox route. Nothing is sent back.", symbol: "bubble.left.and.bubble.right"),
             IntegrationCheck(name: "Lantern audits", detail: "Imported FR/EN assessments, weighted gaps and remediation are stored locally.", state: .ready, symbol: "checkmark.seal", labelOverride: "Local"),
             IntegrationCheck(name: "Twenty exchange", detail: "Versioned credential-free JSON snapshot export", state: .ready, symbol: "arrow.triangle.2.circlepath"),
             connectorCheck(.twenty, name: "Live Twenty API", purpose: "Pushes companies, people, opportunities (from leads) and tasks to Twenty on your action, after a preview. Never deletes.", symbol: "network"),
