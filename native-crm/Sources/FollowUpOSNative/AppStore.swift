@@ -23,6 +23,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var recoveryState: WorkspaceRecoveryState
     @Published private(set) var researchFailure: String?
     @Published private(set) var activeResearch: Set<UUID> = []
+    @Published private(set) var lastDeletionBackup: URL?
 
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
@@ -1055,7 +1056,7 @@ final class AppStore: ObservableObject {
     }
     @discardableResult
     func delete(_ contact: Contact) -> Bool {
-        saveChange { next in next.contacts.removeAll { $0.id == contact.id }; return "Contact deleted." }
+        deleteRecord(contact.id, kind: .contacts)
     }
 
     @discardableResult
@@ -1068,7 +1069,7 @@ final class AppStore: ObservableObject {
     }
     @discardableResult
     func delete(_ company: Company) -> Bool {
-        saveChange { next in next.companies.removeAll { $0.id == company.id }; return "Company deleted." }
+        deleteRecord(company.id, kind: .companies)
     }
 
     @discardableResult
@@ -1090,7 +1091,7 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func delete(_ opportunity: Opportunity) -> Bool {
-        saveChange { next in next.opportunities.removeAll { $0.id == opportunity.id }; return "Opportunity deleted." }
+        deleteRecord(opportunity.id, kind: .opportunities)
     }
 
     @discardableResult
@@ -1109,10 +1110,7 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func delete(_ task: CRMTask) -> Bool {
-        return saveChange { next in
-            next.tasks.removeAll { $0.id == task.id }
-            return "Task deleted."
-        }
+        deleteRecord(task.id, kind: .tasks)
     }
 
     @discardableResult
@@ -1125,7 +1123,7 @@ final class AppStore: ObservableObject {
     }
     @discardableResult
     func delete(_ note: CRMNote) -> Bool {
-        saveChange { next in next.notes.removeAll { $0.id == note.id }; return "Note deleted." }
+        deleteRecord(note.id, kind: .notes)
     }
 
     @discardableResult
@@ -1267,18 +1265,28 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func delete(_ lead: Lead) -> Bool {
-        return saveChange { next in
-            if let taskID = lead.followUpTaskID, let index = next.tasks.firstIndex(where: { $0.id == taskID }) {
-                next.tasks[index].status = .done
-                next.tasks[index].reminderAt = nil
-            }
-            next.leads.removeAll { $0.id == lead.id }
-            // Remember deleted LeadGen leads so a later update from LeadGen does not recreate them.
-            if let source = lead.sourceID, source.hasPrefix("leadgen:"), !next.dismissedLeadSources.contains(source) {
-                next.dismissedLeadSources.append(source)
-            }
-            return "Lead deleted."
+        deleteRecord(lead.id, kind: .leads)
+    }
+
+    var deletionRecoveryDirectory: URL { storageURL.deletingLastPathComponent().appendingPathComponent("record-recovery", isDirectory: true) }
+
+    /// Recovery is part of deletion: if either the private backup or commit fails, the record stays.
+    private func deleteRecord(_ id: UUID, kind: RecordDeletion.Kind) -> Bool {
+        var backup: URL?
+        let saved = saveChange { next in
+            guard RecordDeletion.contains(id, kind: kind, in: next) else { throw ControlWardError.invalid("This record no longer exists. Refresh the directory.") }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(ControlWardBackup(workspace: completeBackupWorkspace()))
+            guard data.count <= 20_000_000 else { throw ControlWardError.invalid("The recovery backup exceeds 20 MB. Nothing was deleted.") }
+            let file = deletionRecoveryDirectory.appendingPathComponent("before-delete-\(kind.rawValue)-\(UUID()).json")
+            try SecureFiles.writePrivate(data, to: file)
+            backup = file
+            RecordDeletion.apply(id, kind: kind, to: &next)
+            next.activity.insert(ActivityEvent(kind: "record_delete", message: "Deleted one local \(kind.label.lowercased()). Linked records were retained; recovery backup: \(file.lastPathComponent).", sourceID: id), at: 0)
+            return "\(kind.label) deleted. Recovery backup saved; restore it from Settings → Backup and recovery."
         }
+        if saved { lastDeletionBackup = backup }
+        return saved
     }
 
     @discardableResult

@@ -22,6 +22,7 @@ struct DirectoryView: View {
     @EnvironmentObject private var store: AppStore
     let kind: DirectoryKind
     @State private var search = ""
+    @State private var selectedRecordID: String?
     @State private var filter: RecordFilter = .all
     @State private var sort: RecordSort = .name
     @State private var projectRecord: WorkspaceRecord?
@@ -66,12 +67,13 @@ struct DirectoryView: View {
                 }
                 Picker("Sort", selection: $sort) { ForEach(RecordSort.allCases) { Text($0.label).tag($0) } }.frame(width: 180)
             }.padding(.horizontal, 28).padding(.bottom, 10)
-            List(rows) { row in
+            List(rows, selection: $selectedRecordID) { row in
                 HStack {
                     Button { open(row) } label: {
                         DirectoryRow(title: row.title.isEmpty ? "Untitled" : row.title, subtitle: row.detail,
                                      trailing: row.date, symbol: kind.symbol)
                     }.buttonStyle(.plain)
+                        .accessibilityLabel("Edit \(kind.singular): \(row.title)")
                     if kind == .tasks {
                         Button(row.completed ? "Reopen" : "Complete") {
                             do { try store.completeTask(row.recordID, completed: !row.completed) }
@@ -82,8 +84,12 @@ struct DirectoryView: View {
                         .help("Project links and capture").accessibilityLabel("Project links for \(row.title)")
                         .buttonStyle(.borderless)
                 }
+                .accessibilityElement(children: .contain)
+                .tag(row.id)
             }
             .listStyle(.inset)
+            .onKeyPress(.return) { openSelected() }
+            .onKeyPress(.space) { openSelected() }
         }
         .navigationTitle(kind.title)
         .sheet(item: $projectRecord) { RecordProjectSheet(record: $0) }
@@ -102,6 +108,12 @@ struct DirectoryView: View {
     }
 
     private var rows: [WorkspaceRecord] { store.records(kind: kind.rawValue, search: search, filter: filter, sort: sort) }
+    private func openSelected() -> KeyPress.Result {
+        guard let row = rows.first(where: { $0.id == selectedRecordID }) else { return .ignored }
+        open(row)
+        return .handled
+    }
+
     private func open(_ row: WorkspaceRecord) {
         switch kind {
         case .contacts: selectedContact = store.contacts.first { $0.id == row.recordID }

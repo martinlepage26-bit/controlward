@@ -10,6 +10,7 @@ mkdir -p "${BUILD_ROOT}"
 # lead workflow and pipeline sources, so a shorter list stops compiling; bin/check-native-source-lists enforces it.
 swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/Models.swift" \
+  "${SOURCE_ROOT}/RecordDeletion.swift" \
   "${SOURCE_ROOT}/AppStore.swift" \
   "${SOURCE_ROOT}/Security.swift" \
   "${SOURCE_ROOT}/Integrations.swift" \

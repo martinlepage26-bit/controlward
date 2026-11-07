@@ -91,9 +91,11 @@ struct SecurityView: View {
                                     Text("\(finding.lens) · \(finding.detail)").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Button(store.workspace.controlWard.remediationTasks[finding.id] == nil ? "Create review task" : "Task recorded") {
+                                let taskID = store.workspace.controlWard.remediationTasks[finding.id]
+                                Button(taskID == nil ? "Create review task" : (store.tasks.contains { $0.id == taskID } ? "Task recorded" : "Task deleted")) {
                                     do { try store.createSecurityReviewTask(finding.id) } catch { store.notice = error.localizedDescription }
-                                }.disabled(store.workspace.controlWard.remediationTasks[finding.id] != nil)
+                                }.disabled(taskID != nil)
+                                    .help("One task receipt is retained per finding, including after deletion. Add a new task in Tasks if further work is needed.")
                                 Button(finding.resolved ? "Resolved" : "Resolve") { store.resolve(finding) }.buttonStyle(.bordered).disabled(finding.resolved)
                             }
                             .padding(10)
