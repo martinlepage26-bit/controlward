@@ -1727,7 +1727,7 @@ final class AppStore: ObservableObject {
     func importBAEACSV(from url: URL) throws -> Int {
         let rows = CSVParser.parse(try ImportLimits.readCappedText(url))
         try ImportLimits.checkRows(rows.count - 1, url.lastPathComponent)
-        return importBAEARows(rows, source: url.lastPathComponent)
+        return try importBAEARows(rows, source: url.lastPathComponent)
     }
 
     /// Reads the first worksheet of a BAEA .xlsx export with an in-process ZIP reader and XMLParser.
@@ -1738,30 +1738,47 @@ final class AppStore: ObservableObject {
         let strings = try zipText(archive, entry: "xl/sharedStrings.xml", required: false).map(XLSXXMLParser.sharedStrings) ?? []
         let overview = XLSXXMLParser.rows(try zipText(archive, entry: "xl/worksheets/sheet1.xml") ?? "", sharedStrings: strings)
         try ImportLimits.checkRows(overview.count - 1, url.lastPathComponent)
-        let directCount = importBAEARows(overview, source: url.lastPathComponent)
+        let directCount = try importBAEARows(overview, source: url.lastPathComponent)
         if directCount > 0 { return directCount }
 
         // Canonical BAEA workbooks store one scored transcript per row on EN_Transcripts and FR_Transcripts.
-        var normalized = [["audit", "client", "language", "disclosure", "escalation", "context_transfer", "tone", "hallucinations", "sample_size"]]
+        var normalized = [["audit", "client", "language", "disclosure", "escalation", "context_transfer", "tone", "hallucinations", "sample_size", "transcript_id", "workflow", "date", "taxonomy_codes", "quoted_excerpt"]]
         for (sheetNumber, language) in [(2, "EN"), (3, "FR")] {
             let rows = XLSXXMLParser.rows(try zipText(archive, entry: "xl/worksheets/sheet\(sheetNumber).xml") ?? "", sharedStrings: strings)
             try ImportLimits.checkRows(normalized.count + rows.count - 1, url.lastPathComponent)
-            for row in rows.dropFirst() where row.count >= 8 && !row[0].isEmpty {
-                func scaled(_ index: Int) -> String { String((Double(row[index]) ?? 0) * 20) }
-                normalized.append([url.deletingPathExtension().lastPathComponent, url.deletingPathExtension().lastPathComponent, language, scaled(3), scaled(4), scaled(5), scaled(6), scaled(7), "1"])
+            let headers = (rows.first ?? []).map { $0.lowercased().replacingOccurrences(of: " ", with: "_") }
+            for (offset, row) in rows.dropFirst().enumerated() where !row.isEmpty && !row[0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // The canonical template prefills transcript IDs. An ID alone is
+                // not a scored transcript and must not create zero-score evidence.
+                if row.dropFirst().allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { continue }
+                func invalid(_ column: String) -> NSError {
+                    ImportLimits.error(422, "\(url.lastPathComponent), \(language) worksheet row \(offset + 2), \(column): use a numeric score from 0 to 5. Nothing from this file was imported.")
+                }
+                guard row.count >= 8 else { throw invalid("score columns") }
+                func scaled(_ index: Int) throws -> String {
+                    guard let value = Double(row[index]), value.isFinite, (0...5).contains(value) else {
+                        throw invalid(index < headers.count ? headers[index] : "score")
+                    }
+                    return String(value * 20)
+                }
+                func text(_ names: String...) -> String {
+                    for name in names { if let index = headers.firstIndex(of: name), index < row.count { return row[index] } }
+                    return ""
+                }
+                normalized.append(try [url.deletingPathExtension().lastPathComponent, url.deletingPathExtension().lastPathComponent, language, scaled(3), scaled(4), scaled(5), scaled(6), scaled(7), "1", row[0], row[1], row[2], text("taxonomy_code(s)", "taxonomy_codes"), text("notes_/_quoted_excerpt", "notes", "quoted_excerpt")])
             }
         }
-        return importBAEARows(normalized, source: url.lastPathComponent)
+        return try importBAEARows(normalized, source: url.lastPathComponent)
     }
 
-    private func importBAEARows(_ rows: [[String]], source: String) -> Int {
+    private func importBAEARows(_ rows: [[String]], source: String) throws -> Int {
         guard rows.count > 1 else {
             showNotice("No Lantern scores found.")
             return 0
         }
         let headers = rows[0].map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: " ", with: "_") }
         var grouped: [String: BilingualAudit] = [:]
-        for row in rows.dropFirst() {
+        for (offset, row) in rows.dropFirst().enumerated() {
             func value(_ names: String...) -> String {
                 for name in names { if let i = headers.firstIndex(of: name), i < row.count { return row[i].trimmingCharacters(in: .whitespacesAndNewlines) } }
                 return ""
@@ -1770,14 +1787,31 @@ final class AppStore: ObservableObject {
             guard !auditName.isEmpty else { continue }
             var audit = grouped[auditName] ?? BilingualAudit(name: auditName, client: value("client"))
             let language = value("language").uppercased()
+            func invalid(_ column: String, _ requirement: String) -> NSError {
+                ImportLimits.error(422, "\(source), row \(offset + 2), \(column): \(requirement). Nothing from this file was imported.")
+            }
+            guard language == "FR" || language == "EN" else { throw invalid("language", "use FR or EN") }
+            func scoreValue(_ raw: String, column: String, fallback: Int) throws -> Int {
+                guard !raw.isEmpty else { return fallback }
+                guard let number = Double(raw), number.isFinite, (0...100).contains(number), let whole = Int(exactly: number) else { throw invalid(column, "use a whole number from 0 to 100") }
+                return whole
+            }
             var score = language == "FR" ? audit.french : audit.english
-            score.disclosure = Int(value("disclosure")) ?? score.disclosure
-            score.escalation = Int(value("escalation")) ?? score.escalation
-            score.contextTransfer = Int(value("context_transfer", "context")) ?? score.contextTransfer
-            score.tone = Int(value("tone", "tone_register")) ?? score.tone
-            score.hallucinations = Int(value("hallucinations", "hallucination")) ?? score.hallucinations
-            if language == "FR" { audit.french = score; audit.sampleSizeFR += Int(value("sample_size", "samples")) ?? 1 }
-            else { audit.english = score; audit.sampleSizeEN += Int(value("sample_size", "samples")) ?? 1 }
+            score.disclosure = try scoreValue(value("disclosure"), column: "disclosure", fallback: score.disclosure)
+            score.escalation = try scoreValue(value("escalation"), column: "escalation", fallback: score.escalation)
+            score.contextTransfer = try scoreValue(value("context_transfer", "context"), column: "context_transfer", fallback: score.contextTransfer)
+            score.tone = try scoreValue(value("tone", "tone_register"), column: "tone", fallback: score.tone)
+            score.hallucinations = try scoreValue(value("hallucinations", "hallucination"), column: "hallucinations", fallback: score.hallucinations)
+            let rawSamples = value("sample_size", "samples")
+            let parsedSamples = Double(rawSamples).flatMap { $0.isFinite ? Int(exactly: $0) : nil }
+            guard let samples = rawSamples.isEmpty ? 1 : (Int(rawSamples) ?? parsedSamples), samples >= 0 else {
+                throw invalid("sample_size", "use a non-negative whole number")
+            }
+            let previousSamples = language == "FR" ? audit.sampleSizeFR : audit.sampleSizeEN
+            let (totalSamples, overflow) = previousSamples.addingReportingOverflow(samples)
+            guard !overflow else { throw invalid("sample_size", "the total sample count is too large") }
+            if language == "FR" { audit.french = score; audit.sampleSizeFR = totalSamples }
+            else { audit.english = score; audit.sampleSizeEN = totalSamples }
             audit.transcripts.append(BAEATranscript(
                 transcriptID: value("transcript_id", "id"),
                 language: language == "FR" ? .french : .english,
@@ -1790,12 +1824,37 @@ final class AppStore: ObservableObject {
             ))
             grouped[auditName] = audit
         }
-        for audit in grouped.values {
-            workspace.audits.removeAll { $0.name == audit.name }
-            workspace.audits.insert(audit, at: 0)
-            workspace.activity.insert(ActivityEvent(kind: "import", message: "Imported Lantern score export for \(audit.name) from \(source).", sourceID: audit.id), at: 0)
+        guard !grouped.isEmpty else { showNotice("No Lantern scores found."); return 0 }
+        try commitWorkspace { next in
+          for var audit in grouped.values.sorted(by: { $0.name < $1.name }) {
+            let existing = next.audits.indices.filter { next.audits[$0].name == audit.name }
+            guard existing.count <= 1 else {
+                throw ImportLimits.error(409, "\(source) matches multiple audits named \(audit.name). Resolve the duplicate names first. Nothing from this file was imported.")
+            }
+            if let index = existing.first {
+                let reviewed = next.audits[index]
+                audit.id = reviewed.id; audit.createdAt = reviewed.createdAt
+                audit.leadID = reviewed.leadID; audit.contactID = reviewed.contactID; audit.companyID = reviewed.companyID
+                audit.findings = reviewed.findings; audit.remediation = reviewed.remediation
+                audit.methodologyVersion = reviewed.methodologyVersion
+                if audit.client.isEmpty { audit.client = reviewed.client }
+                // Keep identical transcript identities stable on replay, consuming each
+                // old identity once so repeated identical rows still remain distinct.
+                var previous = reviewed.transcripts
+                for i in audit.transcripts.indices {
+                    if let match = previous.firstIndex(where: { old in
+                        var incoming = audit.transcripts[i]; incoming.id = old.id
+                        return incoming == old
+                    }) {
+                        audit.transcripts[i].id = previous.remove(at: match).id
+                    }
+                }
+                next.audits[index] = audit
+            } else { next.audits.insert(audit, at: 0) }
+            next.activity.insert(ActivityEvent(kind: "import", message: "Imported Lantern score export for \(audit.name) from \(source).", sourceID: audit.id), at: 0)
+          }
         }
-        persist(message: grouped.isEmpty ? "No Lantern scores found." : "Imported \(grouped.count) Lantern audit\(grouped.count == 1 ? "" : "s").")
+        showNotice("Imported \(grouped.count) Lantern audit\(grouped.count == 1 ? "" : "s").")
         return grouped.count
     }
 

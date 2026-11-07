@@ -204,11 +204,8 @@ struct NativeSmokeTests {
         try expect(try store.importBAEAXLSX(from: xlsxURL) == 1, "BAEA XLSX import count is incorrect")
         try expect(store.audits.contains { $0.name == "Workbook audit" && $0.sampleSizeFR == 20 }, "BAEA XLSX scores were not imported")
         try expect(store.audits.contains { $0.transcripts.contains { $0.language == .french } }, "BAEA transcript evidence was not retained")
-        let canonicalWorkbook = URL(fileURLWithPath: "/Users/pharos_ai/Downloads/BAEA/PHAROS-BAEA-WKBK-v1.0_Scoring_Workbook.xlsx")
-        if FileManager.default.fileExists(atPath: canonicalWorkbook.path) {
-            try expect(try store.importBAEAXLSX(from: canonicalWorkbook) == 1, "canonical BAEA workbook was not imported")
-            try expect(store.audits.contains { $0.sampleSizeFR > 0 && $0.sampleSizeEN > 0 }, "canonical BAEA workbook did not yield both languages")
-        }
+        // CSVImportTests creates canonical FR/EN and unfilled-template workbooks.
+        // Acceptance must be reproducible without reading an owner's Downloads.
 
         let exchangeURL = directory.appendingPathComponent("contextward-exchange.json")
         try store.exportExchange(to: exchangeURL)
