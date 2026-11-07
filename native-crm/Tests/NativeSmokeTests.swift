@@ -18,6 +18,10 @@ struct NativeSmokeTests {
             try await IntegrationTests.connectedPharos()
             return
         }
+        if CommandLine.arguments.dropFirst() == ["--connected-twenty"] {
+            try await TwentyConnectedTests.run()
+            return
+        }
         guard await ReleaseReviewTests.run() else { throw SmokeTestFailure.failed("Release review tests failed") }
         guard RecordDeletionTests.run() else { throw SmokeTestFailure.failed("Record deletion tests failed") }
         guard CRMSaveTests.run() else { throw SmokeTestFailure.failed("CRM save tests failed") }

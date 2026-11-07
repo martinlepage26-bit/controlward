@@ -592,4 +592,6 @@ struct TwentyLink: Codable, Equatable, Sendable {
     var object: TwentyObject
     var payloadHash: String
     var syncedAt = Date.now.ISO8601Format()
+    /// A create identity saved before HTTP. Nil is the legacy, completed state.
+    var pendingCreate: Bool?
 }

@@ -1,7 +1,7 @@
 import Foundation
 
-/// Connector tests: Keychain, key hygiene, PHAROS push, Twenty adapter. All HTTP is
-/// served by in-process fakes whose shapes follow the live services
+/// Default connector tests use in-process HTTP fakes for key hygiene, PHAROS and Twenty.
+/// Opt-in connected tests use real disposable backends. Fake shapes follow the services
 /// (pharos-contextward-api routes; Twenty v2.37 REST `/rest/<plural>` envelopes).
 @MainActor
 enum IntegrationTests {
@@ -20,6 +20,12 @@ enum IntegrationTests {
             ("Twenty: push requires a preview first", twentyRequiresPreview),
             ("Twenty: changed workspace invalidates preview with zero writes", twentyRejectsStalePreview),
             ("Twenty: dry run counts creates without any request", twentyDryRun),
+            ("Twenty: a converted lead previews and pushes one opportunity", twentyConvertedDeal),
+            ("Twenty: conversion after a prior push reuses its remote deal", twentyConversionReusesRemoteDeal),
+            ("Twenty: ambiguous legacy deal identities refuse all writes", twentyAmbiguousLegacyDeals),
+            ("Twenty: unwritable storage refuses the push before any request", twentyStoragePreflight),
+            ("Twenty: save failure after create resumes without duplicates", twentyStorageFailureAfterCreate),
+            ("Twenty: lost create response resumes without duplicates", twentyLostCreateResponse),
             ("Twenty: create then update by id map, no duplicates, no deletes", twentyUpsert),
             ("Twenty: relations resolve to Twenty ids", twentyRelations),
             ("Twenty: failure surfaces, keeps progress, retry does not duplicate", twentyErrorAndResume),
@@ -98,10 +104,12 @@ enum IntegrationTests {
         private(set) var records: [String: [String: [String: Any]]] = [:]
         private(set) var methods: [String] = []
         var failOnce: [String: HTTPResponse] = [:] // "POST people" -> response
+        var afterCreateOnce: (@Sendable () throws -> Void)?
+        var loseCreateResponseOnce = false
         init(key: String) { self.key = key }
 
         func send(_ request: URLRequest) async throws -> HTTPResponse {
-            lock.withLock {
+            try lock.withLock {
                 let method = request.httpMethod ?? "GET"
                 methods.append(method)
                 guard request.value(forHTTPHeaderField: "Authorization") == "Bearer \(key)" else {
@@ -117,9 +125,12 @@ enum IntegrationTests {
                 case ("GET", 2):
                     return json(200, ["data": [object: Array((records[object] ?? [:]).values.prefix(1))], "totalCount": records[object]?.count ?? 0, "pageInfo": ["hasNextPage": false]])
                 case ("POST", 2):
-                    let id = UUID().uuidString.lowercased()
+                    let id = body["id"] as? String ?? UUID().uuidString.lowercased()
+                    guard records[object]?[id] == nil else { return json(400, ["error": "DUPLICATE_ID"]) }
                     var record = body; record["id"] = id
                     records[object, default: [:]][id] = record
+                    if let afterCreate = afterCreateOnce { afterCreateOnce = nil; try afterCreate() }
+                    if loseCreateResponseOnce { loseCreateResponseOnce = false; throw URLError(.networkConnectionLost) }
                     return json(201, ["data": ["create\(singular)": record]])
                 case ("PATCH", 3):
                     let id = parts[2]
@@ -382,6 +393,108 @@ enum IntegrationTests {
 
     // MARK: - Twenty
 
+    static func twentyConvertedDeal() async throws {
+        let (store, fake) = try configuredTwenty()
+        var lead = Lead.blank(); lead.name = "Camille Synthetic"; lead.company = "Synthetic Studio"
+        lead.email = "converted@example.test"; lead.quoteAmount = 1250
+        guard store.add(lead), let conversion = store.conversionPlan(for: lead), store.convertLead(confirmed: conversion) != nil else {
+            throw SmokeTestFailure.failed("conversion fixture failed")
+        }
+        let preview = store.previewTwentyPush()
+        try expect(preview.count(.create, .opportunities) == 1 && preview.creates == 4, "one converted deal produced duplicate remote opportunities: \(preview.summary)")
+        let job = await store.pushToTwenty()
+        try expect(job.status == "synced" && fake.count("opportunities") == 1, "converted deal duplicated in Twenty")
+        try expect(store.workspace.twentyLinks[TwentyMapper.key("opportunity", store.opportunities[0].id)] != nil, "canonical opportunity identity was not saved")
+    }
+
+    static func twentyConversionReusesRemoteDeal() async throws {
+        let (store, fake) = try configuredTwenty()
+        var lead = Lead.blank(); lead.name = "Camille Synthetic"; lead.company = "Synthetic Studio"
+        lead.email = "converted@example.test"; lead.quoteAmount = 1250
+        store.add(lead)
+        _ = store.previewTwentyPush(); _ = await store.pushToTwenty()
+        let original = store.workspace.twentyLinks[TwentyMapper.key("lead", lead.id)]?.twentyID
+        guard let conversion = store.conversionPlan(for: lead), store.convertLead(confirmed: conversion) != nil else {
+            throw SmokeTestFailure.failed("conversion fixture failed")
+        }
+        let plan = store.previewTwentyPush()
+        try expect(plan.count(.create, .opportunities) == 0 && plan.count(.update, .opportunities) == 1, "conversion planned another remote deal")
+        let job = await store.pushToTwenty()
+        let canonical = store.workspace.twentyLinks[TwentyMapper.key("opportunity", store.opportunities[0].id)]?.twentyID
+        try expect(job.status == "synced" && fake.count("opportunities") == 1 && canonical == original, "conversion replaced the remote identity")
+        let repeated = store.previewTwentyPush()
+        try expect(repeated.creates == 0 && repeated.updates == 0 && repeated.unchangedTotal == 4, "canonical identity did not settle after conversion")
+    }
+
+    static func twentyAmbiguousLegacyDeals() async throws {
+        let (store, fake) = try configuredTwenty()
+        var workspace = store.workspace
+        var lead = Lead.blank(); lead.name = "Synthetic prior deal"
+        let first = Opportunity(name: "First synthetic deal", leadID: lead.id)
+        let second = Opportunity(name: "Second synthetic deal", leadID: lead.id)
+        workspace.leads = [lead]; workspace.opportunities = [first, second]
+        workspace.twentyLinks[TwentyMapper.key("lead", lead.id)] = TwentyLink(twentyID: UUID().uuidString, object: .opportunities, payloadHash: "legacy")
+        try SecureFiles.writePrivate(JSONEncoder().encode(workspace), to: store.storageURL)
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: store.secrets, transport: fake)
+        let preview = reloaded.previewTwentyPush()
+        let job = await reloaded.pushToTwenty()
+        try expect(!preview.blockers.isEmpty && job.status == "failed" && fake.methodLog.isEmpty, "ambiguous deal identities reached the network")
+    }
+
+    static func twentyStoragePreflight() async throws {
+        let (store, fake) = try configuredTwenty(); seedCRM(store)
+        _ = store.previewTwentyPush()
+        let directory = store.storageURL.deletingLastPathComponent()
+        let retained = directory.appendingPathExtension("retained-\(UUID())")
+        try FileManager.default.moveItem(at: directory, to: retained)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.moveItem(at: retained, to: directory)
+        }
+        try Data("synthetic storage blocker".utf8).write(to: directory)
+        let job = await store.pushToTwenty()
+        try expect(job.status == "failed" && fake.methodLog.isEmpty, "unwritable storage still wrote to Twenty or reported success")
+    }
+
+    static func twentyStorageFailureAfterCreate() async throws {
+        let (store, fake) = try configuredTwenty(); seedCRM(store)
+        let directory = store.storageURL.deletingLastPathComponent()
+        let retained = directory.appendingPathExtension("retained-\(UUID())")
+        fake.afterCreateOnce = {
+            try FileManager.default.moveItem(at: directory, to: retained)
+            try Data("synthetic storage blocker".utf8).write(to: directory)
+        }
+        defer {
+            if FileManager.default.fileExists(atPath: retained.path) {
+                try? FileManager.default.removeItem(at: directory)
+                try? FileManager.default.moveItem(at: retained, to: directory)
+            }
+        }
+        _ = store.previewTwentyPush()
+        let failed = await store.pushToTwenty()
+        try expect(failed.status == "failed" && fake.count("companies") == 1 && fake.count("people") == 0, "failed identity save continued publishing or reported success")
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.moveItem(at: retained, to: directory)
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: store.secrets, transport: fake)
+        reloaded.twentyPacing = .zero
+        _ = reloaded.previewTwentyPush()
+        let resumed = await reloaded.pushToTwenty()
+        try expect(resumed.status == "synced" && fake.count("companies") == 1 && fake.count("people") == 1 && fake.count("opportunities") == 1 && fake.count("tasks") == 1, "reload after an identity save failure duplicated remote work")
+    }
+
+    static func twentyLostCreateResponse() async throws {
+        let (store, fake) = try configuredTwenty(); seedCRM(store)
+        fake.loseCreateResponseOnce = true
+        _ = store.previewTwentyPush()
+        let failed = await store.pushToTwenty()
+        try expect(failed.status == "failed" && fake.count("companies") == 1, "lost-response fixture did not store the first remote record")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: store.secrets, transport: fake)
+        reloaded.twentyPacing = .zero
+        _ = reloaded.previewTwentyPush()
+        let resumed = await reloaded.pushToTwenty()
+        try expect(resumed.status == "synced" && fake.count("companies") == 1 && fake.count("people") == 1, "lost create response duplicated the remote company")
+    }
+
     static func twentyRequiresPreview() async throws {
         let (store, fake) = try configuredTwenty()
         seedCRM(store)
@@ -464,11 +577,12 @@ enum IntegrationTests {
         try expect(failed.status == "failed" && failed.error?.contains("HTTP 400") == true, "400 not surfaced: \(failed.error ?? "nil")")
         try expect(failed.error?.contains("jane@example.test") == false, "error text leaked record PII")
         guard case .error = store.connectorStatus(.twenty) else { throw SmokeTestFailure.failed("status is not Error after a failed push") }
-        try expect(fake.count("companies") == 1 && store.workspace.twentyLinks.count == 1, "progress before the failure was not kept")
+        try expect(fake.count("companies") == 1 && store.workspace.twentyLinks.values.filter { $0.pendingCreate != true }.count == 1 && store.workspace.twentyLinks.values.filter { $0.pendingCreate == true }.count == 1, "completed company and pending person identities were not kept")
         store.previewTwentyPush()
         let retried = await store.pushToTwenty()
         try expect(retried.status == "synced", "retry failed: \(retried.error ?? "")")
         try expect(fake.count("companies") == 1 && fake.count("people") == 1, "retry duplicated records")
+        try expect(store.workspace.twentyLinks.values.allSatisfy { $0.pendingCreate != true }, "successful retry left pending identities")
     }
 
     static func twentyRetryAndRelink() async throws {

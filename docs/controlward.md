@@ -162,6 +162,8 @@ credentials to a backup-supplied endpoint.
 ./bin/test-connected-workspace /path/to/project-control
 # Optional native HTTP-to-Worker/D1 check; uses only disposable loopback data:
 ./bin/test-connected-pharos
+# Optional native Twenty check; official disposable service available at127.0.0.1:8882:
+./bin/test-connected-twenty /private/path/disposable-twenty.key
 ./bin/preview-controlward
 CONTEXTWARD_SIGN_IDENTITY=- ./bin/package-native-app
 ```

@@ -30,6 +30,8 @@ contract for health checks and authenticated exchange intake. The Worker is
 deployed to the configured Cloudflare account with D1 receipt persistence;
 provider credentials remain outside the native workspace.
 
+See [native Twenty acceptance](../docs/twenty-native-acceptance-20261107.md) for conversion identity, interrupted-push recovery and the disposable test contract.
+
 ## Build and test
 
 For agent-assisted prospect discovery, describe the target to an agent with public
@@ -44,6 +46,8 @@ It does not include an independent general search provider or send outreach.
 ```bash
 ./bin/test-native-app
 CONTEXTWARD_SIGN_IDENTITY=- ./bin/build-native-app
+# Optional: real native connector against an official disposable Twenty instance on127.0.0.1:8882
+./bin/test-connected-twenty /private/path/disposable-twenty.key
 ```
 
 The locally signed bundle is created at:
