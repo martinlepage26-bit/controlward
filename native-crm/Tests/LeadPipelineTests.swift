@@ -1461,6 +1461,38 @@ enum LeadPipelineTests {
                 try expect(list.processReply(from: "Alex <info@clinique-exemple.test>", to: config.sender.unsubscribeMailto, subject: "Re: question", firstLine: "Désabonner", config: config, at: now), "recorded")
                 try expect(SuppressionList(storageURL: file).contains("INFO@clinique-exemple.test"), "persisted")
             }),
+            ("Unreadable unsubscribe records block drafts and preserve the original file", {
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("cw-supp-corrupt-\(UUID()).json")
+                defer { try? FileManager.default.removeItem(at: file) }
+                let original = Data("{broken unsubscribe data".utf8)
+                try original.write(to: file)
+                let list = SuppressionList(storageURL: file)
+                let prospect = LeadKit.readyClinic()
+                let draft = LeadKit.draft(for: prospect, config: config)
+                try expect(list.contains(draft.to), "an unreadable list must fail closed")
+                try expect(OutreachDraftGate.check(draft, prospect: prospect, config: config, suppression: list, now: now) != nil, "no draft when exclusions cannot be checked")
+                var ownerDraft = draft; ownerDraft.to = config.sender.from
+                try expect(OutreachSendGate.check(ownerDraft, approval: LeadKit.approval(ownerDraft), config: config, suppression: list) != nil, "an approved message is also blocked")
+                try expect(!list.processReply(from: draft.to, to: config.sender.unsubscribeMailto, subject: "unsubscribe", firstLine: "", config: config, at: now), "corrupt file is not overwritten or acknowledged")
+                try expect(try Data(contentsOf: file) == original, "original bytes retained")
+            }),
+            ("An unsubscribe is acknowledged only after its private save succeeds", {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("cw-supp-save-\(UUID())")
+                defer { try? FileManager.default.removeItem(at: root) }
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let blocker = root.appendingPathComponent("blocked")
+                let file = blocker.appendingPathComponent("list.json")
+                let list = SuppressionList(storageURL: file)
+                try Data("blocker".utf8).write(to: blocker)
+                try expect(!list.processReply(from: "info@clinique-exemple.test", to: config.sender.unsubscribeMailto, subject: "unsubscribe", firstLine: "", config: config, at: now), "failed save is not acknowledged")
+                try expect(list.contains("another@exemple.test"), "unavailable exclusion storage blocks drafting")
+                try expect(list.all.isEmpty, "a failed save is not published as a durable unsubscribe")
+                try FileManager.default.removeItem(at: blocker)
+                try expect(list.processReply(from: "info@clinique-exemple.test", to: config.sender.unsubscribeMailto, subject: "unsubscribe", firstLine: "", config: config, at: now), "retry saved")
+                try expect(list.unavailableReason == nil, "successful retry clears the save failure")
+                let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+                try expect(mode?.intValue == 0o600 && SuppressionList(storageURL: file).contains("info@clinique-exemple.test"), "private and durable")
+            }),
             ("Send gate: Martin's approval for that exact message, to Martin's own address, passes", {
                 var draft = LeadKit.draft(for: LeadKit.readyClinic(), config: config)
                 draft.to = "ml@pharos-ai.ca"
@@ -1573,6 +1605,9 @@ enum LeadPipelineTests {
                 var elsewhere = draft
                 elsewhere.body = elsewhere.body.replacingOccurrences(of: LeadKit.homePage, with: "https://annuaire.example.test/clinique")
                 try expect(OutreachDraftGate.check(elsewhere, prospect: lead, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:unsupported-claim", "off-site URL")
+                var afterFooter = draft
+                afterFooter.body += "\nSur votre site https://invented.example.test : « unsupported claim »"
+                try expect(OutreachDraftGate.check(afterFooter, prospect: lead, config: config, suppression: SuppressionList(), now: now) != nil, "claims after a footer cannot evade review")
                 var stale = lead
                 stale.snapshots[0].text = "Clinique Exemple Nord"
                 try expect(OutreachDraftGate.check(draft, prospect: stale, config: config, suppression: SuppressionList(), now: now)?.code == "refused:research:manual-review", "excerpt gone from snapshot")

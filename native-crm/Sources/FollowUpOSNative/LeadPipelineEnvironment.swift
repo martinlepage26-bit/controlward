@@ -21,6 +21,12 @@ struct LeadPipelineEnvironment: Sendable {
     static func defaultRoot(reviewDirectory: URL? = ReviewWorkspace.directory) -> URL {
         // Review mode takes precedence over the normal research store and its legacy override.
         if let reviewDirectory { return reviewDirectory.appendingPathComponent("leads", isDirectory: true) }
+#if DEBUG && CONTEXTWARD_ACCEPTANCE
+        if let mode = ProcessInfo.processInfo.environment["CONTROLWARD_PREVIEW"], ["empty", "synthetic"].contains(mode),
+           let path = ProcessInfo.processInfo.environment["FOLLOWUPOS_DATA_DIR"], path.contains("controlward-preview-") {
+            return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("leads", isDirectory: true)
+        }
+#endif
         if let env = ProcessInfo.processInfo.environment["CONTROLWARD_LEADS_DIR"], !env.isEmpty { return URL(fileURLWithPath: env) }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
@@ -56,10 +62,10 @@ struct LeadPipelineEnvironment: Sendable {
     }
 
     func makeRun(inner: any LeadTransport = URLSessionLeadTransport(), audit: any CWAuditSink, clock: any LeadClock = SystemLeadClock(),
-                 rbq: RBQIndex? = nil, watchItems: [WatchItem] = []) -> (ProspectSearchRun, GuardedLeadTransport) {
+                 rbq: RBQIndex? = nil, watchItems: [WatchItem] = [], additionalSuppression: [SuppressionList.Entry] = []) -> (ProspectSearchRun, GuardedLeadTransport) {
         let guarded = GuardedLeadTransport(config: config, inner: inner, audit: audit, clock: clock)
         var run = ProspectSearchRun(config: config, transport: guarded, audit: audit, clock: clock,
-                                    suppression: SuppressionList(storageURL: suppressionURL))
+                                    suppression: SuppressionList(storageURL: suppressionURL, additionalEntries: additionalSuppression))
         run.rbq = rbq
         run.watchItems = watchItems
         return (run, guarded)
@@ -67,7 +73,7 @@ struct LeadPipelineEnvironment: Sendable {
 
     /// Search, then pull the results into the Leads list and save the drafts locally. Nothing is sent.
     func searchAndIngest(_ requests: [ProspectSearchRun.Request], inner: any LeadTransport = URLSessionLeadTransport(),
-                         audit: any CWAuditSink, clock: any LeadClock = SystemLeadClock()) async -> [ProspectSearchRun.Report] {
+                         audit: any CWAuditSink, clock: any LeadClock = SystemLeadClock(), additionalSuppression: [SuppressionList.Entry] = []) async -> [ProspectSearchRun.Report] {
         var rbq: RBQIndex?
         var rbqFailure: String?
         do { rbq = try cachedRBQIndex() } catch {
@@ -79,7 +85,7 @@ struct LeadPipelineEnvironment: Sendable {
             audit.write(CWAuditLine(ts: clock.now, surface: "leads", action: "rbq-load", target: RBQOpenData.sourceID, source: "rbq_open_data",
                                     result: code, receipt: "-"))
         }
-        var (run, _) = makeRun(inner: inner, audit: audit, clock: clock, rbq: rbq)
+        var (run, _) = makeRun(inner: inner, audit: audit, clock: clock, rbq: rbq, additionalSuppression: additionalSuppression)
         run.rbqFailure = rbqFailure
         var reports: [ProspectSearchRun.Report] = []
         let store = ProspectLeadsStore(fileURL: storeURL)

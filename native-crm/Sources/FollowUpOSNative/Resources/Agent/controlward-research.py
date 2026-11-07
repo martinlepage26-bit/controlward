@@ -50,10 +50,11 @@ def select_workspace(args, paths=None):
             continue
         try:
             availability = json.loads((inbox / "available.json").read_text())
-            if availability["schema"] != 1 or availability["mode"] != ("review" if review_id else "normal"):
+            if availability["schema"] != 2 or availability["mode"] != ("review" if review_id else "normal"):
                 continue
             if review_id and v4(availability["reviewID"]) != review_id:
                 continue
+            v4(availability["workspaceGeneration"])
             pid = int(availability["pid"])
             alive = False
             if 0 <= (utc() - date(availability["updatedAt"])).total_seconds() < 240:
@@ -136,7 +137,7 @@ def main():
     args = parser.parse_args()
     inbox, availability = select_workspace(args)
     if args.command == "capabilities":
-        result = {"schema": 1, "mode": availability["mode"], "build": availability["build"], "app_running": availability["app_running"], "inbox": str(inbox), "max_candidates": 10, "auto_send": False}
+        result = {"schema": 2, "workspace_generation": availability["workspaceGeneration"], "mode": availability["mode"], "build": availability["build"], "app_running": availability["app_running"], "inbox": str(inbox), "max_candidates": 10, "auto_send": False}
     elif args.command == "submit":
         if not args.query or len(args.query) > 1000 or args.input is None:
             raise ValueError("Submit requires --query and --input")
@@ -146,7 +147,7 @@ def main():
         ids = []
         for offset in range(0, len(sites), 3):
             job = str(uuid.uuid4())
-            request = {"schema": 1, "id": job, "batchID": batch, "query": args.query,
+            request = {"schema": 2, "workspaceGeneration": availability["workspaceGeneration"], "id": job, "batchID": batch, "query": args.query,
                        "createdAt": now.isoformat(timespec="milliseconds"), "expiresAt": (now + dt.timedelta(hours=1)).isoformat(timespec="milliseconds"), "sites": sites[offset:offset + 3]}
             private_json(inbox / "requests" / (job + ".json"), request)
             ids.append(job)

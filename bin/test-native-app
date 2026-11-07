@@ -14,6 +14,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/Security.swift" \
   "${SOURCE_ROOT}/Integrations.swift" \
   "${SOURCE_ROOT}/Discovery.swift" \
+  "${SOURCE_ROOT}/DiscoveryModels.swift" \
   "${SOURCE_ROOT}/AgentResearch.swift" \
   "${SOURCE_ROOT}/GTMModels.swift" \
   "${SOURCE_ROOT}/AccountIdentity.swift" \
@@ -50,6 +51,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/LeadWorkflow.swift" \
   "${SOURCE_ROOT}/LocalReminders.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/OverviewModelTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/ProspectingOverviewTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/WorkspaceModuleTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ControlWardTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/SecurityTests.swift" \
@@ -62,6 +64,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/BuildInfoTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/AgentResearchTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/ResearchRecoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GTMTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/CSVImportTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/LeadGenFileTests.swift" \

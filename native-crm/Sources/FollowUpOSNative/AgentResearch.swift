@@ -5,16 +5,18 @@ import Darwin
 /// An agent supplies discovery inputs only. Contacts, AI claims, drafts and send instructions are not inputs.
 struct AgentResearchRequest: Codable, Equatable, Sendable {
     struct Site: Codable, Equatable, Sendable { var name: String; var url: String }
-    var schema = 1
+    var schema = 2
     var id: UUID
     var batchID: UUID
+    var workspaceGeneration: UUID? = nil
     var query: String
     var createdAt: Date
     var expiresAt: Date
     var sites: [Site]
 
     func candidates(now: Date) throws -> [DiscoveryCandidate] {
-        guard schema == 1, Self.isV4(id), Self.isV4(batchID), !query.isEmpty, query.count <= 1000,
+        guard schema == 2, Self.isV4(id), Self.isV4(batchID),
+              workspaceGeneration.map(Self.isV4) == true, !query.isEmpty, query.count <= 1000,
               createdAt <= now.addingTimeInterval(300), expiresAt > now,
               expiresAt > createdAt, expiresAt.timeIntervalSince(createdAt) <= 3600,
               (1...3).contains(sites.count), sites.allSatisfy({ !$0.name.isEmpty && $0.name.count <= 200 && !$0.name.contains("|") && !$0.name.contains("\n") && !$0.url.contains("\n") }) else {
@@ -94,7 +96,8 @@ final class AgentResearchCoordinator: ObservableObject {
     private var lease: AgentResearchLease?
 
     struct Availability: Codable {
-        var schema = 1
+        var schema = 2
+        var workspaceGeneration: UUID
         var pid: Int32
         var mode: String
         var reviewID: String?
@@ -104,7 +107,7 @@ final class AgentResearchCoordinator: ObservableObject {
 
     func start(store: AppStore, configDirectory: URL?) {
         guard loop == nil, let configDirectory else { return }
-        let root = LeadPipelineEnvironment.defaultRoot()
+        let root = store.researchRoot
         directory = root.appendingPathComponent("agent-inbox", isDirectory: true)
         do {
             try SecureFiles.ensurePrivateDirectory(directory!)
@@ -114,10 +117,10 @@ final class AgentResearchCoordinator: ObservableObject {
         loop = Task {
             do {
                 let config = try ICPConfig.load(directory: configDirectory).interactiveSearch()
-                try publishAvailability()
+                try publishAvailability(store: store)
                 refreshRecent()
                 while !Task.isCancelled {
-                    try publishAvailability()
+                    try publishAvailability(store: store)
                     await processPending(store: store, root: root, config: config)
                     do { try await Task.sleep(for: .seconds(2)) } catch { break }
                 }
@@ -134,9 +137,9 @@ final class AgentResearchCoordinator: ObservableObject {
         summary = "Stopping research. Completed findings are retained."
     }
 
-    private func publishAvailability() throws {
+    private func publishAvailability(store: AppStore) throws {
         guard let directory else { return }
-        let value = Availability(pid: ProcessInfo.processInfo.processIdentifier,
+        let value = Availability(workspaceGeneration: store.workspace.researchGeneration, pid: ProcessInfo.processInfo.processIdentifier,
                                  mode: StorageLocation.isReview ? "review" : "normal",
                                  reviewID: StorageLocation.reviewID?.uuidString,
                                  build: BuildInfo.current.build, updatedAt: .now)
@@ -164,6 +167,10 @@ final class AgentResearchCoordinator: ObservableObject {
                 processed += 1
                 do {
                     let request = try AgentResearchFiles.request(url)
+                    guard request.workspaceGeneration == store.workspace.researchGeneration else {
+                        try AgentResearchFiles.write(AgentResearchOutcome(id: request.id, batchID: request.batchID, query: request.query, status: "cancelled", message: "The workspace was restored or reset. Submit a fresh request for this workspace generation. No website was contacted.", updatedAt: .now), to: output)
+                        continue
+                    }
                     _ = try request.candidates(now: .now)
                     let cancellation = directory.appendingPathComponent("cancel/\(request.batchID.uuidString.lowercased()).json")
                     if FileManager.default.fileExists(atPath: cancellation.path) {
@@ -182,7 +189,7 @@ final class AgentResearchCoordinator: ObservableObject {
                             if FileManager.default.fileExists(atPath: cancellation.path) {
                                 cancelledByOwner = true; task.cancel(); return
                             }
-                            try? publishAvailability()
+                            try? publishAvailability(store: store)
                         }
                         deadlineReached = true
                         task.cancel()
@@ -207,7 +214,7 @@ final class AgentResearchCoordinator: ObservableObject {
                     summary = "An invalid or unreadable agent request was refused."
                     running = false; work = nil
                 }
-                try publishAvailability()
+                try publishAvailability(store: store)
             }
         } catch { summary = "The agent inbox could not be read; existing data was retained." }
     }
@@ -216,13 +223,23 @@ final class AgentResearchCoordinator: ObservableObject {
     func execute(_ request: AgentResearchRequest, store: AppStore, root: URL, config: ICPConfig, output: URL,
                  inner: any LeadTransport = URLSessionLeadTransport(), clock: any LeadClock = SystemLeadClock()) async -> AgentResearchOutcome {
         var outcome = AgentResearchOutcome(id: request.id, batchID: request.batchID, query: request.query, status: "running", updatedAt: clock.now)
+        let generation = store.workspace.researchGeneration
+        guard request.workspaceGeneration == generation else {
+            outcome.status = "cancelled"
+            outcome.message = "Workspace generation changed. No website was contacted; submit a fresh request."
+            try? AgentResearchFiles.write(outcome, to: output)
+            return outcome
+        }
+        let token = store.beginResearch()
+        defer { store.endResearch(token) }
+        let root = store.researchRoot
         do {
             let candidates = try request.candidates(now: clock.now)
             guard let segment = config.segments.first(where: { $0.osmSelectors.contains("office=company") }) else { throw AgentResearchError.invalidRequest }
-            var cache = try WebsiteResearchCache.load(root.appendingPathComponent("quick-scan-research.json"))
+            var cache = try store.researchSnapshot().cache
+            try store.recordDiscoveryCandidates(candidates)
             let guarded = GuardedLeadTransport(config: config, inner: InteractiveLeadTransport(inner: inner), audit: FileAuditSink(url: root.appendingPathComponent("cw-audit.log")), clock: clock)
             let researcher = QuickScanResearcher(config: config, transport: guarded, clock: clock)
-            let suppression = SuppressionList(storageURL: root.appendingPathComponent("suppression.json"))
             try AgentResearchFiles.write(outcome, to: output)
             for candidate in candidates {
                 guard !Task.isCancelled else { break }
@@ -236,11 +253,11 @@ final class AgentResearchCoordinator: ObservableObject {
                     result = saved
                 } else { result = await researcher.research(source, segmentID: segment.id) }
                 // Load before merging so a manual research run completed during this fetch is retained too.
-                cache = try WebsiteResearchCache.load(root.appendingPathComponent("quick-scan-research.json"))
-                cache.merge(candidate, result: result)
-                try cache.save(root.appendingPathComponent("quick-scan-research.json"))
+                guard store.workspace.researchGeneration == generation else { throw AgentResearchError.invalidRequest }
+                try store.recordWebsiteResearch(candidate, result: result)
+                cache = store.websiteResearch
                 var leadID: UUID?
-                let assessment = result.draftAssessment(config: config, suppression: suppression, now: clock.now)
+                let assessment = result.draftAssessment(config: config, suppression: store.suppressionList, now: clock.now)
                 if assessment.draft != nil {
                     leadID = store.acceptDiscovery(candidate, research: result, researchConfig: config)
                     if leadID == nil { throw GTMError.invalid("The researched lead could not be saved. No draft was published.") }

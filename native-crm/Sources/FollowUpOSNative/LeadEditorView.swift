@@ -17,6 +17,16 @@ struct LeadEditorView: View {
     @State private var groundedDraft: LeadWorkflow.GroundedDraft?
     private let isNew: Bool
 
+    private var emailSubject: String {
+        LeadWorkflow.emailSubject(for: draft, body: message, fallback: store.groundedDraft(for: draft).subject)
+    }
+
+    private var emailDraftIssue: String? {
+        let config = ICPConfig.defaultDirectory(bundle: AppResources.bundle).flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
+        return LeadWorkflow.emailDraftIssue(for: draft, body: message, subject: emailSubject,
+                                           config: config, suppression: store.suppressionList, now: .now)
+    }
+
     init(lead: Lead, isNew: Bool) {
         _draft = State(initialValue: lead)
         _message = State(initialValue: lead.outreachDraft ?? lead.lastMessage)
@@ -278,13 +288,14 @@ struct LeadEditorView: View {
                 HStack {
                     Button("Copy", systemImage: "doc.on.doc") { copyMessage() }
                     Button("Email", systemImage: "envelope") { emailMessage() }
-                        .disabled(draft.email.isEmpty || message.isEmpty)
-                        .help("Opens this draft in your mail app. Nothing is sent until you send it there.")
+                        .disabled(draft.email.isEmpty || message.isEmpty || emailDraftIssue != nil)
+                        .help(emailDraftIssue ?? "Opens this draft in your mail app. Nothing is sent until you send it there.")
                     Spacer()
                     Button("Mark as sent", systemImage: "paperplane") { markSent() }
                         .buttonStyle(.borderedProminent)
                         .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                if let issue = emailDraftIssue { Text(issue).font(.caption).foregroundStyle(CRMTheme.rust) }
             } else {
                 Button {
                     generate()
@@ -406,14 +417,17 @@ struct LeadEditorView: View {
     }
 
     private func emailMessage() {
+        // Files or evidence may change while the editor is open; the action checks again too.
+        if let issue = emailDraftIssue { validationMessage = issue; return }
         var components = URLComponents()
         components.scheme = "mailto"
-        components.path = draft.email
+        components.path = MailAddress.bare(draft.email)
         components.queryItems = [
-            URLQueryItem(name: "subject", value: store.groundedDraft(for: draft).subject),
+            URLQueryItem(name: "subject", value: emailSubject),
             URLQueryItem(name: "body", value: message),
         ]
-        if let url = components.url { NSWorkspace.shared.open(url) }
+        guard let url = components.url else { validationMessage = "This email draft could not be prepared. Check the recipient and message."; return }
+        if !NSWorkspace.shared.open(url) { validationMessage = "No email application could open this draft. Copy the text or configure your default mail app." }
     }
 
     private func markSent() {

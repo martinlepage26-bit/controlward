@@ -14,6 +14,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
   "${SOURCE_ROOT}/Security.swift" \
   "${SOURCE_ROOT}/Integrations.swift" \
   "${SOURCE_ROOT}/Discovery.swift" \
+  "${SOURCE_ROOT}/DiscoveryModels.swift" \
   "${SOURCE_ROOT}/AgentResearch.swift" \
   "${SOURCE_ROOT}/GTMModels.swift" \
   "${SOURCE_ROOT}/AccountIdentity.swift" \

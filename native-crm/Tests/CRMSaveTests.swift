@@ -20,6 +20,9 @@ import Foundation
             ("delete lead and close task", { $0.delete($0.leads[0]) }),
             ("link lead and signal", { s in s.linkLead(s.leads[0].id, companyID: s.companies[0].id, contactID: s.contacts[0].id) }),
             ("save business", { s in var b = s.business; b.name = "Changed"; s.saveBusiness(b) }),
+            ("local security scan", { _ = $0.runLocalExposureScan() }),
+            ("resolve security finding", { $0.resolve($0.exposureFindings[0]) }),
+            ("mark security review", { $0.markSecurityReviewed() }),
             ("log follow-up", { s in var l = s.leads[0]; s.markMessageSent(on: &l, message: "Synthetic message") }),
         ]
         var failures = 0
@@ -53,6 +56,7 @@ import Foundation
             w.leads = [lead]; w.tasks = [task]
             w.contacts = [Contact(firstName: "Original")]; w.companies = [Company(name: "Original")]
             w.opportunities = [Opportunity(name: "Original", leadID: lead.id)]
+            w.exposureFindings = [ExposureFinding(lens: "Identity Exposure", severity: .warning, title: "Existing review", detail: "Synthetic", recordID: lead.id)]
             var signal = Signal(); signal.leadID = lead.id; w.signals = [signal]
         }
         let before = try bytes(store.workspace)

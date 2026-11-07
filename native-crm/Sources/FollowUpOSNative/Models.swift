@@ -83,6 +83,11 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct PersistentWorkspace: Codable, Equatable, Sendable {
+    var websiteResearch = WebsiteResearchCache()
+    var researchMigrationComplete = true
+    var researchGeneration = UUID()
+    var consumedResearchRecovery: String?
+    var restoredSuppressionEntries: [SuppressionList.Entry] = []
     var controlWard = ControlWardWorkspace()
     var accountIntelligence = GTMWorkspace()
     var business = BusinessProfile()
@@ -120,6 +125,16 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        websiteResearch = try container.decodeIfPresent(WebsiteResearchCache.self, forKey: .websiteResearch) ?? WebsiteResearchCache()
+        researchMigrationComplete = try container.decodeIfPresent(Bool.self, forKey: .researchMigrationComplete) ?? false
+        researchGeneration = try container.decodeIfPresent(UUID.self, forKey: .researchGeneration) ?? UUID()
+        consumedResearchRecovery = try container.decodeIfPresent(String.self, forKey: .consumedResearchRecovery)
+        restoredSuppressionEntries = try container.decodeIfPresent([SuppressionList.Entry].self, forKey: .restoredSuppressionEntries) ?? []
+        try websiteResearch.validate()
+        guard restoredSuppressionEntries.count <= 100_000,
+              restoredSuppressionEntries.allSatisfy({ MailAddress.domain($0.address) != nil }) else {
+            throw DecodingError.dataCorruptedError(forKey: .restoredSuppressionEntries, in: container, debugDescription: "Invalid restored unsubscribe records.")
+        }
         controlWard = try container.decodeIfPresent(ControlWardWorkspace.self, forKey: .controlWard) ?? ControlWardWorkspace()
         accountIntelligence = try container.decodeIfPresent(GTMWorkspace.self, forKey: .accountIntelligence) ?? GTMWorkspace()
         guard accountIntelligence.schemaVersion == 1,
@@ -153,6 +168,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case websiteResearch, researchMigrationComplete, researchGeneration, consumedResearchRecovery, restoredSuppressionEntries
         case controlWard
         case accountIntelligence
         case business, leads, contacts, companies, opportunities, tasks, notes, signals, audits, automationRules, activity, syncJobs, exposureFindings, connectorEndpoints, connectorHealth, twentyLinks, savedViews, lastSecurityReview, leadInboxCursor, autoPullLeads, leadInboxEpoch, dismissedLeadSources, autoPilotEnabled

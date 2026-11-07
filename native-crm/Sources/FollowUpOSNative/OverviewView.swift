@@ -407,16 +407,20 @@ struct Avatar: View {
     }
 }
 
-/// Prospecting funnel read from the local Leads folder: stages, not raw row counts. Nothing leaves the Mac.
+/// A source-deduplicated view of both discovery paths and saved CRM research.
 struct LeadFunnelStrip: View {
-    @State private var funnel: LeadFunnel?
+    @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var research: AgentResearchCoordinator
+    @State private var snapshot: ProspectingOverviewSnapshot?
+    @State private var error: String?
 
     var body: some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 6) {
+          HStack(spacing: 12) {
             Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 18)).foregroundStyle(CWPalette.goldIcon)
             Text("PROSPECTING").font(.system(size: 9, weight: .medium)).tracking(0.4).foregroundStyle(CWPalette.gray)
-            if let funnel {
-                ForEach(Array(funnel.stages.enumerated()), id: \.offset) { index, stage in
+            if let snapshot {
+                ForEach(Array(snapshot.stages.enumerated()), id: \.offset) { index, stage in
                     if index > 0 { Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(CWPalette.gray) }
                     VStack(alignment: .leading, spacing: 1) {
                         Text("\(stage.value)").font(.system(size: 18, weight: .semibold)).monospacedDigit().foregroundStyle(CWPalette.ink)
@@ -427,15 +431,34 @@ struct LeadFunnelStrip: View {
                 Text("No local lead search yet.").font(.system(size: 10.5)).foregroundStyle(CWPalette.gray)
             }
             Spacer(minLength: 0)
+          }
+          if let error { Text(error).font(.caption).foregroundStyle(CRMTheme.rust) }
+          ForEach(snapshot?.warnings ?? [], id: \.self) { warning in Text(warning).font(.caption).foregroundStyle(CRMTheme.rust) }
+          Text("Public research from both discovery paths, counted once per business. Draft readiness is not buying intent or revenue.")
+              .font(.caption2).foregroundStyle(CWPalette.gray)
         }
         .cwCard(12)
-        .task { load() }
+        .task {
+            load()
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(5)) } catch { break }
+                load()
+            }
+        }
+        .onChange(of: store.leads) { _, _ in load() }
+        .onChange(of: store.websiteResearch) { _, _ in load() }
+        .onChange(of: research.recent) { _, _ in load() }
     }
 
     private func load() {
-        guard let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle),
-              let environment = try? LeadPipelineEnvironment.load(configDirectory: directory) else { return }
-        funnel = environment.funnel()
+        do {
+            guard let directory = ICPConfig.defaultDirectory(bundle: AppResources.bundle) else {
+                error = "Prospecting counts are unavailable: research settings are missing."; return
+            }
+            let config = try ICPConfig.load(directory: directory).interactiveSearch()
+            snapshot = ProspectingOverviewSnapshot.load(root: store.researchRoot, leads: store.leads, config: config, nativeResearch: store.websiteResearch, additionalSuppression: store.workspace.restoredSuppressionEntries, researchFailure: store.researchFailure)
+            error = nil
+        } catch { self.error = "Prospecting counts could not be refreshed. Existing figures may be stale." }
     }
 }
 

@@ -21,6 +21,8 @@ final class AppStore: ObservableObject {
     /// The last CSV import's result; stays until Martin closes it (CSV-5).
     @Published var lastCSVImport: CSVImportResult?
     @Published private(set) var recoveryState: WorkspaceRecoveryState
+    @Published private(set) var researchFailure: String?
+    @Published private(set) var activeResearch: Set<UUID> = []
 
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
@@ -30,6 +32,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var pharosPreviewFingerprint: String?
 
     let storageURL: URL
+    let researchRoot: URL
     let isReviewMode: Bool
     let secrets: SecretStore
     let transport: HTTPTransport
@@ -44,8 +47,10 @@ final class AppStore: ObservableObject {
     /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
     private var importedCSVFiles: [String: Date] = [:]
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview, researchRoot: URL? = nil) {
         self.storageURL = storageURL
+        self.researchRoot = researchRoot ?? (storageURL.standardizedFileURL == StorageLocation.workspaceFile.standardizedFileURL
+            ? LeadPipelineEnvironment.defaultRoot() : storageURL.deletingLastPathComponent().appendingPathComponent("leads", isDirectory: true))
         self.isReviewMode = reviewMode
 #if CONTEXTWARD_ACCEPTANCE
         let center: (any ReminderSchedulingCenter)? = reviewMode ? nil : (reminderCenter ?? (Bundle.main.bundleURL.pathExtension == "app" ? SystemReminderCenter() : nil))
@@ -74,7 +79,7 @@ final class AppStore: ObservableObject {
             try? SecureFiles.ensurePrivateDirectory(storageURL.deletingLastPathComponent())
             try? SecureFiles.restrict(storageURL)
         }
-        if case .ready = recoveryState { scrubStoredEndpointSecrets() }
+        if case .ready = recoveryState { scrubStoredEndpointSecrets(); recoverResearchStorage() }
         Self.log.notice("Loaded workspace (sandboxed: \(StorageLocation.isSandboxed, privacy: .public)): leads=\(self.workspace.leads.count, privacy: .public) contacts=\(self.workspace.contacts.count, privacy: .public) companies=\(self.workspace.companies.count, privacy: .public) tasks=\(self.workspace.tasks.count, privacy: .public)")
     }
 
@@ -91,6 +96,99 @@ final class AppStore: ObservableObject {
     }
 
     var business: BusinessProfile { workspace.business }
+    var websiteResearch: WebsiteResearchCache { workspace.websiteResearch }
+    var suppressionList: SuppressionList {
+        SuppressionList(storageURL: researchRoot.appendingPathComponent("suppression.json"), additionalEntries: workspace.restoredSuppressionEntries)
+    }
+
+    /// A restore cannot race a network result into a different workspace generation.
+    func beginResearch() -> UUID { let id = UUID(); activeResearch.insert(id); return id }
+    func endResearch(_ id: UUID) { activeResearch.remove(id) }
+
+    private var researchRecoveryURL: URL { researchRoot.appendingPathComponent("research-recovery.json") }
+
+    /// A read-only complete snapshot, including any completed work retained after a failed save.
+    func researchSnapshot() throws -> (cache: WebsiteResearchCache, recoveryDigest: String?) {
+        var cache = workspace.websiteResearch
+        if !workspace.researchMigrationComplete {
+            cache.mergePreservingNewest(try WebsiteResearchCache.load(researchRoot.appendingPathComponent("quick-scan-research.json")))
+        }
+        var digest = workspace.consumedResearchRecovery
+        if FileManager.default.fileExists(atPath: researchRecoveryURL.path) {
+            let data = try Data(contentsOf: researchRecoveryURL)
+            guard data.count <= 20_000_000 else { throw ResearchStorageError.responseTooLarge }
+            let current = SecureFiles.sha256(data)
+            if current != workspace.consumedResearchRecovery {
+                cache.mergePreservingNewest(try WebsiteResearchCache.load(researchRecoveryURL))
+                digest = current
+            }
+        }
+        try cache.validate()
+        return (cache, digest)
+    }
+
+    /// Legacy files remain byte-preserved; the canonical cache participates in native transactions.
+    func recoverResearchStorage() {
+        guard case .ready = recoveryState else { return }
+        do {
+            let snapshot = try researchSnapshot()
+            guard !workspace.researchMigrationComplete || snapshot.recoveryDigest != workspace.consumedResearchRecovery else { researchFailure = nil; return }
+            if !workspace.researchMigrationComplete, FileManager.default.fileExists(atPath: storageURL.path) {
+                let original = try Data(contentsOf: storageURL)
+                let backup = storageURL.deletingLastPathComponent().appendingPathComponent("before-research-migration-\(UUID()).json")
+                try SecureFiles.writePrivate(original, to: backup)
+            }
+            try commitWorkspace { next in
+                next.websiteResearch = snapshot.cache
+                next.researchMigrationComplete = true
+                next.consumedResearchRecovery = snapshot.recoveryDigest
+            }
+            researchFailure = nil
+        } catch { researchFailure = "Saved research could not be imported. Original files were retained; restore storage access or repair the research file before retrying." }
+    }
+
+    func recordDiscoveryCandidates(_ candidates: [DiscoveryCandidate]) throws {
+        try saveResearch(candidates: candidates, result: nil)
+    }
+
+    func recordWebsiteResearch(_ candidate: DiscoveryCandidate, result: QuickScanResearchResult) throws {
+        try saveResearch(candidates: [candidate], result: result)
+    }
+
+    private func saveResearch(candidates: [DiscoveryCandidate], result: QuickScanResearchResult?) throws {
+        do {
+            var snapshot = try researchSnapshot()
+            snapshot.cache.discover(candidates)
+            if let candidate = candidates.first, let result { snapshot.cache.mergePreservingNewest({ var delta = WebsiteResearchCache(); delta.merge(candidate, result: result); return delta }()) }
+            try snapshot.cache.validate()
+            try commitWorkspace { next in
+                next.websiteResearch = snapshot.cache
+                next.researchMigrationComplete = true
+                next.consumedResearchRecovery = snapshot.recoveryDigest
+            }
+            researchFailure = nil
+        } catch {
+            // A private delta is recovery evidence, not another authoritative workspace. Do not
+            // overwrite unreadable legacy data or publish a failed native save as successful.
+            var retained = false
+            do {
+                var delta = WebsiteResearchCache()
+                if FileManager.default.fileExists(atPath: researchRecoveryURL.path) {
+                    let data = try Data(contentsOf: researchRecoveryURL)
+                    if SecureFiles.sha256(data) != workspace.consumedResearchRecovery { delta = try WebsiteResearchCache.load(researchRecoveryURL) }
+                }
+                delta.discover(candidates)
+                if let candidate = candidates.first, let result { var incoming = WebsiteResearchCache(); incoming.merge(candidate, result: result); delta.mergePreservingNewest(incoming) }
+                try delta.save(researchRecoveryURL)
+                retained = true
+            } catch { }
+            let message = retained
+                ? "Research could not be committed. Findings were retained in a private recovery file; restore storage access and retry recovery."
+                : "Research could not be saved. Original files were retained; keep the findings open and restore storage access before retrying."
+            researchFailure = message
+            throw ControlWardError.invalid(message)
+        }
+    }
     var leads: [Lead] { workspace.leads }
     var contacts: [Contact] { workspace.contacts }
     var companies: [Company] { workspace.companies }
@@ -911,11 +1009,16 @@ final class AppStore: ObservableObject {
             if lead.name == candidate.name, let person = research.record.contact { lead.name = person.name }
             if lead.outreachDraft == nil, lead.lastMessage.isEmpty, lead.email == research.email,
                let config = researchConfig,
-               let draft = research.draft(config: config, suppression: SuppressionList(storageURL: LeadPipelineEnvironment.defaultRoot().appendingPathComponent("suppression.json")), now: .now) {
+               let draft = research.draft(config: config, suppression: suppressionList, now: .now) {
                 lead.outreachDraft = draft.body
             }
         }
         guard saveChange({ next in
+            next.websiteResearch.discover([candidate])
+            if let research {
+                var delta = WebsiteResearchCache(); delta.merge(candidate, result: research)
+                next.websiteResearch.mergePreservingNewest(delta)
+            }
             if let index = next.leads.firstIndex(where: { $0.id == lead.id }) { next.leads[index] = lead }
             else { next.leads.insert(lead, at: 0) }
 
@@ -1196,6 +1299,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func resetAll(confirmed: Bool) throws -> URL {
         guard confirmed else { throw ResetError.notConfirmed }
+        guard activeResearch.isEmpty, busyTargets.isEmpty else { throw ControlWardError.invalid("Wait for running research and integrations before resetting.") }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
@@ -1203,8 +1307,14 @@ final class AppStore: ObservableObject {
             .appendingPathComponent("workspace-backup-\(formatter.string(from: .now)).json")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try SecureFiles.writePrivate(try encoder.encode(workspace), to: backup)
-        try commitWorkspace { $0 = PersistentWorkspace() }
+        let retained = try completeBackupWorkspace()
+        try SecureFiles.writePrivate(try encoder.encode(retained), to: backup)
+        let consumed = try currentResearchRecoveryDigest()
+        try commitWorkspace {
+            $0 = PersistentWorkspace()
+            $0.restoredSuppressionEntries = retained.restoredSuppressionEntries
+            $0.consumedResearchRecovery = consumed
+        }
         showNotice("Workspace reset. Backup saved as \(backup.lastPathComponent).")
         return backup
     }
@@ -1356,29 +1466,41 @@ final class AppStore: ObservableObject {
     /// not a penetration test or external intelligence scan.
     @discardableResult
     func runLocalExposureScan() -> Int {
-        workspace.exposureFindings.removeAll { !$0.resolved }
-        let sensitiveTerms = ["password", "secret", "token", "ssn", "sin", "credit card", "api key"]
-        for lead in leads {
-            let text = "\(lead.notes) \(lead.lastMessage)".lowercased()
-            if sensitiveTerms.contains(where: { text.contains($0) }) {
-                workspace.exposureFindings.append(ExposureFinding(lens: "AI / Privacy Exposure", severity: .high, title: "Sensitive-looking text in lead record", detail: "Review and remove credentials or identity numbers from notes and messages.", recordID: lead.id))
+        var count = 0
+        let saved = saveChange { next in
+            let previous = next.exposureFindings
+            var findings = previous.filter(\.resolved)
+            func record(_ candidate: ExposureFinding) {
+                let retained = previous.first { $0.recordID == candidate.recordID && $0.lens == candidate.lens && $0.title == candidate.title } ?? candidate
+                if !findings.contains(where: { $0.id == retained.id }) { findings.append(retained) }
             }
-            if lead.email.isEmpty && lead.phone.isEmpty {
-                workspace.exposureFindings.append(ExposureFinding(lens: "Identity Exposure", severity: .warning, title: "Lead lacks a contact channel", detail: "Confirm the source and retention need before keeping this record.", recordID: lead.id))
+            let sensitiveTerms = ["password", "secret", "token", "ssn", "sin", "credit card", "api key"]
+            for lead in next.leads {
+                let text = "\(lead.notes) \(lead.lastMessage)".lowercased()
+                if sensitiveTerms.contains(where: { text.contains($0) }) {
+                    record(ExposureFinding(lens: "AI / Privacy Exposure", severity: .high, title: "Sensitive-looking text in lead record", detail: "Review and remove credentials or identity numbers from notes and messages.", recordID: lead.id))
+                }
+                if lead.email.isEmpty && lead.phone.isEmpty {
+                    record(ExposureFinding(lens: "Identity Exposure", severity: .warning, title: "Lead lacks a contact channel", detail: "Confirm the source and retention need before keeping this record.", recordID: lead.id))
+                }
             }
+            for signal in next.signals where signal.sourceActive != false && signal.evidence.isEmpty {
+                record(ExposureFinding(lens: "Digital Exposure", severity: .warning, title: "Signal has no evidence trail", detail: "Add the source event, file, or operator note before routing.", recordID: signal.id))
+            }
+            next.exposureFindings = findings
+            count = findings.count
+            next.activity.insert(ActivityEvent(kind: "security_scan", message: "Ran local workspace exposure scan: \(count) finding\(count == 1 ? "" : "s")."), at: 0)
+            return "Local exposure scan complete."
         }
-        for signal in activeSignals where signal.evidence.isEmpty {
-            workspace.exposureFindings.append(ExposureFinding(lens: "Digital Exposure", severity: .warning, title: "Signal has no evidence trail", detail: "Add the source event, file, or operator note before routing.", recordID: signal.id))
-        }
-        workspace.activity.insert(ActivityEvent(kind: "security_scan", message: "Ran local workspace exposure scan: \(workspace.exposureFindings.count) finding\(workspace.exposureFindings.count == 1 ? "" : "s")."), at: 0)
-        persist(message: "Local exposure scan complete.")
-        return workspace.exposureFindings.count
+        return saved ? count : 0
     }
 
     func resolve(_ finding: ExposureFinding) {
-        guard let index = workspace.exposureFindings.firstIndex(where: { $0.id == finding.id }) else { return }
-        workspace.exposureFindings[index].resolved = true
-        persist(message: "Finding marked resolved.")
+        _ = saveChange { next in
+            guard let index = next.exposureFindings.firstIndex(where: { $0.id == finding.id }) else { throw ControlWardError.invalid("This finding is no longer available.") }
+            next.exposureFindings[index].resolved = true
+            return "Finding marked resolved."
+        }
     }
 
     /// Permission requests happen only after the owner selects Schedule reminders.
@@ -1772,7 +1894,9 @@ final class AppStore: ObservableObject {
         try mutation(&next)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try SecureFiles.writePrivate(try encoder.encode(next), to: storageURL)
+        let data = try encoder.encode(next)
+        guard data.count <= 20_000_000 else { throw ControlWardError.invalid("The native workspace exceeds 20 MB. No changes were saved; export or archive records before adding more research.") }
+        try SecureFiles.writePrivate(data, to: storageURL)
         workspace = next
         queueReminderReconciliation()
         twentyPreview = nil

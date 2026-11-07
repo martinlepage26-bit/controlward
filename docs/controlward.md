@@ -131,7 +131,14 @@ persistent WebKit stores, separate again from the native CRM connector keys.
 The project bundle is a pinned file copy, not a pointer to a mutable checkout.
 
 Settings backups contain the native workspace, imported metadata, project links
-and receipts. **They do not back up WebKit storage, Project Control's D1 register,
+and receipts, unreviewed website candidates/research, saved drafts and exclusions.
+The legacy research cache imports once with original bytes and a private rollback
+retained. A failed native save can retain completed research in a private recovery
+delta; a complete export includes recoverable findings or reports why it cannot.
+Version2 reads older backups; a backup without unreviewed research retains current
+findings. Restoring or resetting waits for active research, rotates its generation,
+and cancels older queued agent requests without a website fetch. Exclusions merge
+conservatively and an unreadable current exclusion file still blocks drafts. **They do not back up WebKit storage, Project Control's D1 register,
 Email Aggregator's hosted data or Keychain credentials.** Export Project Control
 separately using its Tools menu.
 

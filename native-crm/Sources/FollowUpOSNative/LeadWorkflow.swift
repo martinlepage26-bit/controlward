@@ -534,6 +534,37 @@ enum LeadWorkflow {
         static let reviewNotice = "Draft only. Review and edit it; nothing is sent from ControlWard."
     }
 
+    /// Recheck a saved draft immediately before handing it to the mail application. Saving text does
+    /// not preserve permission to contact a route after an unsubscribe or a change in the evidence.
+    /// A saved Quick Scan body needs its approved offer subject at both validation and handoff.
+    /// Other correspondence keeps the ordinary grounded subject; this grants no send approval.
+    static func emailSubject(for lead: Lead, body: String, fallback: String) -> String {
+        if lead.quickScanResearch != nil, body.contains("Quick Scan à 99 $ CA, plus taxes") {
+            return QuickScanResearchResult.offerSubject
+        }
+        return fallback
+    }
+
+    static func emailDraftIssue(for lead: Lead, body: String, subject: String, config: ICPConfig?,
+                                suppression: SuppressionList, now: Date) -> String? {
+        let recipient = MailAddress.bare(lead.email)
+        guard MailAddress.domain(recipient) != nil, !recipient.contains(where: \.isWhitespace) else { return "Enter a valid email address before opening a draft." }
+        if let reason = suppression.unavailableReason { return reason }
+        if suppression.contains(recipient) { return "This address has unsubscribed. The saved text is retained, but Email is blocked." }
+        guard let research = lead.quickScanResearch else { return nil }
+        guard let config else { return "Research settings are unavailable. The saved cold-outreach draft cannot be checked." }
+        guard MailAddress.bare(research.email ?? "") == recipient else {
+            return "The recipient no longer matches the website-published route. Recheck the contact before using this cold-outreach draft."
+        }
+        let assessment = research.draftAssessment(config: config, suppression: suppression, now: now)
+        guard var candidate = assessment.draft else { return assessment.reason ?? "Recheck the research before opening this cold-outreach draft." }
+        candidate.to = recipient; candidate.body = body; candidate.subject = subject
+        if let refusal = OutreachDraftGate.check(candidate, prospect: research.record, config: config, suppression: suppression, now: now) {
+            return "The edited cold-outreach message needs review against its source evidence and approved offer (\(refusal.code))."
+        }
+        return nil
+    }
+
     /// A local draft that states only what the workspace records. It never claims a quote, a meeting or
     /// interest that is not recorded, and never quotes private notes.
     static func draft(for lead: Lead, in workspace: PersistentWorkspace, business: BusinessProfile) -> GroundedDraft {

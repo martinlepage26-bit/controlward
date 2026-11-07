@@ -1,7 +1,7 @@
 import Foundation
 
 struct ControlWardBackup: Codable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var createdAt = Date.now.ISO8601Format()
     var workspace: PersistentWorkspace
 }
@@ -128,24 +128,64 @@ extension AppStore {
 
     func exportControlWardBackup(to url: URL) throws {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(ControlWardBackup(workspace: workspace)).write(to: url, options: .atomic)
+        let data = try encoder.encode(ControlWardBackup(workspace: completeBackupWorkspace()))
+        guard data.count <= 20_000_000 else { throw ControlWardError.invalid("This complete backup exceeds 20 MB. No partial backup was written.") }
+        // NSSavePanel grants this file, not permission to chmod its parent. Start a new
+        // selected file privately, then replace it atomically; preserve existing backups
+        // if the replacement fails. Managed rollback/recovery folders use writePrivate.
+        if !FileManager.default.fileExists(atPath: url.path) {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw ControlWardError.invalid("The selected backup file could not be created. Nothing was exported.")
+            }
+        } else { try SecureFiles.restrict(url) }
+        try data.write(to: url, options: .atomic)
         try SecureFiles.restrict(url)
+    }
+
+    func currentResearchRecoveryDigest() throws -> String? {
+        let url = researchRoot.appendingPathComponent("research-recovery.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 20_000_000 else { throw ResearchStorageError.responseTooLarge }
+        return SecureFiles.sha256(data)
+    }
+
+    func completeBackupWorkspace() throws -> PersistentWorkspace {
+        guard case .ready = recoveryState else { throw ControlWardError.invalid("Recover the workspace before exporting a backup.") }
+        let snapshot = try researchSnapshot()
+        let suppression = suppressionList
+        if let reason = suppression.unavailableReason { throw ControlWardError.invalid(reason) }
+        var value = workspace
+        value.websiteResearch = snapshot.cache
+        value.researchMigrationComplete = true
+        value.consumedResearchRecovery = snapshot.recoveryDigest
+        value.restoredSuppressionEntries = suppression.all
+        return value
     }
 
     func restoreControlWardBackup(_ data: Data, confirmed: Bool) throws {
         guard confirmed else { throw ControlWardError.invalid("Review and confirm the restore first.") }
         let restored = try Self.readControlWardBackup(data)
-        guard busyTargets.isEmpty else { throw ControlWardError.invalid("Wait for running integrations before restoring.") }
+        guard busyTargets.isEmpty, activeResearch.isEmpty else { throw ControlWardError.invalid("Wait for running research and integrations before restoring.") }
+        let current = try completeBackupWorkspace()
+        let consumed = try currentResearchRecoveryDigest()
+        let exclusions = SuppressionList(additionalEntries: current.restoredSuppressionEntries + restored.workspace.restoredSuppressionEntries).all
         // A backup must not redirect existing credentials to imported endpoints or
         // revive a previously queued external write. Those settings stay local.
         let endpoints = workspace.connectorEndpoints
         let currentLinks = workspace.twentyLinks
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let rollback = storageURL.deletingLastPathComponent().appendingPathComponent("before-restore-\(UUID().uuidString).json")
-        try SecureFiles.writePrivate(try encoder.encode(ControlWardBackup(workspace: workspace)), to: rollback)
+        try SecureFiles.writePrivate(try encoder.encode(ControlWardBackup(workspace: current)), to: rollback)
         stopPulling()
         try commitWorkspace { next in
             next = restored.workspace
+            // Older backups did not contain unreviewed website research. Keep it explicitly.
+            if !restored.workspace.researchMigrationComplete { next.websiteResearch = current.websiteResearch }
+            next.researchMigrationComplete = true
+            next.researchGeneration = UUID()
+            next.consumedResearchRecovery = consumed
+            next.restoredSuppressionEntries = exclusions
             next.connectorEndpoints = endpoints
             next.connectorHealth = [:]; next.syncJobs = []
             // Retain only current-destination identities for records that still exist.
@@ -160,7 +200,7 @@ extension AppStore {
     static func readControlWardBackup(_ data: Data) throws -> ControlWardBackup {
         guard data.count <= 20_000_000 else { throw ControlWardError.invalid("Backups must be under 20 MB.") }
         let backup = try JSONDecoder().decode(ControlWardBackup.self, from: data)
-        guard backup.schemaVersion == 1 else { throw ControlWardError.invalid("Unsupported backup version.") }
+        guard [1, 2].contains(backup.schemaVersion) else { throw ControlWardError.invalid("Unsupported backup version.") }
         let w = backup.workspace
         let groups = [w.contacts.map(\.id), w.companies.map(\.id), w.opportunities.map(\.id), w.tasks.map(\.id), w.notes.map(\.id), w.leads.map(\.id), w.signals.map(\.id), w.controlWard.mail.map(\.id)]
         guard groups.allSatisfy({ $0.count <= 10_000 && Set($0).count == $0.count }) else { throw ControlWardError.invalid("Backup contains repeated identities or oversized collections.") }

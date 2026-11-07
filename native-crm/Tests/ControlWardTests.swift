@@ -107,6 +107,22 @@ enum ControlWardTests {
             let scratchFile = String(decoding: try Data(contentsOf: scratch.storageURL), as: UTF8.self)
             try expect(scratchFile.contains("mail_trash") && !scratchFile.contains("BODY_MUST_NOT_PERSIST"), "trash note")
             try rejects("forgetting a missing message") { try scratch.forgetMailMetadata(id: gone) }
+            let hygiene = AppStore(storageURL: root.appendingPathComponent("hygiene/workspace.json"), secrets: InMemorySecretStore())
+            var synthetic = Lead.blank(); synthetic.name = "Synthetic hygiene acceptance"
+            hygiene.add(synthetic)
+            _ = hygiene.runLocalExposureScan()
+            let finding = hygiene.exposureFindings[0]
+            try hygiene.createSecurityReviewTask(finding.id)
+            let taskIDs = hygiene.tasks.map(\.id)
+            _ = hygiene.runLocalExposureScan()
+            try expect(hygiene.exposureFindings.map(\.id) == [finding.id], "rescan replaced a finding identity")
+            try hygiene.createSecurityReviewTask(finding.id)
+            try expect(hygiene.tasks.map(\.id) == taskIDs && hygiene.workspace.controlWard.remediationTasks[finding.id] == taskIDs[0], "rescan lost or duplicated a review task")
+            hygiene.resolve(finding)
+            _ = hygiene.runLocalExposureScan()
+            try expect(hygiene.exposureFindings.count == 1 && hygiene.exposureFindings[0].resolved, "rescan discarded the operator resolution")
+            let reopenedHygiene = AppStore(storageURL: hygiene.storageURL, secrets: InMemorySecretStore())
+            try expect(reopenedHygiene.exposureFindings == hygiene.exposureFindings && reopenedHygiene.tasks.map(\.id) == taskIDs, "security decisions did not survive reopen")
             print("ControlWard workflow tests: \(count) assertions passed")
             return true
         } catch { print("FAIL ControlWard workflow tests: \(error)"); return false }
