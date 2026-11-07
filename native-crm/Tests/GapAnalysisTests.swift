@@ -52,7 +52,7 @@ enum GapAnalysisTests {
     static func connected() async throws {
         let env = ProcessInfo.processInfo.environment, endpoint = "http://127.0.0.1:8884"
         guard env["CONTROLWARD_TEST_GAPS"] == endpoint, let rootPath = env["CONTROLWARD_TEST_GAPS_ROOT"],
-              let phase = env["CONTROLWARD_TEST_GAPS_PHASE"], ["initial", "updated", "reactivated"].contains(phase) else {
+              let phase = env["CONTROLWARD_TEST_GAPS_PHASE"], ["initial", "updated", "reactivated", "gateway"].contains(phase) else {
             throw SmokeTestFailure.failed("Use bin/test-connected-gaps with its disposable fixture")
         }
         let root = URL(fileURLWithPath: rootPath).standardizedFileURL
@@ -112,7 +112,7 @@ enum GapAnalysisTests {
             try check(retired.id == identities["gap:2"] && retired.sourceActive == false && retired.status == .routed && retired.owner == "Synthetic owner" && !store.exchange.signals.contains { $0.id == retired.id },
                       "retirement preserves the audit record but removes it from active exchange")
             try check(store.signals.first { $0.sourceID == "gap:503" }?.sourceActive == true, "new real database row is available locally")
-        } else {
+        } else if phase == "reactivated" {
             let before = store.signals.first { $0.sourceID == "gap:2" }!
             let imported = await store.importGaps()
             let after = store.signals.first { $0.sourceID == "gap:2" }!
@@ -120,6 +120,28 @@ enum GapAnalysisTests {
                       "reactivated database row returns without duplication")
             try check(before.id == after.id && after.sourceActive == true && after.owner == before.owner && after.status == before.status,
                       "reactivation keeps the original identity and owner workflow")
+        } else {
+            guard env["CONTROLWARD_TEST_GAPS_GATEWAY"] == "supabase-envoy" else { throw SmokeTestFailure.failed("Actual Supabase gateway fixture required") }
+            var refused = false
+            do { try await GapClient(endpoint: endpoint, apiKey: "sb_publishable_wrong_disposable", transport: transport).verify() }
+            catch IntegrationError.http(let status, _, _) { refused = status == 401 }
+            try check(refused, "official Supabase Envoy rejects an unknown publishable key")
+            let legacy = try String(contentsOf: root.appendingPathComponent("legacy-anon.key"), encoding: .utf8)
+            try await GapClient(endpoint: endpoint, apiKey: legacy, transport: transport).verify()
+            try check(true, "legacy anon key still authenticates through the official gateway")
+            try check(await store.verifyConnector(.gaps), "opaque publishable key authenticates through official Envoy and real PostgREST")
+            let identities = store.signals.map(\.id)
+            let replay = await store.importGaps()
+            try check(replay.status == "synced" && replay.detail == "0 new, 0 updated, 502 unchanged." && store.signals.map(\.id) == identities,
+                      "publishable-key pagination preserves all502 local records and identities")
+            let opaque = transport.requests.filter { $0.value(forHTTPHeaderField: "apikey") == key }
+            try check(!opaque.isEmpty && opaque.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil },
+                      "native opaque-key requests omit Bearer; official gateway supplies the verified anon JWT")
+            let before = transport.requests.count
+            var secretRefused = false
+            do { _ = try GapClient(endpoint: endpoint, apiKey: "sb_secret_disposable_not_allowed", transport: transport) }
+            catch IntegrationError.elevatedKeyNotAllowed { secretRefused = true }
+            try check(secretRefused && transport.requests.count == before, "native sb_secret refusal happens before any gateway request")
         }
         let reloaded = AppStore(storageURL: storage, secrets: secrets, transport: transport, reviewMode: false)
         try check(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "complete connected workspace survives exact reload")
