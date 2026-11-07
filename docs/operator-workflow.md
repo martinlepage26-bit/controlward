@@ -39,11 +39,17 @@ Integration Center labels LeadGen imports and Lantern audits **Local**. Imported
 KAIROS imports require a customer-account API key. Its current service refuses
 operator API keys on inbox routes; the operator's browser sign-in is separate.
 An import reads lead-intent entries from up to200 prioritized conversations.
-GAP and KAIROS publish imported records only after the complete local save
+GAP, KAIROS and each PHAROS lead-inbox page publish imported records only after the complete local save
 succeeds. If storage is blocked, restore access to the workspace folder and
 retry. Owner decisions and existing records remain intact.
 The connector panel keeps the latest failed attempt visible while the app is open,
 even when storage could not save its diagnostic. A successful retry replaces it.
+
+PHAROS acknowledges an inbox page only after saving its records and source epoch.
+A blocked save leaves new leads, retractions and cursor changes unapplied. Repair
+storage and choose **Pull now** to retry. If an acknowledgement fails after the
+page was saved, those durable records stay; a retry deduplicates them. Progress
+from earlier saved pages is retained if a later page fails.
 
 KAIROS incoming text appears in **Latest incoming message**, with its channel
 and source timestamp. Use **Write follow-up message** to start an outgoing draft.
