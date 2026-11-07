@@ -55,6 +55,9 @@ It does not include an independent general search provider or send outreach.
 CONTEXTWARD_SIGN_IDENTITY=- ./bin/build-native-app
 # Optional: real native connector against an official disposable Twenty instance on127.0.0.1:8882
 ./bin/test-connected-twenty /private/path/disposable-twenty.key
+# Optional: actual migrated GAP database and PostgREST, with pinned Docker images.
+# See docs/gap-connected-acceptance-20261107.md for source/runtime prerequisites.
+CONTROLWARD_GAP_SOURCE=/absolute/path/to/clean/GAP ./bin/test-connected-gaps
 ```
 
 The locally signed bundle is created at:

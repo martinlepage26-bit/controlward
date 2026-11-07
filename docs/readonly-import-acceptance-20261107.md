@@ -118,7 +118,9 @@ sessions.
 
 GAP source was refreshed to
 [`c5e24d5a29e7499ab30f8bfc49cc89428fd5acfe`](https://github.com/martinlepage26-bit/GAP/tree/c5e24d5a29e7499ab30f8bfc49cc89428fd5acfe).
-Its actual PostgreSQL/PostgREST acceptance is still pending. Configured owner
+Its actual PostgreSQL/PostgREST acceptance now passes26 assertions over14 GETs
+against all17 committed migrations. See [the runtime and reproduction contract](gap-connected-acceptance-20261107.md).
+Supabase's Kong/publishable-key gateway and configured owner
 destinations and native Gmail OAuth/mailbox actions remain separate acceptance
 dependencies. The working Gmail browser composer at217 is unchanged. The
 current installed build, source, archive and UI receipt are recorded in the

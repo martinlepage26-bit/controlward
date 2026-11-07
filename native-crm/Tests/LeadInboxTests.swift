@@ -16,6 +16,8 @@ enum LeadInboxTests {
             ("Lead inbox: Auto-Pilot defaults off and pulls on open only when enabled", autoPull),
             ("Lead inbox: a retraction removes the lead and its signal, counts only", retraction),
             ("Lead inbox: nothing is acked when the workspace cannot be saved", noAckWithoutSave),
+            ("Lead inbox: a blocked retraction preserves visible and durable records until retry", noRetractionWithoutSave),
+            ("Lead inbox: failed cursor save keeps the acknowledged page and retries remaining work", cursorSaveFailure),
             ("Lead inbox: phone match never links a lead with a different email", phoneConflict),
             ("Lead inbox: a LeadGen merge relinks by email instead of duplicating", mergeRelink),
             ("Lead inbox: one malformed item is skipped and acked, the rest apply", malformedItem),
@@ -295,15 +297,88 @@ enum LeadInboxTests {
     }
 
     static func noAckWithoutSave() async throws {
+        try await blockedSaveAndRetry(retraction: false)
+    }
+
+    static func noRetractionWithoutSave() async throws {
+        try await blockedSaveAndRetry(retraction: true)
+    }
+
+    private final class BlockAfterAck: HTTPTransport, @unchecked Sendable {
+        let base: FakeInbox, storage: URL, retained: URL
+        private let lock = NSLock()
+        private var injected = false
+        init(base: FakeInbox, storage: URL, retained: URL) { self.base = base; self.storage = storage; self.retained = retained }
+        func send(_ request: URLRequest) async throws -> HTTPResponse {
+            let response = try await base.send(request)
+            if request.url?.path == "/v1/leads/ack", response.status == 200 {
+                try lock.withLock {
+                    guard !injected else { return }
+                    injected = true
+                    try FileManager.default.moveItem(at: storage, to: retained)
+                    try FileManager.default.createDirectory(at: storage.appendingPathComponent("blocker"), withIntermediateDirectories: true)
+                }
+            }
+            return response
+        }
+    }
+
+    static func cursorSaveFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("contextward-cursor-failure-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storage = directory.appendingPathComponent("workspace.json"), retained = directory.appendingPathComponent("retained.json")
+        let fake = FakeInbox(key: key)
+        for n in 1...101 { fake.add("ident_\(n)", email: "person\(n)@example.test", first: "Synthetic \(n)") }
+        let store = AppStore(storageURL: storage, secrets: InMemorySecretStore([.pharos: key]), transport: BlockAfterAck(base: fake, storage: storage, retained: retained))
+        store.setEndpoint(pharosURL, for: .pharos)
+        let failed = await store.pullLeads()
+        try expect(failed.status == "failed" && fake.pending == 1 && store.leads.count == 100 && store.workspace.leadInboxCursor == nil,
+                   "failed cursor save lost a saved page, published the unsaved cursor or acknowledged remaining work")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let durable = try JSONDecoder().decode(PersistentWorkspace.self, from: Data(contentsOf: retained))
+        try expect(try encoder.encode(store.workspace) == encoder.encode(durable), "visible progress differs from the acknowledged page's durable workspace")
+        let firstIDs = Set(store.leads.map(\.id))
+        try FileManager.default.removeItem(at: storage)
+        try FileManager.default.moveItem(at: retained, to: storage)
+        let retry = await store.pullLeads()
+        try expect(retry.status == "synced" && fake.pending == 0 && store.leads.count == 101 && firstIDs.isSubset(of: Set(store.leads.map(\.id))),
+                   "retry after cursor-save failure lost identities or remaining work")
+        let reload = AppStore(storageURL: storage, secrets: InMemorySecretStore())
+        try expect(try encoder.encode(reload.workspace) == encoder.encode(store.workspace), "recovered page progress did not survive reload")
+    }
+
+    private static func blockedSaveAndRetry(retraction: Bool) async throws {
         let fake = FakeInbox(key: key)
         fake.add("ident_a", email: "a@example.test", first: "A", last: "One")
         let store = try makeStore(fake)
+        let directory = store.storageURL.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        if retraction {
+            let first = await store.pullLeads()
+            try expect(first.status == "synced" && store.leads.count == 1, "retraction fixture not imported")
+            fake.retract("ident_a")
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(store.workspace), disk = try Data(contentsOf: store.storageURL)
+        let retained = directory.appendingPathComponent("retained.json")
+        try FileManager.default.moveItem(at: store.storageURL, to: retained)
         // Make the save target a directory, so every write of workspace.json fails.
-        try? FileManager.default.removeItem(at: store.storageURL)
         try FileManager.default.createDirectory(at: store.storageURL.appendingPathComponent("blocker"), withIntermediateDirectories: true)
         let job = await store.pullLeads()
         try expect(job.status == "failed", "pull reported success although the save failed")
         try expect(fake.pending == 1, "lead was acked although it was never saved")
+        try expect(try encoder.encode(store.workspace) == before, retraction
+                   ? "failed save published an unsaved retraction or cursor/job change"
+                   : "failed save published an unsaved lead, signal, epoch or job")
+        try expect(try Data(contentsOf: retained) == disk, "blocked pull changed retained durable bytes")
+        try expect(store.latestSyncJob(for: .leadgen) == job && store.saveFailure != nil, "failed pull not retained for the connector panel")
+        try FileManager.default.removeItem(at: store.storageURL)
+        try FileManager.default.moveItem(at: retained, to: store.storageURL)
+        let retry = await store.pullLeads()
+        try expect(retry.status == "synced" && fake.pending == 0 && store.leads.count == (retraction ? 0 : 1), "retry lost or duplicated an inbox operation")
+        try expect(store.latestSyncJob(for: .leadgen) == retry, "retry did not replace the failure display")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        try expect(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "repaired inbox operation did not survive reload")
     }
 
     static func phoneConflict() async throws {

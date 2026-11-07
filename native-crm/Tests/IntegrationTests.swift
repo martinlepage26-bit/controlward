@@ -296,9 +296,13 @@ enum IntegrationTests {
         try Data("blocked".utf8).write(to: blocker)
         let blocked = AppStore(storageURL: blocker.appendingPathComponent("workspace.json"), secrets: secrets, transport: transport, reviewMode: false)
         blocked.setEndpoint(endpoint, for: .pharos)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let blockedBefore = try encoder.encode(blocked.workspace)
         let failed = await blocked.pullLeads()
         let stillPending = try await client.pullLeads(since: 0)
         try check(failed.status == "failed" && stillPending.leads.count == 1, "failed native storage leaves the real inbox unacknowledged")
+        try check(try encoder.encode(blocked.workspace) == blockedBefore && blocked.latestSyncJob(for: .leadgen) == failed,
+                  "failed real inbox read publishes no unsaved lead, signal, epoch or job")
         let pulled = await store.pullLeads()
         let imported = store.leads.first { $0.sourceID == "leadgen:\(source)" }
         try check(pulled.status == "synced" && imported?.email == "camille-connected@example.test" && store.signals.contains { $0.leadID == imported?.id && $0.fitScore == 80 && $0.intentScore == 60 }, "native pull persists the linked lead and attributed scores")
@@ -308,6 +312,16 @@ enum IntegrationTests {
         let replay = await reloaded.pullLeads()
         try check(reloaded.workspace.leadInboxCursor == store.workspace.leadInboxCursor && reloaded.leads == store.leads && replay.status == "synced", "reload and repeated pull preserve identity and cursor")
         try await pushInbox(["schema_version": "leadgen.push.v1", "leads": [], "retract": [source]])
+        let beforeRetraction = try encoder.encode(reloaded.workspace), durable = try Data(contentsOf: reloaded.storageURL)
+        let retained = root.appendingPathComponent("retained-retraction.json")
+        try FileManager.default.moveItem(at: reloaded.storageURL, to: retained)
+        try FileManager.default.createDirectory(at: reloaded.storageURL.appendingPathComponent("blocker"), withIntermediateDirectories: true)
+        let blockedRetraction = await reloaded.pullLeads()
+        let pendingRetraction = try await client.pullLeads(since: 0)
+        try check(blockedRetraction.status == "failed" && (try encoder.encode(reloaded.workspace)) == beforeRetraction && (try Data(contentsOf: retained)) == durable && pendingRetraction.leads.count == 1,
+                  "blocked real tombstone retains visible records, exact durable bytes and upstream pending state")
+        try FileManager.default.removeItem(at: reloaded.storageURL)
+        try FileManager.default.moveItem(at: retained, to: reloaded.storageURL)
         let retracted = await reloaded.pullLeads()
         try check(retracted.status == "synced" && !reloaded.leads.contains { $0.sourceID == "leadgen:\(source)" } && !reloaded.signals.contains { $0.leadID == imported?.id }, "real tombstone removes the imported lead and signal")
         let remaining = try await client.pullLeads(since: 0)

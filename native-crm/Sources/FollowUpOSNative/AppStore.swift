@@ -597,11 +597,16 @@ final class AppStore: ObservableObject {
     @discardableResult
     func pullLeads() async -> SyncJob {
         var job = SyncJob(target: .leadgen, status: "sending", snapshotSchema: LeadInboxPage.schema)
+        guard case .ready = recoveryState else {
+            job.status = "failed"; job.error = "Workspace recovery is blocked; no inbox leads were imported."
+            readImportJobs[.leadgen] = job
+            return job
+        }
         guard !busyTargets.contains(.leadgen) else {
             job.status = "failed"; job.error = "A lead pull is already running."
             return job
         }
-        workspace.syncJobs.insert(job, at: 0)
+        readImportJobs[.leadgen] = job
         busyTargets.insert(.leadgen); defer { busyTargets.remove(.leadgen) }
         var counts = LeadPullCounts()
         do {
@@ -609,41 +614,58 @@ final class AppStore: ObservableObject {
             var cursor = workspace.leadInboxCursor ?? 0
             for _ in 0..<Self.maxInboxPages {
                 var page = try await client.pullLeads(since: cursor)
+                var resetCursor = false
                 // A recreated inbox restarts its sequence; a cursor from the old one would skip every new lead.
                 if let epoch = page.epoch, let known = workspace.leadInboxEpoch, epoch != known, cursor != 0 {
                     cursor = 0
-                    workspace.leadInboxCursor = nil
+                    resetCursor = true
                     page = try await client.pullLeads(since: 0)
                 }
-                if let epoch = page.epoch { workspace.leadInboxEpoch = epoch }
-                for item in page.leads { counts.add(applyInboxItem(item)) }
+                var committedCounts = counts
+                // Publish the page and epoch only after the complete candidate is durable.
+                // A failed write cannot expose phantom leads, retractions, cursor resets or jobs.
+                try commitWorkspace { next in
+                    if resetCursor { next.leadInboxCursor = nil }
+                    if let epoch = page.epoch { next.leadInboxEpoch = epoch }
+                    for item in page.leads { committedCounts.add(Self.applyInboxItem(item, to: &next)) }
+                }
+                counts = committedCounts
                 if page.leads.isEmpty { break }
-                // Ack only what is durably saved: a failed save throws here and nothing is acked.
-                try persistOrThrow()
                 counts.acked += try await client.ackLeads(page.leads).acked
                 cursor = page.cursor
-                workspace.leadInboxCursor = cursor
-                try persistOrThrow()
+                try commitWorkspace { $0.leadInboxCursor = cursor }
                 if !page.hasMore { break }
             }
             job.status = "synced"
             job.detail = counts.summary
+            job.completedAt = Date.now.ISO8601Format()
+            try commitWorkspace { next in
+                next.syncJobs.insert(job, at: 0)
+                if counts.total > 0 {
+                    next.activity.insert(ActivityEvent(kind: "lead_pull", message: "Pulled leads from the PHAROS inbox: \(counts.summary)", sourceID: job.id), at: 0)
+                }
+            }
+            saveFailure = nil
+            showNotice(counts.total == 0 ? "No new leads in the PHAROS inbox." : "Pulled leads: \(counts.summary)")
             logSync("lead pull ok created=\(counts.created) updated=\(counts.updated) unchanged=\(counts.unchanged) skipped=\(counts.skipped) acked=\(counts.acked)")
         } catch {
             job.status = "failed"
+            job.detail = nil
             job.error = "\(message(for: error)) Progress kept: \(counts.summary)"
+            job.completedAt = Date.now.ISO8601Format()
+            do {
+                try commitWorkspace { next in
+                    next.syncJobs.insert(job, at: 0)
+                    next.activity.insert(ActivityEvent(kind: "lead_pull", message: "Lead pull failed: \(job.error ?? "unknown error")", sourceID: job.id), at: 0)
+                }
+                showNotice("Lead pull failed: \(job.error ?? "")")
+            } catch {
+                saveFailure = "Changes were not saved. \(error.localizedDescription)"
+                showNotice(saveFailure ?? "Lead pull failed.")
+            }
             logSync("lead pull failed created=\(counts.created) updated=\(counts.updated) acked=\(counts.acked)", error: true)
         }
-        job.completedAt = Date.now.ISO8601Format()
-        replace(&workspace.syncJobs, with: job)
-        if job.status == "failed" || counts.total > 0 {
-            workspace.activity.insert(ActivityEvent(kind: "lead_pull", message: job.status == "synced"
-                ? "Pulled leads from the PHAROS inbox: \(counts.summary)"
-                : "Lead pull failed: \(job.error ?? "unknown error")", sourceID: job.id), at: 0)
-        }
-        persist(message: job.status == "synced"
-            ? (counts.total == 0 ? "No new leads in the PHAROS inbox." : "Pulled leads: \(counts.summary)")
-            : "Lead pull failed: \(job.error ?? "")")
+        readImportJobs[.leadgen] = job
         return job
     }
 
@@ -697,16 +719,16 @@ final class AppStore: ObservableObject {
         }
     }
 
-    private func applyInboxItem(_ item: LeadInboxItem) -> LeadPullCounts.Outcome {
+    private static func applyInboxItem(_ item: LeadInboxItem, to workspace: inout PersistentWorkspace) -> LeadPullCounts.Outcome {
         let sourceID = "leadgen:\(item.sourceID)"
-        if item.retracted { return removeRetractedLead(sourceID) }
+        if item.retracted { return removeRetractedLead(sourceID, from: &workspace) }
         guard let event = item.event, !workspace.dismissedLeadSources.contains(sourceID) else { return .skipped }
-        return applyInboxLead(sourceID: sourceID, event: event)
+        return applyInboxLead(sourceID: sourceID, event: event, to: &workspace)
     }
 
     /// LeadGen withdrew the lead (deletion request, consent withdrawn, or no longer qualified):
     /// remove it and the signals that point at it.
-    private func removeRetractedLead(_ sourceID: String) -> LeadPullCounts.Outcome {
+    private static func removeRetractedLead(_ sourceID: String, from workspace: inout PersistentWorkspace) -> LeadPullCounts.Outcome {
         let ids = Set(workspace.leads.filter { $0.sourceID == sourceID }.map(\.id))
         guard !ids.isEmpty else { return .unchanged }
         workspace.leads.removeAll { ids.contains($0.id) }
@@ -717,7 +739,7 @@ final class AppStore: ObservableObject {
     /// Matches by source id, then by email (relinking a lead whose LeadGen identity was merged),
     /// then by phone only when the emails cannot conflict. Existing leads keep local edits:
     /// only empty fields are filled. Scores refresh on the lead's LeadGen signal.
-    private func applyInboxLead(sourceID: String, event: LeadGenEvent) -> LeadPullCounts.Outcome {
+    private static func applyInboxLead(sourceID: String, event: LeadGenEvent, to workspace: inout PersistentWorkspace) -> LeadPullCounts.Outcome {
         let identity = event.identity
         func clean(_ value: String?) -> String { (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
         let name = [clean(identity.firstName), clean(identity.lastName)].filter { !$0.isEmpty }.joined(separator: " ")
@@ -2070,7 +2092,7 @@ final class AppStore: ObservableObject {
         pharosPreviewFingerprint = nil
     }
 
-    /// Saves or throws. Used before acking pulled leads, so an ack never outruns the disk.
+    /// Writes or throws; the file importer restores its previous workspace on failure.
     private func persistOrThrow() throws {
         guard case .ready = recoveryState else {
             throw CocoaError(.fileWriteNoPermission, userInfo: [NSLocalizedDescriptionKey: "Workspace recovery is required before saving."])

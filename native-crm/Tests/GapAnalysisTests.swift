@@ -34,6 +34,104 @@ enum GapAnalysisTests {
         if !condition { throw SmokeTestFailure.failed(message) }
     }
 
+    private final class LiveTransport: HTTPTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var reads: [URLRequest] = []
+        func send(_ request: URLRequest) async throws -> HTTPResponse {
+            guard request.httpMethod == "GET", request.url?.host == "127.0.0.1", request.url?.port == 8884,
+                  request.url?.path == "/rest/v1/gap_clusters" else {
+                throw SmokeTestFailure.failed("Connected GAP only permits its disposable read route")
+            }
+            lock.withLock { reads.append(request) }
+            return try await URLSessionTransport().send(request)
+        }
+        var requests: [URLRequest] { lock.withLock { reads } }
+    }
+
+    /// Actual PostgreSQL/pgvector migrations and PostgREST. The loopback gateway only rewrites /rest/v1.
+    static func connected() async throws {
+        let env = ProcessInfo.processInfo.environment, endpoint = "http://127.0.0.1:8884"
+        guard env["CONTROLWARD_TEST_GAPS"] == endpoint, let rootPath = env["CONTROLWARD_TEST_GAPS_ROOT"],
+              let phase = env["CONTROLWARD_TEST_GAPS_PHASE"], ["initial", "updated", "reactivated"].contains(phase) else {
+            throw SmokeTestFailure.failed("Use bin/test-connected-gaps with its disposable fixture")
+        }
+        let root = URL(fileURLWithPath: rootPath).standardizedFileURL
+        guard root.lastPathComponent.hasPrefix("controlward-gap-postgrest-") else {
+            throw SmokeTestFailure.failed("Unexpected GAP fixture root")
+        }
+        let key = try String(contentsOf: root.appendingPathComponent("anon.key"), encoding: .utf8)
+        let storage = root.appendingPathComponent("workspace/workspace.json")
+        let transport = LiveTransport(), secrets = InMemorySecretStore([.gaps: key])
+        let store = AppStore(storageURL: storage, secrets: secrets, transport: transport, reviewMode: false)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var checked = 0
+        func check(_ value: Bool, _ name: String) throws {
+            try expect(value, name); checked += 1; print("PASS connected GAP \(phase): \(name)")
+        }
+        if phase == "initial" {
+            store.setEndpoint(endpoint, for: .gaps)
+            var rejected = false
+            do { try await GapClient(endpoint: endpoint, apiKey: key + "invalid", transport: transport).verify() }
+            catch IntegrationError.http(let status, _, _) { rejected = status == 401 }
+            try check(rejected, "actual PostgREST rejects an invalid JWT")
+            try check(await store.verifyConnector(.gaps), "native verification reaches actual PostgREST with the anon JWT")
+            let clusters = try await GapClient(endpoint: endpoint, apiKey: key, transport: transport).activeClusters()
+            try check(clusters.count == 501 && clusters.contains { $0.id == "501" } && !clusters.contains { $0.id == "502" }, "numeric keyset pagination reads all501 active rows and excludes retired rows")
+            try check(clusters.first { $0.id == "1" }?.scores?.total == 0.82 && clusters.first { $0.id == "501" }?.scores == nil,
+                      "real one-to-one scores and missing scores decode without fabrication")
+            let imported = await store.importGaps()
+            try check(imported.status == "synced" && imported.detail == "501 new, 0 updated, 0 unchanged." && store.signals.count == 501,
+                      "actual migrated database imports501 signals with native HTTP")
+            let first = store.signals.first { $0.sourceID == "gap:1" }!
+            try check(first.title == "Market gap: Manque d’accompagnement français — Québec" && first.priority == 82 && first.intentScore == 60 && first.fitScore == 90,
+                      "Unicode label and numeric component scores map exactly")
+            try check(store.signals.first { $0.sourceID == "gap:501" }?.priority == 0, "unscored cluster is retained without an invented score")
+            let identities = Dictionary(uniqueKeysWithValues: store.signals.map { ($0.sourceID!, $0.id) })
+            let replay = await store.importGaps()
+            try check(replay.status == "synced" && replay.detail == "0 new, 0 updated, 501 unchanged." && identities == Dictionary(uniqueKeysWithValues: store.signals.map { ($0.sourceID!, $0.id) }), "HTTP replay preserves every local identity")
+            var owned = first; owned.owner = "Synthetic owner"; owned.status = .routed; owned.nextAction = "Keep the recorded owner decision"; store.update(owned)
+            var retiring = store.signals.first { $0.sourceID == "gap:2" }!; retiring.owner = "Synthetic owner"; retiring.status = .routed; store.update(retiring)
+            try check(store.signals.first { $0.id == first.id }?.owner == "Synthetic owner", "owner routing decision is saved for the later upstream update")
+        } else if phase == "updated" {
+            let fm = FileManager.default, directory = storage.deletingLastPathComponent(), retained = root.appendingPathComponent("retained")
+            let before = try encoder.encode(store.workspace), disk = try Data(contentsOf: storage)
+            let identities = Dictionary(uniqueKeysWithValues: store.signals.map { ($0.sourceID!, $0.id) })
+            try fm.moveItem(at: directory, to: retained); try Data("synthetic write blocker".utf8).write(to: directory)
+            let failed = await store.importGaps()
+            try check(failed.status == "failed" && store.latestSyncJob(for: .gaps) == failed && (try encoder.encode(store.workspace)) == before,
+                      "updated real snapshot with blocked storage publishes no new, changed or retired signals")
+            try check(try Data(contentsOf: retained.appendingPathComponent("workspace.json")) == disk, "blocked save retains exact durable bytes")
+            try fm.removeItem(at: directory); try fm.moveItem(at: retained, to: directory)
+            let retry = await store.importGaps()
+            try check(retry.status == "synced" && retry.detail == "1 new, 1 updated, 499 unchanged, 1 retired." && store.activeSignals.count == 501 && store.signals.count == 502,
+                      "retry imports one new row, one changed row and one retirement exactly once")
+            let first = store.signals.first { $0.sourceID == "gap:1" }!
+            try check(first.id == identities["gap:1"] && first.title == "Market gap: Accompagnement français mis à jour" && first.priority == 91 && first.owner == "Synthetic owner" && first.status == .routed && first.nextAction == "Keep the recorded owner decision",
+                      "upstream update retains local identity and owner decisions")
+            let retired = store.signals.first { $0.sourceID == "gap:2" }!
+            try check(retired.id == identities["gap:2"] && retired.sourceActive == false && retired.status == .routed && retired.owner == "Synthetic owner" && !store.exchange.signals.contains { $0.id == retired.id },
+                      "retirement preserves the audit record but removes it from active exchange")
+            try check(store.signals.first { $0.sourceID == "gap:503" }?.sourceActive == true, "new real database row is available locally")
+        } else {
+            let before = store.signals.first { $0.sourceID == "gap:2" }!
+            let imported = await store.importGaps()
+            let after = store.signals.first { $0.sourceID == "gap:2" }!
+            try check(imported.status == "synced" && store.activeSignals.count == 502 && store.signals.count == 502,
+                      "reactivated database row returns without duplication")
+            try check(before.id == after.id && after.sourceActive == true && after.owner == before.owner && after.status == before.status,
+                      "reactivation keeps the original identity and owner workflow")
+        }
+        let reloaded = AppStore(storageURL: storage, secrets: secrets, transport: transport, reviewMode: false)
+        try check(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "complete connected workspace survives exact reload")
+        let text = try String(contentsOf: storage, encoding: .utf8)
+        try check(!text.contains(key), "generated anon JWT is absent from durable records and diagnostics")
+        let requests = transport.requests
+        let cursor = phase == "updated" ? "gt.501" : "gt.500"
+        try check(requests.contains { URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "id" && $0.value == cursor } == true },
+                  "real HTTP used a second numeric keyset page")
+        print("Connected GAP \(phase): \(checked) assertions; \(requests.count) GET requests to actual PostgREST.")
+    }
+
     static let url = "https://example-project.supabase.co"
     static let key = "eyJ_legacy_anon_\(UUID().uuidString)"
 
