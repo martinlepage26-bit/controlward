@@ -67,6 +67,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/BuildInfoTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/DiscoveryIntelligenceTests.swift" \
+  "${PROJECT_ROOT}/native-crm/Tests/CredentialAccessTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/AgentResearchTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/ResearchRecoveryTests.swift" \
   "${PROJECT_ROOT}/native-crm/Tests/GTMTests.swift" \
@@ -90,7 +91,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
-if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos || "${1:-}" == --connected-gaps || "${1:-}" == --discovery-intelligence ]]; then
+if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos || "${1:-}" == --connected-gaps || "${1:-}" == --discovery-intelligence || "${1:-}" == --credential-access ]]; then
   "${TEST_BINARY}" "$@"
   exit
 fi

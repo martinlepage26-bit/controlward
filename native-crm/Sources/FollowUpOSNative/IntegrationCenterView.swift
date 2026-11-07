@@ -29,7 +29,7 @@ struct IntegrationCenterView: View {
         case .needsSetup: .needsSetup
         case .notVerified: .ready
         case .active: .connected
-        case .error: .error
+        case .error, .accessRequired: .error
         }
         return IntegrationCheck(name: name, detail: "\(purpose) \(status.detail)", state: state, symbol: symbol, labelOverride: status.label)
     }
@@ -154,9 +154,11 @@ struct IntegrationCenterView: View {
                         Spacer()
                         lastJobText(.leadgen)
                     }
-                    Text(store.isPullingLeads
-                         ? "Pulling: checks now and every 5 minutes while ControlWard is open, and resumes when it reopens."
-                         : "Stopped: no leads are pulled until you start again or press Pull now.")
+                    Text(store.keyAccessNeeded.contains(.pharos)
+                         ? "Paused for credential access. Choose Verify for PHAROS. Your saved Auto-Pilot choice is unchanged."
+                         : (store.isPullingLeads
+                            ? "Pulling: checks now and every 5 minutes while ControlWard is open, and resumes when it reopens."
+                            : "Stopped: no leads are pulled until you start again or press Pull now."))
                         .font(.caption).foregroundStyle(store.isPullingLeads ? .green : .secondary)
                 }
                 .crmCard()

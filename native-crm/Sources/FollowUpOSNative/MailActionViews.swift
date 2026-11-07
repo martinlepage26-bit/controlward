@@ -9,7 +9,7 @@ enum LiveMailSession {
             return (account.email, owner)
         })
         let signIns = Set(MailAccount.signIns.map(\.email))
-        let connected = Set(signIns.filter { intake.tokens.exists($0) })
+        let connected = Set(signIns.filter { intake.isConfigured($0) })
         let route = MailConnectorRouting.route(
             sourceID: message.sourceID, provider: message.provider, synthetic: message.synthetic,
             accountID: message.accountID, signIns: signIns, aliases: aliases, connected: connected)

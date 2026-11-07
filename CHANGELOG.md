@@ -4,6 +4,9 @@ All notable changes to this application are documented in this file.
 
 ## Unreleased
 
+- Startup and automatic refreshes refuse interactive credential prompts and show
+  Access needed when availability is unknown. Explicit Verify/Check access keeps
+  normal owner authentication; saved sign-ins and Auto-Pilot preferences remain.
 - Discovery can use KAIROS audience, positioning, inbound enquiries and aggregate
   content results. It keeps fit, recorded interest and website-supported contact
   routes separate, requires review for enquiry links and retains source reasons.

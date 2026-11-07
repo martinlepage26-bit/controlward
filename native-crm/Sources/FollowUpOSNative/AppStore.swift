@@ -27,6 +27,7 @@ final class AppStore: ObservableObject {
 
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
+    @Published private(set) var keyAccessNeeded: Set<SyncTarget> = []
     @Published private(set) var busyTargets: Set<SyncTarget> = []
     /// Latest read-only import attempt, including a failure that storage could not retain.
     /// Kept outside the workspace so reporting a failed save cannot publish partial records.
@@ -79,7 +80,13 @@ final class AppStore: ObservableObject {
         let loaded = Self.load(from: storageURL)
         self.workspace = loaded.workspace
         self.recoveryState = loaded.recovery
-        self.savedKeys = Set(SyncTarget.keyed.filter { selectedSecrets.exists($0) })
+        for target in SyncTarget.keyed {
+            switch selectedSecrets.availability(target) {
+            case .available: self.savedKeys.insert(target)
+            case .accessRequired: self.keyAccessNeeded.insert(target)
+            case .missing: break
+            }
+        }
         if FileManager.default.fileExists(atPath: storageURL.path) {
             try? SecureFiles.ensurePrivateDirectory(storageURL.deletingLastPathComponent())
             try? SecureFiles.restrict(storageURL)
@@ -264,7 +271,10 @@ final class AppStore: ObservableObject {
     func hasKey(_ target: SyncTarget) -> Bool { savedKeys.contains(target) }
 
     func connectorStatus(_ target: SyncTarget) -> ConnectorStatus {
-        ConnectorStatus.resolve(endpoint: endpoint(for: target), hasKey: hasKey(target), health: workspace.connectorHealth[target.rawValue])
+        if keyAccessNeeded.contains(target), !endpoint(for: target).isEmpty {
+            return .accessRequired("Credential access could not be checked. Choose Verify to retry. Automatic checks are paused.")
+        }
+        return ConnectorStatus.resolve(endpoint: endpoint(for: target), hasKey: hasKey(target), health: workspace.connectorHealth[target.rawValue])
     }
 
     /// Saves or replaces a key in the Keychain. The key never enters workspace data, activity, or logs.
@@ -275,6 +285,7 @@ final class AppStore: ObservableObject {
         do {
             try secrets.write(value, for: target)
             savedKeys.insert(target)
+            keyAccessNeeded.remove(target)
             invalidateConnector(target)
             workspace.activity.insert(ActivityEvent(kind: "credential", message: "Saved the \(target.label) API key to the Keychain."), at: 0)
             persist(message: "\(target.label) key saved to the Keychain. Run Verify to activate it.")
@@ -287,6 +298,7 @@ final class AppStore: ObservableObject {
         do {
             try secrets.delete(target)
             savedKeys.remove(target)
+            keyAccessNeeded.remove(target)
             invalidateConnector(target)
             workspace.activity.insert(ActivityEvent(kind: "credential", message: "Removed the \(target.label) API key from the Keychain."), at: 0)
             persist(message: "\(target.label) key removed from the Keychain.")
@@ -308,13 +320,23 @@ final class AppStore: ObservableObject {
         workspace.connectorHealth[target.rawValue] = ConnectorHealth(ok: ok, detail: detail)
     }
 
-    private func apiKey(for target: SyncTarget) throws -> String {
-        guard let key = try secrets.read(target), !key.isEmpty else { throw IntegrationError.missingKey }
-        return key
+    private func apiKey(for target: SyncTarget, userInitiated: Bool = true) throws -> String {
+        do {
+            let value = try userInitiated ? secrets.read(target) : secrets.readWithoutInteraction(target)
+            guard let key = value, !key.isEmpty else {
+                savedKeys.remove(target); keyAccessNeeded.remove(target)
+                throw IntegrationError.missingKey
+            }
+            savedKeys.insert(target); keyAccessNeeded.remove(target)
+            return key
+        } catch let error as SecretStoreError {
+            if case .keychain = error { savedKeys.remove(target); keyAccessNeeded.insert(target) }
+            throw error
+        }
     }
 
-    private func pharosClient() throws -> PharosClient {
-        try PharosClient(endpoint: endpoint(for: .pharos), apiKey: try apiKey(for: .pharos), transport: transport)
+    private func pharosClient(userInitiated: Bool = true) throws -> PharosClient {
+        try PharosClient(endpoint: endpoint(for: .pharos), apiKey: try apiKey(for: .pharos, userInitiated: userInitiated), transport: transport)
     }
 
     private func gapClient() throws -> GapClient {
@@ -714,7 +736,7 @@ final class AppStore: ObservableObject {
     /// is acked, so a failed ack re-delivers the page and dedupe makes that harmless.
     /// Activity, the job, and logs record counts only.
     @discardableResult
-    func pullLeads() async -> SyncJob {
+    func pullLeads(userInitiated: Bool = true) async -> SyncJob {
         var job = SyncJob(target: .leadgen, status: "sending", snapshotSchema: LeadInboxPage.schema)
         guard case .ready = recoveryState else {
             job.status = "failed"; job.error = "Workspace recovery is blocked; no inbox leads were imported."
@@ -729,7 +751,7 @@ final class AppStore: ObservableObject {
         busyTargets.insert(.leadgen); defer { busyTargets.remove(.leadgen) }
         var counts = LeadPullCounts()
         do {
-            let client = try pharosClient()
+            let client = try pharosClient(userInitiated: userInitiated)
             var cursor = workspace.leadInboxCursor ?? 0
             for _ in 0..<Self.maxInboxPages {
                 var page = try await client.pullLeads(since: cursor)
@@ -799,20 +821,20 @@ final class AppStore: ObservableObject {
     /// Runs when the app opens: if Auto-Pilot is on and PHAROS is set up, pull now and keep pulling.
     func pullLeadsOnLaunch() async {
         guard workspace.autoPilotEnabled, pharosConfigured else { return }
-        await pullLeads()
-        startPullLoop()
+        await pullLeads(userInitiated: false)
+        if pharosConfigured { startPullLoop() }
     }
 
     /// "Start Auto-Pilot": saves the choice, pulls now, then every `leadPullInterval` while the app is open.
     func startPulling() async {
         guard pharosConfigured else {
-            showNotice("Save the PHAROS endpoint and key before enabling Auto-Pilot.")
+            showNotice(keyAccessNeeded.contains(.pharos) ? "Choose Verify for PHAROS to check saved credential access. Your Auto-Pilot preference is retained." : "Save the PHAROS endpoint and key before enabling Auto-Pilot.")
             return
         }
         workspace.autoPilotEnabled = true
         persist()
         await pullLeads()
-        startPullLoop()
+        if pharosConfigured { startPullLoop() }
     }
 
     /// "Stop Auto-Pilot": saves the choice and stops the periodic pull. Leads already pulled stay.
@@ -832,7 +854,7 @@ final class AppStore: ObservableObject {
                 guard let interval = self?.leadPullInterval else { break }
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self, self.workspace.autoPilotEnabled, self.pharosConfigured else { break }
-                await self.pullLeads()
+                await self.pullLeads(userInitiated: false)
             }
             if !Task.isCancelled { self?.isPullingLeads = false }
         }

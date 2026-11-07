@@ -36,9 +36,9 @@ struct MailAccountsSection: View {
                     }
                     Spacer()
                     if account.isSignIn {
-                        let connected = mail.tokens.exists(account.email)
+                        let connected = mail.isConfigured(account.email)
                         if connected {
-                            Button("Refresh") { Task { await mail.refresh(account, store: store) } }
+                            Button(mail.state(account) == .accessRequired ? "Check access" : "Refresh") { Task { await mail.refresh(account, store: store) } }
                         }
                         Button(connected ? "Reconnect" : "Connect") {
                             Task { await mail.connect(account, store: store) { try await authorizer.authorize($0, callbackScheme: $1) } }
@@ -59,7 +59,7 @@ struct MailAccountsSection: View {
 
     private func stateColor(_ state: MailAccountState) -> Color {
         switch state {
-        case .failed: CWPalette.red
+        case .failed, .accessRequired: CWPalette.red
         case .synced, .idle: CWPalette.green
         case .syncing: CWPalette.blue
         case .notConnected: CWPalette.gray
