@@ -12,6 +12,8 @@ import Security
             ("delayed startup lookups allow main-actor progress and discard stale probes after changes", delayedStartup),
             ("delayed manual key reads keep the main actor responsive and never use a superseded connection", delayedRead),
             ("stopping Auto-Pilot or disconnecting mail during a pending read prevents a later request", stoppedRead),
+            ("Twenty refuses CRM edits made during pending credential access with zero HTTP", twentyDelayedApproval),
+            ("Twenty stops after a mid-push CRM edit and resumes only after a new preview", twentyMidPushApproval),
         ]
         var failures = 0
         for (name, test) in cases {
@@ -262,5 +264,69 @@ import Security
         try check(!api.timedOut && !tokens.timedOut && network.requests == 0, "a pending read started a request after Stop/Disconnect")
         try check(!store.workspace.autoPilotEnabled && !store.isPullingLeads && store.workspace.syncJobs.isEmpty, "late completion restarted Auto-Pilot or persisted a cancelled job")
         try check(mail.state(.personalGmail) == .notConnected && mail.credentialAvailability[MailAccount.personalGmail.email] == .missing, "late completion restored a disconnected account")
+    }
+    static func twentyDelayedApproval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("twenty-delayed-approval-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = DelayedStore(delayProbes: false, delayReads: true)
+        defer { credentials.release() }
+        let transport = IntegrationTests.FakeTwenty(key: "synthetic-old")
+        let store = AppStore(storageURL: try fixture(root), secrets: credentials, transport: transport)
+        await store.waitForCredentialChecks()
+        store.twentyPacing = .zero
+        store.setEndpoint("https://twenty.example.test", for: .twenty)
+        var company = Company(); company.name = "Approved synthetic company"; try check(store.add(company), "fixture failed")
+        _ = store.previewTwentyPush()
+        let pending = Task { await store.pushToTwenty() }
+        try await eventually { credentials.waitingReads > 0 }
+        company.name = "Unapproved edit during authentication"; try check(store.update(company), "edit failed")
+        credentials.release()
+        let job = await pending.value
+        try check(!credentials.timedOut && job.status == "failed" && job.error?.lowercased().contains("preview") == true && transport.methodLog.isEmpty, "unpreviewed data crossed the delayed credential boundary")
+    }
+    final class PausedTwenty: HTTPTransport, @unchecked Sendable {
+        let backend = IntegrationTests.FakeTwenty(key: "synthetic-old")
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var released = false, first = true
+        var waiting: Bool { lock.withLock { continuation != nil } }
+        func release() {
+            let pending = lock.withLock { released = true; let value = continuation; continuation = nil; return value }
+            pending?.resume()
+        }
+        func send(_ request: URLRequest) async throws -> HTTPResponse {
+            let response = try await backend.send(request)
+            let pause = lock.withLock { if !first { return false }; first = false; return true }
+            if pause {
+                await withCheckedContinuation { pending in
+                    let resume = lock.withLock { if released { return true }; continuation = pending; return false }
+                    if resume { pending.resume() }
+                }
+            }
+            return response
+        }
+    }
+    static func twentyMidPushApproval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("twenty-mid-push-approval-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transport = PausedTwenty(); defer { transport.release() }
+        let store = AppStore(storageURL: try fixture(root), secrets: InMemorySecretStore([.twenty: "synthetic-old"]), transport: transport)
+        store.twentyPacing = .zero
+        store.setEndpoint("https://twenty.example.test", for: .twenty)
+        var company = Company(); company.name = "Approved synthetic company"; try check(store.add(company), "company fixture failed")
+        var contact = Contact(); contact.firstName = "Approved"; contact.companyID = company.id; try check(store.add(contact), "contact fixture failed")
+        _ = store.previewTwentyPush()
+        let pending = Task { await store.pushToTwenty() }
+        try await eventually { transport.waiting }
+        contact.firstName = "Unapproved while company request pending"; try check(store.update(contact), "contact edit failed")
+        transport.release()
+        let stopped = await pending.value
+        try check(stopped.status == "failed" && stopped.error?.lowercased().contains("preview") == true && transport.backend.count("companies") == 1 && transport.backend.count("people") == 0, "a mid-push edit sent unapproved contact data")
+        try check(store.workspace.twentyLinks.count == 1, "completed company receipt was lost")
+        _ = store.previewTwentyPush()
+        let resumed = await store.pushToTwenty()
+        try check(resumed.status == "synced" && transport.backend.count("companies") == 1 && transport.backend.count("people") == 1, "fresh preview failed to resume without duplicates: \(resumed.status), \(resumed.error ?? "no error"), companies=\(transport.backend.count("companies")), people=\(transport.backend.count("people"))")
+        let name = transport.backend.all("people").first?["name"] as? [String: Any]
+        try check(name?["firstName"] as? String == contact.firstName, "fresh approved contact edit was not exported")
     }
 }

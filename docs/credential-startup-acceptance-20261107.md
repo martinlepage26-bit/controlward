@@ -51,6 +51,8 @@ The focused entry is `bin/test-native-app --credential-access`. Local verificati
 also compiles the same complete native source/test list with Swift6 whole-module
 compilation, then executes the unchanged runner. The full canonical script remains
 the CI gate. Earlier diagnostic/test-harness failures are not counted as passes.
+The [Twenty approval regressions](twenty-push-approval-20261107.md) add two more
+cases to this entry, covering record edits while credential or HTTP work is pending.
 
 The [current release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research)
 records the exact installed source, archive, CI and running-app acceptance. Fake
