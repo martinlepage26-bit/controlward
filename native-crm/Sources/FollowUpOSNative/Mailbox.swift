@@ -90,7 +90,7 @@ enum MailboxError: LocalizedError, Equatable {
         case .unsupported(_, let reason): reason
         case .bodyUnavailable(let reason): reason
         case .invalidCompose(let reason): reason
-        case .needsReconnect: "The mailbox sign-in cannot do this. Choose Connect again. Nothing was changed."
+        case .needsReconnect: "The mailbox sign-in cannot do this. Choose Reconnect in Mail accounts. Nothing was changed."
         case .http(let status): "The mailbox returned HTTP \(status). Nothing was changed."
         case .unreadable(let what): "\(what) could not be read."
         }
@@ -1088,14 +1088,14 @@ enum GmailScopePolicy {
         let canDraft = granted.contains(compose) || granted.contains(fullAccess)
         let known = !granted.isEmpty
         let modifyReason = known
-            ? "This Gmail sign-in cannot change labels or Trash. Choose Connect to grant mailbox modify access."
-            : "Mailbox permissions could not be confirmed. Choose Connect again before changing mail."
+            ? "This Gmail sign-in cannot change labels or Trash. Choose Reconnect in Mail accounts to grant mailbox modify access."
+            : "Mailbox permissions could not be confirmed. Choose Reconnect in Mail accounts before changing mail."
         let sendReason = known
-            ? "This Gmail sign-in cannot send. Choose Connect to grant compose access."
-            : "Mailbox permissions could not be confirmed. Choose Connect again before sending."
+            ? "This Gmail sign-in cannot send. Choose Reconnect in Mail accounts to grant compose access."
+            : "Mailbox permissions could not be confirmed. Choose Reconnect in Mail accounts before sending."
         let draftReason = known
-            ? "This Gmail sign-in cannot edit drafts. Choose Connect to grant compose access."
-            : "Mailbox permissions could not be confirmed. Choose Connect again before editing a draft."
+            ? "This Gmail sign-in cannot edit drafts. Choose Reconnect in Mail accounts to grant compose access."
+            : "Mailbox permissions could not be confirmed. Choose Reconnect in Mail accounts before editing a draft."
         func item(_ action: MailboxAction, enabled: Bool, reason: String) -> MailActionSupport {
             MailActionSupport(action: action, enabled: enabled, reason: enabled ? "" : reason)
         }

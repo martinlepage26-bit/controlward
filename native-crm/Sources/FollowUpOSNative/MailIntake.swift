@@ -144,13 +144,13 @@ enum MailIntakeError: LocalizedError, Equatable {
         case .invalidClientID: "Enter a Google OAuth client ID ending in .apps.googleusercontent.com."
         case .missingClientID: "Add the Google OAuth client ID in Mail accounts first."
         case .notConnected: "Not connected. Choose Connect to sign in with Google."
-        case .signInFailed: "Google sign-in did not complete. Try Connect again."
+        case .signInFailed: "Google sign-in did not complete. Try signing in again in Mail accounts."
         case .stateMismatch: "Google sign-in response did not match this request. Nothing was saved."
         case .cancelled: "Sign-in was cancelled."
-        case .reauthorize: "Google ended this sign-in. Choose Connect to sign in again."
+        case .reauthorize: "Google ended this sign-in. Choose Reconnect in Mail accounts to sign in again."
         case .http(let status): "Gmail returned HTTP \(status)."
         case .unreadable(let what): "\(what) could not be read."
-        case .accountMismatch(let actual): "You signed in as \(actual), not this account. Nothing was saved. Choose Connect and pick the matching Google account."
+        case .accountMismatch(let actual): "You signed in as \(actual), not this account. Nothing was saved. Sign in again in Mail accounts and pick the matching Google account."
         }
     }
 }

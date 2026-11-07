@@ -97,7 +97,7 @@ rendered with scripts removed and remote images blocked. The body is not stored.
 | Metadata import and synthetic mail | No actions. Every button is disabled and explains that there is no mailbox connector. |
 | Hosted Email Aggregator | No body or write API in ControlWard. Actions stay on Local review inbox. |
 
-A read-only Gmail sign-in can still refresh metadata and, when the token allows, load a body. Write buttons stay disabled until Connect grants modify and compose access. Cancel on a send or Trash confirmation does not call the mailbox.
+A read-only Gmail sign-in can still refresh metadata and, when the token allows, load a body. Write buttons stay disabled until the owner chooses Reconnect and approves modify and compose access. Reconnect is available beside an existing account; cancelled, failed and wrong-account sign-ins preserve the previous connection. Cancel on a send or Trash confirmation does not call the mailbox.
 
 ## GAP reconciliation
 

@@ -56,3 +56,7 @@ and source timestamp. Use **Write follow-up message** to start an outgoing draft
 Incoming updates retain the saved reply, sent history and owner-entered service.
 On older mixed records, the editor prepares a repaired copy; Cancel leaves the
 file unchanged, while Save retains the separate source fields.
+
+## Connect the native Gmail inbox
+
+In **Integrations → Mail accounts**, choose **Connect** beside the matching Gmail address and complete Google’s consent yourself. A Chrome or Gmail+ sign-in is separate. If a previous native sign-in expired or has older read-only permissions, choose **Reconnect** directly; you do not need to disconnect first. Cancelling or failing sign-in preserves the previous token. A wrong-account sign-in is refused before replacing it. Refresh checks the mailbox; browser draft handoff alone does not establish native sync.

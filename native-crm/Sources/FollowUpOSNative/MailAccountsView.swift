@@ -14,7 +14,7 @@ struct MailAccountsSection: View {
                 Image(systemName: "envelope.open").foregroundStyle(CWPalette.goldIcon)
                 Text("Mail accounts").font(.system(size: 15, weight: .semibold)).foregroundStyle(CWPalette.ink)
             }
-            Text("Refresh saves subject, sender, recipients, and date. Opening a message loads the full body from the mailbox and does not store it here. Reply, forward, drafts, archive, and Trash use the Gmail connection; sending and Trash ask you to confirm. Sign-ins use your browser. Refresh tokens stay in the macOS Keychain. An older read-only sign-in needs Connect again before it can change mail. Refreshes every 10 minutes while ControlWard is open.")
+            Text("Refresh saves subject, sender, recipients, and date. Opening a message loads the full body from the mailbox and does not store it here. Reply, forward, drafts, archive, and Trash use the Gmail connection; sending and Trash ask you to confirm. Sign-ins use your browser. Refresh tokens stay in the macOS Keychain. Use Reconnect to renew an expired or older read-only sign-in. Cancelling sign-in keeps the previous connection. Refreshes every 10 minutes while ControlWard is open.")
                 .font(.system(size: 11)).foregroundStyle(CWPalette.gray)
             HStack {
                 TextField("Google OAuth client ID (…apps.googleusercontent.com)", text: $clientDraft).textFieldStyle(.roundedBorder)
@@ -36,13 +36,15 @@ struct MailAccountsSection: View {
                     }
                     Spacer()
                     if account.isSignIn {
-                        if mail.tokens.exists(account.email) {
+                        let connected = mail.tokens.exists(account.email)
+                        if connected {
                             Button("Refresh") { Task { await mail.refresh(account, store: store) } }
+                        }
+                        Button(connected ? "Reconnect" : "Connect") {
+                            Task { await mail.connect(account, store: store) { try await authorizer.authorize($0, callbackScheme: $1) } }
+                        }.buttonStyle(.borderedProminent).tint(CWPalette.bronze)
+                        if connected {
                             Button("Disconnect", role: .destructive) { mail.disconnect(account) }
-                        } else {
-                            Button("Connect") {
-                                Task { await mail.connect(account, store: store) { try await authorizer.authorize($0, callbackScheme: $1) } }
-                            }.buttonStyle(.borderedProminent).tint(CWPalette.bronze)
                         }
                     }
                 }
