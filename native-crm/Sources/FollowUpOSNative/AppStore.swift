@@ -410,12 +410,15 @@ final class AppStore: ObservableObject {
     func previewTwentyPush() -> TwentyPlan {
         let plan = TwentyMapper.plan(workspace, links: workspace.twentyLinks)
         twentyPreview = plan
-        showNotice("Twenty preview: \(plan.creates) to create, \(plan.updates) to update, \(plan.unchangedTotal) unchanged.")
+        showNotice(plan.blockers.isEmpty
+            ? "Twenty preview: \(plan.creates) to create or resume, \(plan.updates) to update, \(plan.unchangedTotal) unchanged."
+            : plan.summary)
         return plan
     }
 
     /// Pushes companies, people, opportunities, then tasks. Requires a preview first.
-    /// Creates store the returned Twenty id immediately so a retry never duplicates.
+    /// Create identities are saved before HTTP, so a lost response or failed receipt
+    /// save can resume the same remote record after reload.
     /// Never deletes anything in Twenty.
     @discardableResult
     func pushToTwenty() async -> SyncJob {
@@ -423,6 +426,11 @@ final class AppStore: ObservableObject {
         guard let preview = twentyPreview else {
             job.status = "failed"; job.error = "Run the preview before pushing."
             showNotice("Preview the Twenty push first.")
+            return job
+        }
+        guard preview.blockers.isEmpty else {
+            job.status = "failed"; job.error = preview.summary
+            showNotice(preview.summary)
             return job
         }
         let current = TwentyMapper.plan(workspace, links: workspace.twentyLinks)
@@ -436,19 +444,31 @@ final class AppStore: ObservableObject {
         busyTargets.insert(.twenty); defer { busyTargets.remove(.twenty) }
         var created = 0, updated = 0
         do {
+            // Refuse remote writes when the workspace cannot retain their identities.
+            try persistOrThrow()
             let client = try twentyClient()
             for object in TwentyObject.allCases {
                 for operation in TwentyMapper.plan(workspace, links: workspace.twentyLinks, only: object).operations {
+                    var durableLink = workspace.twentyLinks[operation.localKey]
                     var id = operation.twentyID
                     if let existing = id, try await client.update(object, id: existing, operation.payload) {
                         updated += 1
                     } else {
-                        // New record, or the linked record no longer exists in Twenty.
-                        id = try await client.create(object, operation.payload)
+                        // A completed link returning404 gets a fresh identity. Pending
+                        // creates reuse their durable UUID, including after a lost response.
+                        let resumingCreate = durableLink?.pendingCreate == true || (operation.kind == .create && id != nil)
+                        let reservedID = resumingCreate ? (id ?? UUID().uuidString.lowercased()) : UUID().uuidString.lowercased()
+                        let pending = TwentyLink(twentyID: reservedID, object: object, payloadHash: "pending:\(operation.payloadHash)", pendingCreate: true)
+                        workspace.twentyLinks[operation.localKey] = pending
+                        do { try persistOrThrow() }
+                        catch { workspace.twentyLinks[operation.localKey] = durableLink; throw error }
+                        durableLink = pending
+                        id = try await client.create(object, operation.payload, id: reservedID)
                         created += 1
                     }
                     workspace.twentyLinks[operation.localKey] = TwentyLink(twentyID: id ?? "", object: object, payloadHash: operation.payloadHash)
-                    persist()
+                    do { try persistOrThrow() }
+                    catch { workspace.twentyLinks[operation.localKey] = durableLink; throw error }
                 }
             }
             job.status = "synced"

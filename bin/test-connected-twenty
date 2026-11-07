@@ -1,0 +1,10 @@
+#!/bin/zsh
+set -euo pipefail
+SCRIPT_DIR="${0:A:h}"
+FIXTURE_KEY_FILE="${1:?Usage: bin/test-connected-twenty /private/path/disposable-twenty.key}"
+[[ -f "${FIXTURE_KEY_FILE}" ]] || { print -u2 "Disposable fixture key file is missing."; exit 1; }
+# Start the official twenty-app-dev test container separately. Only loopback is accepted.
+# Pass the public seeded test identity from its official action; never an owner key.
+CONTROLWARD_TEST_TWENTY=http://127.0.0.1:8882 \
+CONTROLWARD_TEST_TWENTY_KEY_FILE="${FIXTURE_KEY_FILE}" \
+  "${SCRIPT_DIR}/test-native-app" --connected-twenty

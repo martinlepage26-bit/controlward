@@ -633,15 +633,22 @@ struct TwentyClient: Sendable {
         guard response.status == 200 else { throw IntegrationError.from(response, context: "Twenty key check") }
     }
 
-    func create(_ object: TwentyObject, _ payload: JSONValue) async throws -> String {
+    func create(_ object: TwentyObject, _ payload: JSONValue, id: String? = nil) async throws -> String {
         let context = "Twenty \(object.rawValue) create"
-        let response = try await send("POST", url(object), body: payload)
+        var body = payload
+        if let id {
+            guard case .object(var fields) = body else { throw IntegrationError.unexpected("Twenty create payload was not an object") }
+            fields["id"] = .string(id)
+            body = .object(fields)
+        }
+        let response = try await send("POST", url(object), body: body)
         guard response.status == 200 || response.status == 201 else { throw IntegrationError.from(response, context: context) }
         let decoded = try? JSONDecoder().decode(JSONValue.self, from: response.body)
-        guard let id = decoded?["data"]?["create\(object.singular)"]?["id"]?.stringValue else {
+        guard let returnedID = decoded?["data"]?["create\(object.singular)"]?["id"]?.stringValue else {
             throw IntegrationError.unexpected("\(context) response had no record id")
         }
-        return id
+        guard id == nil || id == returnedID else { throw IntegrationError.unexpected("Twenty did not retain the reserved record identity") }
+        return returnedID
     }
 
     /// Returns false when the record no longer exists in Twenty (HTTP 404).
@@ -667,6 +674,7 @@ struct TwentyOperation: Equatable, Sendable {
 struct TwentyPlan: Equatable, Sendable {
     var operations: [TwentyOperation] = []
     var unchanged: [TwentyObject: Int] = [:]
+    var blockers: [String] = []
 
     func count(_ kind: TwentyOperation.Kind, _ object: TwentyObject) -> Int {
         operations.filter { $0.kind == kind && $0.object == object }.count
@@ -682,13 +690,15 @@ struct TwentyPlan: Equatable, Sendable {
             "\($0.object.rawValue)|\($0.localKey)|\($0.kind.rawValue)|\($0.twentyID ?? "")|\($0.payloadHash)"
         }.sorted()
         lines.append(contentsOf: unchanged.map { "unchanged|\($0.key.rawValue)|\($0.value)" }.sorted())
+        lines.append(contentsOf: blockers.sorted().map { "blocked|\($0)" })
         return SHA256.hash(data: Data(lines.joined(separator: "\n").utf8))
             .map { String(format: "%02x", $0) }.joined()
     }
 
     var summary: String {
-        TwentyObject.allCases.map { object in
-            "\(object.label): \(count(.create, object)) new, \(count(.update, object)) update, \(unchanged[object, default: 0]) unchanged"
+        if !blockers.isEmpty { return "Push blocked: " + blockers.joined(separator: " ") }
+        return TwentyObject.allCases.map { object in
+            "\(object.label): \(count(.create, object)) new or pending, \(count(.update, object)) update, \(unchanged[object, default: 0]) unchanged"
         }.joined(separator: " · ")
     }
 }
@@ -704,14 +714,36 @@ enum TwentyMapper {
     /// to plan a single object type against the current links during a push.
     static func plan(_ workspace: PersistentWorkspace, links: [String: TwentyLink], only: TwentyObject? = nil) -> TwentyPlan {
         var plan = TwentyPlan()
-        var resolved = links.mapValues(\.twentyID)
+        let convertedLeadIDs = Set(workspace.opportunities.compactMap(\.leadID))
+        // A lead exported before conversion already has a remote deal. Reuse that
+        // identity for its canonical opportunity instead of creating another deal.
+        var effectiveLinks = links
+        for lead in workspace.leads where convertedLeadIDs.contains(lead.id) {
+            guard let legacy = links[key("lead", lead.id)], legacy.object == .opportunities else { continue }
+            let related = workspace.opportunities.filter { $0.leadID == lead.id }
+            let missing = related.filter { links[key("opportunity", $0.id)] == nil }
+            guard !missing.isEmpty,
+                  !related.contains(where: { links[key("opportunity", $0.id)]?.twentyID == legacy.twentyID }) else { continue }
+            guard related.count == 1, let opportunity = missing.first else {
+                plan.blockers.append("Several local opportunities share a prior Twenty deal. Review these relationships before pushing.")
+                continue
+            }
+            effectiveLinks[key("opportunity", opportunity.id)] = legacy
+        }
+        guard plan.blockers.isEmpty else { return plan }
+        var resolved = effectiveLinks.mapValues(\.twentyID)
         func resolve(_ key: String) -> JSONValue? { resolved[key].map(JSONValue.string) }
 
         func add(_ object: TwentyObject, _ key: String, _ fields: [String: JSONValue?]) {
             let payload = JSONValue.object(fields.compactMapValues { $0 })
             let hash = SHA256.hash(data: payload.encoded()).map { String(format: "%02x", $0) }.joined()
-            if let link = links[key] {
-                if link.payloadHash == hash { plan.unchanged[object, default: 0] += 1; return }
+            if let link = effectiveLinks[key] {
+                if link.pendingCreate == true {
+                    plan.operations.append(TwentyOperation(object: object, localKey: key, kind: .create, twentyID: link.twentyID, payload: payload, payloadHash: hash))
+                    return
+                }
+                // An alias still needs one update so the canonical local key is saved.
+                if link.payloadHash == hash && links[key] != nil { plan.unchanged[object, default: 0] += 1; return }
                 plan.operations.append(TwentyOperation(object: object, localKey: key, kind: .update, twentyID: link.twentyID, payload: payload, payloadHash: hash))
             } else {
                 plan.operations.append(TwentyOperation(object: object, localKey: key, kind: .create, twentyID: nil, payload: payload, payloadHash: hash))
@@ -740,7 +772,7 @@ enum TwentyMapper {
             }
         }
         if include(.opportunities) {
-            for lead in workspace.leads {
+            for lead in workspace.leads where !convertedLeadIDs.contains(lead.id) {
                 let company = workspace.companies.first { !lead.company.isEmpty && $0.name.caseInsensitiveCompare(lead.company) == .orderedSame }
                 let contact = workspace.contacts.first { $0.leadID == lead.id }
                 add(.opportunities, key("lead", lead.id), [

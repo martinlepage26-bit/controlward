@@ -192,14 +192,14 @@ struct IntegrationCenterView: View {
                             .buttonStyle(.bordered)
                         Button("Push to Twenty", systemImage: "arrow.up.circle") { confirmTwentyPush = true }
                             .buttonStyle(.borderedProminent)
-                            .disabled(store.twentyPreview == nil || isNeedsSetup(.twenty))
+                            .disabled(store.twentyPreview == nil || !(store.twentyPreview?.blockers.isEmpty ?? true) || isNeedsSetup(.twenty))
                         if store.busyTargets.contains(.twenty) { ProgressView().controlSize(.small) }
                         Spacer()
                         lastJobText(.twenty)
                     }
                     .disabled(store.busyTargets.contains(.twenty))
                     if let preview = store.twentyPreview {
-                        Text("Preview: \(preview.creates) to create, \(preview.updates) to update, \(preview.unchangedTotal) unchanged")
+                        Text("Preview: \(preview.creates) to create or resume, \(preview.updates) to update, \(preview.unchangedTotal) unchanged")
                             .font(.callout.weight(.semibold))
                         Text(preview.summary).font(.caption).foregroundStyle(.secondary)
                     }
@@ -210,7 +210,7 @@ struct IntegrationCenterView: View {
                     Button("Apply to Twenty", role: .destructive) { Task { await store.pushToTwenty() } }
                     Button("Cancel", role: .cancel) { }
                 } message: {
-                    Text(store.twentyPreview.map { "Create \($0.creates), update \($0.updates), unchanged \($0.unchangedTotal). No records will be deleted." } ?? "Preview the push first.")
+                    Text(store.twentyPreview.map { "Create or resume \($0.creates), update \($0.updates), unchanged \($0.unchangedTotal). No records will be deleted." } ?? "Preview the push first.")
                 }
 
                 VStack(alignment: .leading, spacing: 9) {

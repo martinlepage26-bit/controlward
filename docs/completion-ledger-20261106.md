@@ -12,6 +12,8 @@ Requirements were checked against `PRODUCT.md`, `docs/controlward.md`, `native-c
 - Fresh remote refs: Claude branch still ends at `64cca378bd679af302027d0bd24d292b82b4643f`, an ancestor of current main. Published work is integrated; no unpublished cloud patch is claimed recovered.
 - This audit changes tests and guidance, not shipping app behavior. Build209 remains installed.
 
+Unreleased follow-up: [native Twenty conversion and retry repair](twenty-native-acceptance-20261107.md) reproduces and repairs duplicate converted deals and unsafe interrupted pushes. All20 native integration checks and12 real native-to-Twenty checks pass, along with the full native/WebKit/SwiftUI gates. Packaging and installed-app acceptance remain separate release gates;209 is still the installed release.
+
 ## Requirement audit
 
 “Verified” below identifies the tested scope; production credentials and destinations require their own acceptance. Historical Mac checks are dated by their build, with current native regressions where applicable.
