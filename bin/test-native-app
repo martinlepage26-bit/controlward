@@ -87,7 +87,11 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
+if [[ "${1:-}" == --connected-pharos ]]; then
+  "${TEST_BINARY}" "$@"
+  exit
+fi
 source "${SCRIPT_DIR}/pharos-planted-reds.sh"
-"${TEST_BINARY}"
+"${TEST_BINARY}" "$@"
 "${SCRIPT_DIR}/test-build-stamp"
 python3 -B "${PROJECT_ROOT}/native-crm/Tests/test_agent_research_cli.py"

@@ -8,7 +8,8 @@ TEST_BINARY="${BUILD_ROOT}/ControlWardWebKitTests"
 mkdir -p "${BUILD_ROOT}"
 # Every app source bin/test-native-app compiles, plus the two WebKit module files. AppStore depends on the
 # lead workflow and pipeline sources, so a shorter list stops compiling; bin/check-native-source-lists enforces it.
-swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library \
+# Match the application's Swift 6 language mode, including callback isolation checks.
+swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${SOURCE_ROOT}/Models.swift" \
   "${SOURCE_ROOT}/RecordDeletion.swift" \
   "${SOURCE_ROOT}/AppStore.swift" \

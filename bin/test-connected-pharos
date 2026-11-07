@@ -1,0 +1,67 @@
+#!/usr/bin/env node
+// Real native client -> repository Worker -> disposable local D1. No account credentials.
+import {spawn} from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import net from 'node:net';
+import assert from 'node:assert/strict';
+
+const root = path.resolve(import.meta.dirname, '..');
+const wrangler = path.join(root, 'node_modules/wrangler/bin/wrangler.js');
+const endpoint = 'http://127.0.0.1:8881';
+const children = new Set();
+const env = {...process.env, WRANGLER_SEND_METRICS:'false'};
+for (const key of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'CLOUDFLARE_ACCOUNT_ID']) delete env[key];
+function run(command, args, quiet = false) {
+  const child = spawn(command, args, {cwd:root, detached:true, env, stdio:['ignore','pipe','pipe']});
+  children.add(child);
+  let stdout = '';
+  child.stdout.on('data', data => { stdout += data; if (!quiet) process.stdout.write(data); });
+  child.stderr.on('data', data => { if (!quiet) process.stderr.write(data); });
+  child.done = new Promise((resolve,reject) => {
+    child.once('error',reject);
+    child.once('exit',code => {children.delete(child); code === 0 ? resolve(stdout) : reject(new Error('Disposable PHAROS process exited '+code));});
+  });
+  child.done.catch(()=>{});
+  return child;
+}
+let temp;
+try {
+  await fs.access(wrangler);
+  const port = net.createServer();
+  await new Promise((resolve,reject) => {port.once('error',reject); port.listen(8881,'127.0.0.1',resolve);});
+  await new Promise(resolve => port.close(resolve));
+  temp = await fs.mkdtemp(path.join(os.tmpdir(),'controlward-pharos-d1-'));
+  const config = path.join(temp,'wrangler.json');
+  await fs.writeFile(config,JSON.stringify({
+    name:'controlward-connected-test', main:path.join(root,'pharos-api/src/index.ts'),
+    compatibility_date:'2026-08-30',
+    vars:{ENVIRONMENT:'disposable-test', PHAROS_API_KEY:'controlward-local-pharos-test', LEADGEN_PUSH_KEY:'controlward-local-leadgen-test'},
+    d1_databases:[{binding:'DB',database_name:'controlward-connected-test',database_id:'00000000-0000-4000-8000-000000000001',migrations_dir:path.join(root,'pharos-api/migrations')}],
+  }),{mode:0o600});
+  const args = [wrangler,'--config',config];
+  await run(process.execPath,[...args,'d1','migrations','apply','controlward-connected-test','--local','--persist-to',temp],true).done;
+  const server = run(process.execPath,[...args,'dev','--local','--ip','127.0.0.1','--port','8881','--inspector-port','0','--persist-to',temp],true);
+  let ready = false;
+  for (let i=0;i<100;i++) {
+    if (!children.has(server)) throw new Error('Disposable PHAROS Worker exited early');
+    try {if ((await fetch(endpoint+'/v1/health')).ok) {ready=true;break;}} catch {}
+    await new Promise(resolve=>setTimeout(resolve,200));
+  }
+  assert(ready,'Disposable PHAROS Worker did not become ready');
+  env.CONTROLWARD_TEST_PHAROS=endpoint;
+  await run(path.join(root,'bin/test-native-app'),['--connected-pharos']).done;
+  const sql = 'SELECT (SELECT count(*) FROM exchange_receipts) AS receipts, (SELECT count(*) FROM lead_inbox WHERE acked_at IS NULL) AS pending, (SELECT count(*) FROM lead_inbox WHERE retracted=1 AND payload_json IS NULL AND acked_at IS NOT NULL) AS tombstones;';
+  const result = JSON.parse(await run(process.execPath,[...args,'d1','execute','controlward-connected-test','--local','--persist-to',temp,'--command',sql,'--json'],true).done);
+  assert.deepEqual(result[0].results[0],{receipts:2,pending:0,tombstones:1});
+  console.log('Connected PHAROS D1 verified: 2 exchange snapshots, 0 pending items, 1 acknowledged PII-free tombstone.');
+} catch (error) {
+  console.error(error.message);
+  process.exitCode=1;
+} finally {
+  for (const child of children) {try {process.kill(-child.pid,'SIGTERM');} catch {}}
+  await Promise.race([Promise.allSettled([...children].map(child=>child.done)),new Promise(resolve=>setTimeout(resolve,2500))]);
+  for (const child of children) {try {process.kill(-child.pid,'SIGKILL');} catch {}}
+  if (temp) await fs.rm(temp,{recursive:true,force:true});
+}

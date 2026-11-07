@@ -230,6 +230,82 @@ enum IntegrationTests {
 
     // MARK: - PHAROS
 
+    /// Opt-in real URLSession -> disposable local Worker/D1 acceptance. The runner
+    /// supplies this exact loopback endpoint and test-only keys; no owner store is opened.
+    static func connectedPharos() async throws {
+        let endpoint = "http://127.0.0.1:8881"
+        guard ProcessInfo.processInfo.environment["CONTROLWARD_TEST_PHAROS"] == endpoint else {
+            throw SmokeTestFailure.failed("Use bin/test-connected-pharos to start the disposable backend")
+        }
+        let key = "controlward-local-pharos-test"
+        let transport = URLSessionTransport()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-connected-pharos-\(UUID())")
+        try SecureFiles.ensurePrivateDirectory(root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let secrets = InMemorySecretStore([.pharos: key])
+        let store = AppStore(storageURL: root.appendingPathComponent("workspace.json"), secrets: secrets, transport: transport, reviewMode: false)
+        store.setEndpoint(endpoint, for: .pharos)
+        let client = try PharosClient(endpoint: endpoint, apiKey: key, transport: transport)
+        var checked = 0
+        func check(_ value: Bool, _ name: String) throws {
+            try expect(value, name)
+            checked += 1
+            print("PASS connected PHAROS: \(name)")
+        }
+        func pushInbox(_ object: [String: Any]) async throws {
+            var request = URLRequest(url: URL(string: endpoint + "/v1/leads/push")!)
+            request.httpMethod = "POST"
+            request.setValue("Bearer controlward-local-leadgen-test", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: object)
+            let response = try await transport.send(request)
+            try expect((200..<300).contains(response.status), "disposable fixture push refused (HTTP \(response.status))")
+        }
+        let wrong = try PharosClient(endpoint: endpoint, apiKey: "wrong-local-test-key", transport: transport)
+        var rejected = false
+        do { try await wrong.verify() } catch IntegrationError.http(let status, _, _) { rejected = status == 401 }
+        try check(rejected, "real backend rejects a wrong key")
+        let verified = await store.verifyConnector(.pharos)
+        let active: Bool
+        if case .active = store.connectorStatus(.pharos) { active = true } else { active = false }
+        try check(verified && active, "authenticated health activates the native connector")
+        let unconfirmed = await store.syncToPharos()
+        try check(unconfirmed.status == "failed", "unconfirmed exchange is refused")
+        let first = await pushPharos(store)
+        let duplicate = await pushPharos(store)
+        try check(first.status == "synced" && duplicate.status == "synced" && first.idempotencyKey == duplicate.idempotencyKey && duplicate.detail?.contains("Already stored") == true, "identical confirmed exchanges reuse the durable receipt")
+        var changed = Lead.blank(); changed.name = "Synthetic exchange change"; store.add(changed)
+        let next = await pushPharos(store)
+        try check(next.status == "synced" && next.idempotencyKey != first.idempotencyKey, "changed exchange receives a new idempotency key")
+
+        let source = "connected-native-209"
+        let event: [String: Any] = ["schema_version": "leadgen.event.v1", "raw_identity": ["first_name": "Camille", "last_name": "Synthetic", "email": "camille-connected@example.test"], "fit_score": 80, "intent_score": 60]
+        try await pushInbox(["schema_version": "leadgen.push.v1", "leads": [["source_id": source, "event": event, "test": true]]])
+        let blocker = root.appendingPathComponent("not-a-directory")
+        try Data("blocked".utf8).write(to: blocker)
+        let blocked = AppStore(storageURL: blocker.appendingPathComponent("workspace.json"), secrets: secrets, transport: transport, reviewMode: false)
+        blocked.setEndpoint(endpoint, for: .pharos)
+        let failed = await blocked.pullLeads()
+        let stillPending = try await client.pullLeads(since: 0)
+        try check(failed.status == "failed" && stillPending.leads.count == 1, "failed native storage leaves the real inbox unacknowledged")
+        let pulled = await store.pullLeads()
+        let imported = store.leads.first { $0.sourceID == "leadgen:\(source)" }
+        try check(pulled.status == "synced" && imported?.email == "camille-connected@example.test" && store.signals.contains { $0.leadID == imported?.id && $0.fitScore == 80 && $0.intentScore == 60 }, "native pull persists the linked lead and attributed scores")
+        let pending = try await client.pullLeads(since: 0)
+        try check(pending.leads.isEmpty, "durably saved native pull acknowledges the real inbox")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: secrets, transport: transport, reviewMode: false)
+        let replay = await reloaded.pullLeads()
+        try check(reloaded.workspace.leadInboxCursor == store.workspace.leadInboxCursor && reloaded.leads == store.leads && replay.status == "synced", "reload and repeated pull preserve identity and cursor")
+        try await pushInbox(["schema_version": "leadgen.push.v1", "leads": [], "retract": [source]])
+        let retracted = await reloaded.pullLeads()
+        try check(retracted.status == "synced" && !reloaded.leads.contains { $0.sourceID == "leadgen:\(source)" } && !reloaded.signals.contains { $0.leadID == imported?.id }, "real tombstone removes the imported lead and signal")
+        let remaining = try await client.pullLeads(since: 0)
+        try check(remaining.leads.isEmpty, "native client acknowledges the applied tombstone")
+        let saved = try String(contentsOf: reloaded.storageURL, encoding: .utf8)
+        try check(!saved.contains(key) && !saved.contains("controlward-local-leadgen-test"), "workspace contains no test API keys")
+        print("Connected PHAROS tests: \(checked)/\(checked) passed")
+    }
+
     private static func configuredPharos() throws -> (AppStore, FakePharos) {
         let fake = FakePharos(key: "pharos-key")
         let store = try makeStore(secrets: InMemorySecretStore([.pharos: "pharos-key"]), transport: fake)

@@ -14,6 +14,10 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        if CommandLine.arguments.dropFirst() == ["--connected-pharos"] {
+            try await IntegrationTests.connectedPharos()
+            return
+        }
         guard await ReleaseReviewTests.run() else { throw SmokeTestFailure.failed("Release review tests failed") }
         guard RecordDeletionTests.run() else { throw SmokeTestFailure.failed("Record deletion tests failed") }
         guard CRMSaveTests.run() else { throw SmokeTestFailure.failed("CRM save tests failed") }

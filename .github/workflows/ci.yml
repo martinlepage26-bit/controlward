@@ -91,5 +91,7 @@ jobs:
           test -x node_modules/.bin/vitest || { echo "vitest missing after yarn install - Argus reds 9 and 10 cannot run" >&2; exit 1; }
       - name: Native test suite
         run: ./bin/test-native-app
+      - name: Native PHAROS client against disposable Worker and D1
+        run: ./bin/test-connected-pharos
       - name: Native release build
         run: swift build -c release --package-path native-crm
