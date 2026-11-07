@@ -29,10 +29,16 @@ import Foundation
         var calls: Int { lock.withLock { count } }
         private func hit() { lock.withLock { count += 1 } }
         func read(_ target: SyncTarget) throws -> String? { hit(); return nil }
+        func readWithoutInteraction(_ target: SyncTarget) throws -> String? { hit(); return nil }
+        func availability(_ target: SyncTarget) -> CredentialAvailability { hit(); return .available }
+        func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability? { hit(); return .available }
         func write(_ value: String, for target: SyncTarget) throws { hit() }
         func delete(_ target: SyncTarget) throws { hit() }
         func exists(_ target: SyncTarget) -> Bool { hit(); return true }
         func read(_ email: String) throws -> String? { hit(); return nil }
+        func readWithoutInteraction(_ email: String) throws -> String? { hit(); return nil }
+        func availability(_ email: String) -> CredentialAvailability { hit(); return .available }
+        func cachedAvailability(_ email: String) -> CredentialAvailability? { hit(); return .available }
         func write(_ value: String, for email: String) throws { hit() }
         func delete(_ email: String) throws { hit() }
         func exists(_ email: String) -> Bool { hit(); return true }

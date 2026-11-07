@@ -6,7 +6,16 @@ Requirements were checked against `PRODUCT.md`, `docs/controlward.md`, `native-c
 
 ## Current installed release
 
-Build **233** is installed at `/Applications/ControlWard.app`. Its clean source
+The [published release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research)
+is the current installed-version/source/archive and runtime record. The dated
+checkpoint below records build233 before the startup credential-access repair.
+The [repair policy and test scope](credential-startup-acceptance-20261107.md)
+separate noninteractive automatic checks from explicit owner authentication;
+its final installed acceptance is recorded in that release receipt.
+
+## Installed233 checkpoint — before credential-startup repair
+
+Build **233** was installed at `/Applications/ControlWard.app`. Its clean source
 stamp is `6b1c794787e9bac6ad9908c2550e1798076e2fbf`, GitHub's review merge for
 [PR45](https://github.com/martinlepage26-bit/controlward/pull/45). Its entire tree
 equals feature head `797813f97dae04b7e1a084f4f6fc2187142001e4` and the final merge
@@ -68,7 +77,7 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 | ID | Requirement | Evidence and current disposition |
 |---|---|---|
 | R01 | Recover Claude work and preserve owner state | Published64cca37 is integrated. Unpublished cloud changes are unavailable. This audit preserved all15 normal owner file contents and their exact file set; one legacy report was restricted0644→0600. The earlier205 startup incident and exact restoration remain disclosed below. |
-| R02 | Reproducible usable native app | Installed233 source/archive/signature/executable and exact-code CI/package gates above. Earlier228 complete-workflow and213 evidence remain historical checkpoints. |
+| R02 | Reproducible usable native app | The published receipt identifies the current installed source/archive/signature/executable and runtime gates. The dated233 Discovery,228 complete-workflow and213 evidence remain checkpoints. |
 | R03 | Onboarding and business settings | Actual228 onboarding creates a separate Consulting workspace; earlier202 settings, save/retry, persistence and latest-schema restore regressions. Verified for local workspace. |
 | R04 | Company/contact/opportunity/task/note CRUD and links | Actual202/203 create/edit, Return/Space opening, validation, five confirmed deletions, private recovery and exact six-collection restore/reopen. RecordDeletion, DirectoryView and EntityEditors are unchanged through228; current11 deletion and21 save checks pass. [Mac evidence](record-actions-acceptance-20261107.md). |
 | R05 | Manual/CSV lead intake and provenance | Actual202 imports1 valid row, skips1 nameless row and imports0 on replay; conversion reuses the company and counts1200CAD once. Current57 CSV assertions pass. |
@@ -91,7 +100,7 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 | R22 | Complete private backup, reviewed restore and rollback | Actual209 refuses duplicate audit before confirmation, retains named error and exact workspace/recovery files, then valid retry previews7 audits and restores all13 compared collections, fractions and owner decisions through restart.36 native identity checks;17 original-reader failures. [Evidence](backup-validation-acceptance-20261107.md). Native backup excludes Keychain, WebKit and external registers. |
 | R23 | PHAROS/GAP/Twenty/KAIROS status, bounded writes and automation | Native PHAROS real local Worker/D114 checks +D1 state pass; Project Control real connected5 pass. The20-case native integration suite includes14 Twenty cases with failure injection. Native Twenty also passes12 controlled connected assertions (7 backend,5 native guard/persistence); separate SDK CI uses a real Twenty instance. Earlier228 KAIROS Worker/localD1 acceptance passed20 assertions over8 GET requests, including account scope, operator-key refusal, replay, update, save failure and reload. Installed233 adds Discovery context acceptance against KAIROS source9aca912:23 assertions/11GETs, including the three read-only context routes. GAP13/KAIROS6 native cases cover atomic import/save failure. [Import evidence and account limits](readonly-import-acceptance-20261107.md). GAP passes26 direct PostgreSQL/PostgREST assertions over14GETs against all17 migrations, plus9 native assertions/5requests through the official Supabase Envoy gateway (35/19combined). [Managed-platform, legacy-Kong and owner-account limits remain explicit](gap-connected-acceptance-20261107.md). Installed228 also completed a live authenticated KAIROS customer-account inbox import at2026-11-07T09:28:41Z:0 new/updated/unchanged/skipped. This verifies an empty response; nonempty mapping and fresh collection remain pending. Native authenticated PHAROS health passed at08:48:12Z, which does not verify production exchange/inbox behavior. Current saved destinations and limits are listed in the audit. New workspaces default Auto-Pilot off; existing owner preference remains unchanged. |
 | R24 | Failures, private files and compatible data |21 native save cases,7 research recovery cases, current restore/corrupt-workspace checks and actual blocked import retry. New GAP/KAIROS cases reproduce original false-success/phantom imports, then verify atomic failure, retry and reload for new/existing records. The real KAIROS connected test also blocks its actual local workspace write and verifies retry. All15 normal owner files now0600 under0700 roots; only one legacy mode changed in this audit. Earlier formats default new fields; fractional data requires a compatible version. |
-| R25 | Guidance tied to installed evidence | This ledger and [operator guide](operator-workflow.md) identify installed233 Discovery evidence, the earlier228 complete workflow, historical213/209 evidence, default-mail/Gmail-browser handoffs and remaining dependencies. The public mobile report links exact source/release evidence. Historical reports remain linked, not treated as current completion claims. |
+| R25 | Guidance tied to installed evidence | The published receipt identifies the current release. This ledger and [operator guide](operator-workflow.md) retain dated233 Discovery evidence, the earlier228 complete workflow, historical213/209 evidence, handoffs and remaining dependencies. Historical reports remain linked, not treated as current completion claims. |
 
 ## Complete installed228 workflow — 7 November
 

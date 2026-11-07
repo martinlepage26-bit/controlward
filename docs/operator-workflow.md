@@ -4,6 +4,12 @@ If a record cannot be saved, its editor stays open with an error. Keep the form 
 
 Start in **Pipeline**. Import an existing lead CSV, add a lead by hand, or use **Find prospects** to review public business listings. For configured evidence-backed research, use **Pipeline → Leads** and add only Ready records to Pipeline for review. Operations → Import LeadGen accepts exported event files. A listing or imported score is a research lead; it does not establish buying intent.
 
+If a connection says **Access needed**, use its **Verify** or **Check access**
+action and handle any macOS dialog locally. Automatic refreshes pause until the
+credential is accessible; the saved sign-in and Auto-Pilot choice are retained.
+You can continue local CRM work while access is pending. See the
+[startup access policy and test scope](credential-startup-acceptance-20261107.md).
+
 **Find prospects** researches the selected businesses' websites for public contact routes, named people and explicit AI-use evidence. Expand **Research websites from a search or agent** to give it business websites from another discovery source; ControlWard obtains the evidence itself. Sources, timestamps and unknowns are retained when the search sheet or app closes. Use **Add researched lead** to save a finding and any eligible 99 CAD Quick Scan draft into Pipeline for review. Published business contact details are not proof of a person's private inbox or mailbox deliverability. Map coverage can be sparse; a missing result does not establish that no suitable business exists.
 
 The desktop's evidence search stops after 90 seconds and offers **Cancel search**. Completed research records are kept. Public providers can return sparse results or fail; inspect the recorded source/refusal evidence and qualify a business before treating it as a sales opportunity.

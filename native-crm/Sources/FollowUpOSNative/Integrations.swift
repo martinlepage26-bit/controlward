@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LocalAuthentication
 import Security
 
 // MARK: - API keys (Keychain)
@@ -11,6 +12,66 @@ protocol SecretStore: Sendable {
     func write(_ secret: String, for target: SyncTarget) throws
     func delete(_ target: SyncTarget) throws
     func exists(_ target: SyncTarget) -> Bool
+    func availability(_ target: SyncTarget) -> CredentialAvailability
+    /// Memory-only hint; return nil when a background probe is needed. Never perform I/O here.
+    func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability?
+    func readWithoutInteraction(_ target: SyncTarget) throws -> String?
+}
+
+enum CredentialAvailability: Equatable, Sendable { case checking, available, missing, accessRequired }
+
+enum CredentialIO {
+    static func perform<T: Sendable>(_ operation: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { continuation.resume(returning: operation()) }
+        }
+    }
+    static func read<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { continuation.resume(with: Result(catching: operation)) }
+        }
+    }
+}
+
+enum CredentialLookupError: LocalizedError {
+    case superseded
+    var errorDescription: String? { "The connection changed while credential access was checked. Retry the current connection." }
+}
+
+/// Only the copy-matching call is injectable. Credential writes, identities and ACLs are unchanged.
+struct KeychainLookup: Sendable {
+    struct Result: Sendable { var status: OSStatus; var data: Data? }
+    var copyMatching: @Sendable ([String: Any]) -> Result
+    static let system = KeychainLookup { query in
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        return Result(status: status, data: result as? Data)
+    }
+    func request(_ base: [String: Any], data: Bool, interactive: Bool) -> Result {
+        var query = base
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[(data ? kSecReturnData : kSecReturnAttributes) as String] = true
+        if !interactive {
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            query[kSecUseAuthenticationContext as String] = context
+        }
+        return copyMatching(query)
+    }
+    func availability(_ base: [String: Any]) -> CredentialAvailability {
+        switch request(base, data: false, interactive: false).status {
+        case errSecSuccess: .available
+        case errSecItemNotFound: .missing
+        default: .accessRequired
+        }
+    }
+    func read(_ base: [String: Any], interactive: Bool) throws -> String? {
+        let result = request(base, data: true, interactive: interactive)
+        if result.status == errSecItemNotFound { return nil }
+        guard result.status == errSecSuccess else { throw SecretStoreError.keychain(result.status) }
+        guard let data = result.data, let text = String(data: data, encoding: .utf8) else { throw SecretStoreError.keychain(errSecDecode) }
+        return text
+    }
 }
 
 enum SecretStoreError: LocalizedError, Equatable {
@@ -33,8 +94,11 @@ enum SecretStoreError: LocalizedError, Equatable {
 struct KeychainSecretStore: SecretStore {
     static let account = "api"
     let servicePrefix: String
+    let lookup: KeychainLookup
 
-    init(servicePrefix: String = "com.pharos.contextward") { self.servicePrefix = servicePrefix }
+    init(servicePrefix: String = "com.pharos.contextward", lookup: KeychainLookup = .system) {
+        self.servicePrefix = servicePrefix; self.lookup = lookup
+    }
 
     func service(for target: SyncTarget) -> String { "\(servicePrefix).\(target.rawValue)" }
 
@@ -45,14 +109,10 @@ struct KeychainSecretStore: SecretStore {
     }
 
     func read(_ target: SyncTarget) throws -> String? {
-        var request = query(target)
-        request[kSecReturnData as String] = true
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw SecretStoreError.keychain(status) }
-        return String(data: data, encoding: .utf8)
+        try lookup.read(query(target), interactive: true)
+    }
+    func readWithoutInteraction(_ target: SyncTarget) throws -> String? {
+        try lookup.read(query(target), interactive: false)
     }
 
     func write(_ secret: String, for target: SyncTarget) throws {
@@ -73,14 +133,10 @@ struct KeychainSecretStore: SecretStore {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretStoreError.keychain(status) }
     }
 
-    /// Reads attributes only, so it never needs the item's data or triggers an access prompt.
-    func exists(_ target: SyncTarget) -> Bool {
-        var request = query(target)
-        request[kSecReturnAttributes as String] = true
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        return SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess
-    }
+    /// A failed noninteractive probe means access is unknown, not that the saved key was removed.
+    func availability(_ target: SyncTarget) -> CredentialAvailability { lookup.availability(query(target)) }
+    func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability? { nil }
+    func exists(_ target: SyncTarget) -> Bool { availability(target) == .available }
 }
 
 /// Test and preview store. Never used by the shipping app.
@@ -89,6 +145,9 @@ final class InMemorySecretStore: SecretStore, @unchecked Sendable {
     private var values: [SyncTarget: String] = [:]
     init(_ initial: [SyncTarget: String] = [:]) { values = initial }
     func read(_ target: SyncTarget) throws -> String? { lock.withLock { values[target] } }
+    func readWithoutInteraction(_ target: SyncTarget) throws -> String? { try read(target) }
+    func availability(_ target: SyncTarget) -> CredentialAvailability { exists(target) ? .available : .missing }
+    func cachedAvailability(_ target: SyncTarget) -> CredentialAvailability? { availability(target) }
     func write(_ secret: String, for target: SyncTarget) throws {
         guard !secret.isEmpty else { throw SecretStoreError.empty }
         lock.withLock { values[target] = secret }
@@ -517,6 +576,8 @@ enum ConnectorStatus: Equatable {
     case notVerified
     case active(String)
     case error(String)
+    case accessRequired(String)
+    case checkingAccess
 
     var label: String {
         switch self {
@@ -524,13 +585,16 @@ enum ConnectorStatus: Equatable {
         case .notVerified: "Not verified"
         case .active: "Active"
         case .error: "Error"
+        case .accessRequired: "Access needed"
+        case .checkingAccess: "Checking access"
         }
     }
 
     var detail: String {
         switch self {
-        case .needsSetup(let reason), .active(let reason), .error(let reason): reason
+        case .needsSetup(let reason), .active(let reason), .error(let reason), .accessRequired(let reason): reason
         case .notVerified: "Configured. Run Verify to confirm the endpoint accepts the key."
+        case .checkingAccess: "Checking saved credential availability. Local CRM remains available."
         }
     }
 

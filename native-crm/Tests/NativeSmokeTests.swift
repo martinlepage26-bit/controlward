@@ -14,6 +14,10 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        if CommandLine.arguments.dropFirst() == ["--credential-access"] {
+            guard await CredentialAccessTests.run() else { throw SmokeTestFailure.failed("Credential access tests failed") }
+            return
+        }
         if CommandLine.arguments.dropFirst() == ["--discovery-intelligence"] {
             guard await DiscoveryIntelligenceTests.run() else { throw SmokeTestFailure.failed("Discovery intelligence tests failed") }
             return
@@ -35,6 +39,7 @@ struct NativeSmokeTests {
             return
         }
         guard await ReleaseReviewTests.run() else { throw SmokeTestFailure.failed("Release review tests failed") }
+        guard await CredentialAccessTests.run() else { throw SmokeTestFailure.failed("Credential access tests failed") }
         guard RecordDeletionTests.run() else { throw SmokeTestFailure.failed("Record deletion tests failed") }
         guard CRMSaveTests.run() else { throw SmokeTestFailure.failed("CRM save tests failed") }
         guard WorkspaceModuleTests.run() else { throw SmokeTestFailure.failed("Workspace module policy tests failed") }
