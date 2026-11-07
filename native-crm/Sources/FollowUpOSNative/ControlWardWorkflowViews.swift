@@ -280,7 +280,7 @@ private struct MailReviewDetail: View {
                 Picker("Company", selection: $companyID) { Text("Unlinked").tag(UUID?.none); ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) } }
                 Toggle("Reviewed", isOn: $reviewed)
                 Button("Save review") { perform { try store.reviewMail(mail.id, reviewed: reviewed, contactID: contactID, companyID: companyID); return "Review saved." } }
-                Button(mail.taskID == nil ? "Create review task" : "Linked task saved") {
+                Button(mail.taskID == nil ? "Create review task" : (store.tasks.contains { $0.id == mail.taskID } ? "Linked task saved" : "Linked task deleted")) {
                     perform { _ = try store.createMailTask(mail.id); return "Task saved in Tasks. This message keeps the same linked task." }
                 }
                 Button("Preview project capture") { showCapture = true }.buttonStyle(.borderedProminent)
@@ -378,7 +378,13 @@ struct WorkspaceRecoveryControls: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Backup and recovery").font(.headline)
             Text("Back up local records, imported mail metadata, project links and evidence. Project Control register exports and hosted email sessions are managed in their own sections.").font(.caption).foregroundStyle(.secondary)
-            HStack { Button("Save local backup") { backup() }; Button("Review a backup to restore") { inspectBackup() } }
+            HStack {
+                Button("Save local backup") { backup() }
+                Button("Review a backup to restore") { inspectBackup() }
+                Button("Show deletion backups") { NSWorkspace.shared.activateFileViewerSelecting([store.deletionRecoveryDirectory]) }
+                    .disabled(!FileManager.default.fileExists(atPath: store.deletionRecoveryDirectory.path))
+            }
+            Text("Local record deletion saves a private recovery backup here before removing anything. Use Review a backup to restore to recover the workspace.").font(.caption).foregroundStyle(.secondary)
             if let message { Text(message).font(.caption).textSelection(.enabled) }
         }.crmCard()
             .confirmationDialog("Restore this local workspace?", isPresented: $confirm, titleVisibility: .visible) {

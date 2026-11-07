@@ -5,7 +5,21 @@ private struct EditorShell<Content: View>: View {
     let title: String
     let onCancel: () -> Void
     let onSave: () -> Void
+    let saveIssue: String?
+    let deleteTitle: String?
+    let deleteMessage: String
+    let onDelete: (() -> Void)?
     @ViewBuilder let content: () -> Content
+    @State private var confirmDelete = false
+    @State private var validationError: String?
+
+    init(title: String, onCancel: @escaping () -> Void, onSave: @escaping () -> Void,
+         saveIssue: String? = nil, deleteTitle: String? = nil, deleteMessage: String = "",
+         onDelete: (() -> Void)? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title; self.onCancel = onCancel; self.onSave = onSave
+        self.saveIssue = saveIssue; self.deleteTitle = deleteTitle; self.deleteMessage = deleteMessage
+        self.onDelete = onDelete; self.content = content
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,17 +28,34 @@ private struct EditorShell<Content: View>: View {
                 Spacer()
                 Text(title).font(.headline)
                 Spacer()
-                Button("Save", action: onSave).buttonStyle(.borderedProminent)
+                if let deleteTitle, onDelete != nil {
+                    Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
+                        .help(deleteTitle).accessibilityLabel(deleteTitle)
+                }
+                Button("Save") {
+                    validationError = saveIssue
+                    if saveIssue == nil { onSave() }
+                }.buttonStyle(.borderedProminent)
             }
             .padding(16)
             .background(CRMTheme.ink)
             .foregroundStyle(.white)
             SaveFailureNotice()
+            if let validationError {
+                Text(validationError).foregroundStyle(CRMTheme.rust).padding(.horizontal, 16).padding(.top, 8)
+            }
             Form { content() }
                 .formStyle(.grouped)
         }
         .frame(width: 560, height: 430)
         .onAppear { store.clearSaveFailure() }
+        .onChange(of: saveIssue) { _, issue in if issue == nil { validationError = nil } }
+        .confirmationDialog(deleteTitle ?? "Delete record?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete local record", role: .destructive) { onDelete?() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(deleteMessage + " A private recovery backup is saved first. Restore it from Settings → Backup and recovery. Unsaved edits are discarded. No upstream record is deleted.")
+        }
     }
 }
 
@@ -37,7 +68,11 @@ struct ContactEditor: View {
     init(contact: Contact?) { _draft = State(initialValue: contact ?? Contact()); existing = contact != nil }
 
     var body: some View {
-        EditorShell(title: existing ? "Edit contact" : "New contact", onCancel: { dismiss() }, onSave: save) {
+        EditorShell(title: existing ? "Edit contact" : "New contact", onCancel: { dismiss() }, onSave: save,
+                    saveIssue: draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Enter a first or last name." : nil,
+                    deleteTitle: existing ? "Delete contact \"\(draft.displayName)\"?" : nil,
+                    deleteMessage: "Related records and their text stay; their contact link is cleared.",
+                    onDelete: { if store.delete(draft) { dismiss() } }) {
             Section("Identity") {
                 TextField("First name", text: $draft.firstName)
                 TextField("Last name", text: $draft.lastName)
@@ -78,7 +113,11 @@ struct CompanyEditor: View {
     init(company: Company?) { _draft = State(initialValue: company ?? Company()); existing = company != nil }
 
     var body: some View {
-        EditorShell(title: existing ? "Edit company" : "New company", onCancel: { dismiss() }, onSave: save) {
+        EditorShell(title: existing ? "Edit company" : "New company", onCancel: { dismiss() }, onSave: save,
+                    saveIssue: draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Enter a company name." : nil,
+                    deleteTitle: existing ? "Delete company \"\(draft.name)\"?" : nil,
+                    deleteMessage: "Related records and their text stay; their company link is cleared. Account evidence history is retained.",
+                    onDelete: { if store.delete(draft) { dismiss() } }) {
             Section("Company") {
                 TextField("Name", text: $draft.name)
                 TextField("Domain", text: $draft.domain)
@@ -105,7 +144,11 @@ struct OpportunityEditor: View {
     init(opportunity: Opportunity?) { _draft = State(initialValue: opportunity ?? Opportunity()); existing = opportunity != nil }
 
     var body: some View {
-        EditorShell(title: existing ? "Edit opportunity" : "New opportunity", onCancel: { dismiss() }, onSave: save) {
+        EditorShell(title: existing ? "Edit opportunity" : "New opportunity", onCancel: { dismiss() }, onSave: save,
+                    saveIssue: draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Enter an opportunity name." : nil,
+                    deleteTitle: existing ? "Delete opportunity \"\(draft.name)\"?" : nil,
+                    deleteMessage: "Related tasks and notes stay; their opportunity link is cleared. Leads keep their own recorded values and status.",
+                    onDelete: { if store.delete(draft) { dismiss() } }) {
             Section("Opportunity") {
                 TextField("Name", text: $draft.name)
                 TextField("Amount (CAD)", value: $draft.amount, format: .number)
@@ -149,7 +192,11 @@ struct TaskEditor: View {
     init(task: CRMTask?) { _draft = State(initialValue: task ?? CRMTask()); existing = task != nil }
 
     var body: some View {
-        EditorShell(title: existing ? "Edit task" : "New task", onCancel: { dismiss() }, onSave: save) {
+        EditorShell(title: existing ? "Edit task" : "New task", onCancel: { dismiss() }, onSave: save,
+                    saveIssue: draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Enter a task title." : nil,
+                    deleteTitle: existing ? "Delete task \"\(draft.title)\"?" : nil,
+                    deleteMessage: "If this is a lead’s next-action task, its follow-up date is cleared and its reminder is cancelled. Historical task receipts are retained.",
+                    onDelete: { if store.delete(draft) { dismiss() } }) {
             Section("Task") {
                 TextField("Title", text: $draft.title)
                 Picker("Status", selection: $draft.status) { ForEach(TaskStatus.allCases) { Text($0.label).tag($0) } }
@@ -212,7 +259,11 @@ struct NoteEditor: View {
     init(note: CRMNote?) { _draft = State(initialValue: note ?? CRMNote()); existing = note != nil }
 
     var body: some View {
-        EditorShell(title: existing ? "Edit note" : "New note", onCancel: { dismiss() }, onSave: save) {
+        EditorShell(title: existing ? "Edit note" : "New note", onCancel: { dismiss() }, onSave: save,
+                    saveIssue: draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Enter a note title." : nil,
+                    deleteTitle: existing ? "Delete note \"\(draft.title)\"?" : nil,
+                    deleteMessage: "The saved note is removed. Related contacts, companies and opportunities stay.",
+                    onDelete: { if store.delete(draft) { dismiss() } }) {
             Section("Note") {
                 TextField("Title", text: $draft.title)
                 TextEditor(text: $draft.body).frame(minHeight: 170)
@@ -226,6 +277,10 @@ struct NoteEditor: View {
                     Text("Unassigned").tag(UUID?.none)
                     ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) }
                 }
+                Picker("Opportunity", selection: opportunityBinding) {
+                    Text("Unassigned").tag(UUID?.none)
+                    ForEach(store.opportunities) { Text($0.name).tag(Optional($0.id)) }
+                }
             }
         }
         .environmentObject(store)
@@ -233,6 +288,7 @@ struct NoteEditor: View {
 
     private var contactBinding: Binding<UUID?> { Binding(get: { draft.contactID }, set: { draft.contactID = $0 }) }
     private var companyBinding: Binding<UUID?> { Binding(get: { draft.companyID }, set: { draft.companyID = $0 }) }
+    private var opportunityBinding: Binding<UUID?> { Binding(get: { draft.opportunityID }, set: { draft.opportunityID = $0 }) }
     private func save() { guard !draft.title.isEmpty else { return }; draft.updatedAt = Date.now.ISO8601Format(); if existing ? store.update(draft) : store.add(draft) { dismiss() } }
 }
 

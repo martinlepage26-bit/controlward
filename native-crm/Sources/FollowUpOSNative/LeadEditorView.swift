@@ -240,7 +240,7 @@ struct LeadEditorView: View {
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("The lead and follow-up history will be permanently removed.")
+            Text("The saved lead and its history are removed locally after a private recovery backup is saved. Related records stay, their lead links are cleared, and its next-action task is closed. Restore the backup from Settings → Backup and recovery. No upstream record is deleted.")
         }
     }
 
