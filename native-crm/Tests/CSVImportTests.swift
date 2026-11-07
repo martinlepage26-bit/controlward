@@ -36,6 +36,14 @@ enum CSVImportTests {
             ("CSV: unrecognized headers say so", unknownHeadersNotice),
             ("CSV: Lantern CRLF export with BOM imports", baeaCRLFWithBOM),
             ("CSV: empty Lantern file reports nothing imported", baeaEmptyNotice),
+            ("Lantern: failed CSV save publishes nothing and retry survives reload", baeaCSVSaveFailure),
+            ("Lantern: failed workbook save publishes nothing and retry survives reload", baeaWorkbookSaveFailure),
+            ("Lantern: reimport preserves reviewed identity and CRM context", baeaReimportContext),
+            ("Lantern: invalid language, score or sample rejects the whole file", baeaInvalidRows),
+            ("Lantern: ambiguous existing audit name rejects the whole file", baeaAmbiguousName),
+            ("Lantern: canonical workbook preserves scaled scores and transcript evidence", baeaCanonicalEvidence),
+            ("Lantern: invalid canonical scores never become zero scores", baeaCanonicalInvalid),
+            ("Lantern: unfilled canonical template imports no scored evidence", baeaCanonicalTemplate),
             ("CSV-1: organisation headers (EN/FR) fill company; first non-empty wins and is named", csv1OrganisationHeaders),
             ("CSV-2: nameless rows are skipped with their row numbers, not dropped", csv2NamelessRows),
             ("CSV-3: unrecognised columns are named in the result", csv3IgnoredColumns),
@@ -295,6 +303,155 @@ enum CSVImportTests {
         let url = try file("baea-empty.csv", Data("audit,language\r\n".utf8), in: directory)
         try expect(try store.importBAEACSV(from: url) == 0, "empty Lantern file imported audits")
         try expect(store.notice == "No Lantern scores found.", "empty Lantern notice: \(String(describing: store.notice))")
+    }
+
+    private static let lanternCSV = "audit,client,language,disclosure,escalation,context_transfer,tone,hallucinations,sample_size\nPilot,Demo Co,FR,80,60,70,90,95,20\nPilot,Demo Co,EN,90,90,90,90,95,20\n"
+
+    private static func workspaceBytes(_ workspace: PersistentWorkspace) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(workspace)
+    }
+
+    private static func baeaSaveFailure(workbook: Bool) throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try store.commitWorkspace { $0.business.name = "Existing synthetic workspace" }
+        let input: URL
+        if workbook {
+            input = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/baea-synthetic.xlsx")
+        } else { input = try file("lantern.csv", Data(lanternCSV.utf8), in: directory) }
+        let before = try workspaceBytes(store.workspace)
+        let durable = try Data(contentsOf: store.storageURL)
+        let folder = store.storageURL.deletingLastPathComponent()
+        let saved = directory.appendingPathComponent("saved-workspace")
+        try FileManager.default.moveItem(at: folder, to: saved)
+        try Data("Synthetic write blocker".utf8).write(to: folder)
+        func run() throws -> Int { try workbook ? store.importBAEAXLSX(from: input) : store.importBAEACSV(from: input) }
+        var refused = false
+        do { _ = try run() } catch { refused = true }
+        try expect(refused, "failed Lantern write was reported as successful")
+        try expect(try workspaceBytes(store.workspace) == before, "failed Lantern write published in-memory records")
+        try expect(try Data(contentsOf: saved.appendingPathComponent("workspace.json")) == durable, "failed import changed saved records")
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.moveItem(at: saved, to: folder)
+        try expect(try run() == 1, "retry did not import one audit")
+        let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        try expect(try workspaceBytes(reloaded.workspace) == workspaceBytes(store.workspace), "retry did not survive reload")
+    }
+
+    static func baeaCSVSaveFailure() throws { try baeaSaveFailure(workbook: false) }
+    static func baeaWorkbookSaveFailure() throws { try baeaSaveFailure(workbook: true) }
+
+    static func baeaReimportContext() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try file("lantern.csv", Data(lanternCSV.replacingOccurrences(of: ",80,", with: ",80.0,").replacingOccurrences(of: ",20\n", with: ",20.0\n").utf8), in: directory)
+        try expect(try store.importBAEACSV(from: input) == 1, "initial import failed")
+        var reviewed = store.audits[0]
+        reviewed.companyID = UUID(); reviewed.contactID = UUID(); reviewed.leadID = UUID()
+        reviewed.findings = "Owner-reviewed finding"; reviewed.remediation = "Owner-reviewed next action"
+        reviewed.methodologyVersion = "Owner-reviewed method"
+        try expect(store.update(reviewed), "could not save reviewed context")
+        try expect(try store.importBAEACSV(from: input) == 1, "reimport failed")
+        let actual = store.audits[0]
+        try expect(store.audits.count == 1 && actual.id == reviewed.id && actual.createdAt == reviewed.createdAt, "reimport replaced the reviewed audit identity")
+        try expect(actual.companyID == reviewed.companyID && actual.contactID == reviewed.contactID && actual.leadID == reviewed.leadID, "reimport discarded CRM links")
+        try expect(actual.findings == reviewed.findings && actual.remediation == reviewed.remediation && actual.methodologyVersion == reviewed.methodologyVersion, "reimport discarded owner context")
+        try expect(actual.sampleSizeFR == 20 && actual.sampleSizeEN == 20 && actual.transcripts.count == 2, "replay accumulated sample or transcript duplicates")
+        try expect(actual.transcripts.map(\.id) == reviewed.transcripts.map(\.id), "identical transcript identities changed on replay")
+    }
+
+    static func baeaInvalidRows() throws {
+        let cases = [
+            ("language", "Later,Demo Co,DE,80,60,70,90,95,20"),
+            ("disclosure", "Later,Demo Co,FR,oops,60,70,90,95,20"),
+            ("disclosure", "Later,Demo Co,FR,101,60,70,90,95,20"),
+            ("sample_size", "Later,Demo Co,FR,80,60,70,90,95,-1"),
+            ("sample_size", "Later,Demo Co,FR,80,60,70,90,95,1.5")
+        ]
+        for (column, row) in cases {
+            let (store, directory) = try freshStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try store.commitWorkspace { $0.business.name = "Existing" }
+            let before = try workspaceBytes(store.workspace)
+            let csv = lanternCSV.split(separator: "\n").prefix(2).joined(separator: "\n") + "\n" + row + "\n"
+            let input = try file("invalid-lantern.csv", Data(csv.utf8), in: directory)
+            var message: String?
+            do { _ = try store.importBAEACSV(from: input) } catch { message = error.localizedDescription }
+            try expect(message?.contains("row 3") == true && message?.contains(column) == true, "invalid \(column) was accepted or lacked row/column explanation")
+            try expect(try workspaceBytes(store.workspace) == before, "a later invalid row left a partial import")
+            try expect(try workspaceBytes(AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore()).workspace) == before, "invalid input changed durable records")
+        }
+    }
+
+    static func baeaAmbiguousName() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try store.commitWorkspace { $0.audits = [BilingualAudit(name: "Pilot"), BilingualAudit(name: "Pilot")] }
+        let before = try workspaceBytes(store.workspace)
+        let csv = lanternCSV + "New audit,Demo Co,FR,80,60,70,90,95,1\n"
+        let input = try file("ambiguous-lantern.csv", Data(csv.utf8), in: directory)
+        var refused = false
+        do { _ = try store.importBAEACSV(from: input) } catch { refused = true }
+        try expect(refused, "ambiguous audit identity was silently replaced")
+        try expect(try workspaceBytes(store.workspace) == before, "ambiguous import deleted audits or imported part of the file")
+    }
+
+    private static func canonicalWorkbook(in directory: URL, score: String = "4", template: Bool = false) throws -> URL {
+        let root = directory.appendingPathComponent("workbook-\(UUID())")
+        let sheets = root.appendingPathComponent("xl/worksheets")
+        try FileManager.default.createDirectory(at: sheets, withIntermediateDirectories: true)
+        func sheet(_ rows: [[String]]) -> String {
+            let body = rows.enumerated().map { offset, row in
+                "<row r=\"\(offset + 1)\">" + row.enumerated().map { index, value in
+                    "<c r=\"\(String(UnicodeScalar(65 + index)!))\(offset + 1)\" t=\"inlineStr\"><is><t>\(value)</t></is></c>"
+                }.joined() + "</row>"
+            }.joined()
+            return "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>\(body)</sheetData></worksheet>"
+        }
+        let headers = ["Transcript ID", "Workflow", "Date", "D1 Self-Disclosure", "D2 Escalation Trigger Accuracy", "D3 Context Transfer Completeness", "D4 Tone/Register Consistency", "D5 Hallucination Flags", "Taxonomy Code(s)", "Notes / Quoted Excerpt"]
+        try sheet([["Overview"]]).write(to: sheets.appendingPathComponent("sheet1.xml"), atomically: true, encoding: .utf8)
+        let en = template ? ["synthetic-en"] + Array(repeating: "", count: 9) : ["synthetic-en", "support", "2026-11-06", score, "4", "4", "4", "4", "FIXTURE-EN", "Synthetic English excerpt"]
+        let fr = template ? ["synthetic-fr"] + Array(repeating: "", count: 9) : ["synthetic-fr", "support", "2026-11-06", "3", "3", "3", "3", "3", "FIXTURE-FR", "Synthetic French excerpt"]
+        try sheet([headers, en]).write(to: sheets.appendingPathComponent("sheet2.xml"), atomically: true, encoding: .utf8)
+        try sheet([headers, fr]).write(to: sheets.appendingPathComponent("sheet3.xml"), atomically: true, encoding: .utf8)
+        let output = directory.appendingPathComponent("synthetic-canonical.xlsx")
+        let zip = Process(); zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip"); zip.arguments = ["-qr", output.path, "xl"]; zip.currentDirectoryURL = root
+        try zip.run(); zip.waitUntilExit()
+        try expect(zip.terminationStatus == 0, "could not create canonical fixture")
+        return output
+    }
+
+    static func baeaCanonicalEvidence() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try expect(try store.importBAEAXLSX(from: canonicalWorkbook(in: directory)) == 1, "canonical workbook did not import")
+        let audit = store.audits[0]
+        try expect(audit.english.disclosure == 80 && audit.french.disclosure == 60 && audit.languageGap == 20, "canonical scores were not scaled correctly")
+        try expect(audit.sampleSizeEN == 1 && audit.sampleSizeFR == 1 && audit.transcripts.count == 2, "canonical samples were not retained")
+        let en = audit.transcripts.first { $0.language == .english }
+        try expect(en?.transcriptID == "synthetic-en" && en?.workflow == "support" && en?.date == "2026-11-06", "canonical transcript identity/context was dropped")
+        try expect(en?.taxonomyCodes == "FIXTURE-EN" && en?.notes == "Synthetic English excerpt", "canonical taxonomy or quoted evidence was dropped")
+    }
+
+    static func baeaCanonicalInvalid() throws {
+        for score in ["oops", "6", "", "NaN"] {
+            let (store, directory) = try freshStore()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let input = try canonicalWorkbook(in: directory, score: score)
+            var refused = false
+            do { _ = try store.importBAEAXLSX(from: input) } catch { refused = true }
+            try expect(refused && store.audits.isEmpty, "invalid canonical score was converted to a valid zero score")
+        }
+    }
+
+    static func baeaCanonicalTemplate() throws {
+        let (store, directory) = try freshStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = try canonicalWorkbook(in: directory, template: true)
+        try expect(try store.importBAEAXLSX(from: input) == 0, "unfilled template was counted as scored evidence")
+        try expect(store.audits.isEmpty && store.notice == "No Lantern scores found.", "template created a misleading audit")
+        try expect(!FileManager.default.fileExists(atPath: store.storageURL.path), "empty template wrote a workspace")
     }
 
     // MARK: - Slice CSV (Water 9:42 AM ET). Made-up rows only.

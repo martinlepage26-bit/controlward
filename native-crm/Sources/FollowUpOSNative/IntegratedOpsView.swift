@@ -10,6 +10,7 @@ struct IntegratedOpsView: View {
     @State private var showBAEAImporter = false
     @State private var showBAEAWorkbookImporter = false
     @State private var showExporter = false
+    @State private var importIssue: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,38 +49,50 @@ struct IntegratedOpsView: View {
         .sheet(isPresented: $showSignal) { SignalEditor(signal: nil).environmentObject(store) }
         .sheet(isPresented: $showAudit) { BilingualAuditEditor(audit: nil).environmentObject(store) }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json], allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
-                defer { url.stopAccessingSecurityScopedResource() }
-                do { _ = try store.importLeadGenJSON(from: url) }
-                catch { store.notice = "Could not import \(url.lastPathComponent): \(error.localizedDescription)" }
-            }
+            importFiles(result, using: store.importLeadGenJSON)
         }
         .fileImporter(isPresented: $showBAEAImporter, allowedContentTypes: [.commaSeparatedText], allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
-                defer { url.stopAccessingSecurityScopedResource() }
-                do { _ = try store.importBAEACSV(from: url) }
-                catch { store.notice = "Could not import \(url.lastPathComponent): \(error.localizedDescription)" }
-            }
+            importFiles(result, using: store.importBAEACSV)
         }
         .fileImporter(isPresented: $showBAEAWorkbookImporter, allowedContentTypes: [.spreadsheet], allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
-                defer { url.stopAccessingSecurityScopedResource() }
-                do { _ = try store.importBAEAXLSX(from: url) }
-                catch { store.notice = "Could not import \(url.lastPathComponent): \(error.localizedDescription)" }
-            }
+            importFiles(result, using: store.importBAEAXLSX)
         }
         .fileExporter(isPresented: $showExporter, document: ExchangeDocument(exchange: store.exchange), contentType: .json, defaultFilename: "contextward-exchange.json") { result in
             guard case .success(let url) = result else { return }
             do { try store.exportExchange(to: url) }
             catch { store.notice = "Could not export exchange: \(error.localizedDescription)" }
         }
+        .alert("Import not completed", isPresented: Binding(get: { importIssue != nil }, set: { if !$0 { importIssue = nil } })) {
+            Button("OK", role: .cancel) { importIssue = nil }
+        } message: {
+            Text(importIssue ?? "")
+        }
         .navigationTitle("Operations")
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>, using load: (URL) throws -> Int) {
+        let urls: [URL]
+        switch result {
+        case .success(let selected): urls = selected
+        case .failure(let error):
+            let failure = error as NSError
+            if failure.domain != NSCocoaErrorDomain || failure.code != CocoaError.userCancelled.rawValue { importIssue = error.localizedDescription }
+            return
+        }
+        var failures: [String] = []
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else {
+                failures.append("Could not read \(url.lastPathComponent). Select the file again to grant access.")
+                continue
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+            do { _ = try load(url) }
+            catch { failures.append("Could not import \(url.lastPathComponent): \(error.localizedDescription)") }
+        }
+        if !failures.isEmpty {
+            if urls.count > 1 { failures.append("Each error applies to the named file. Other selected files may have imported.") }
+            importIssue = failures.joined(separator: "\n\n")
+        }
     }
 }
 
