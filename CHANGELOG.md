@@ -4,6 +4,10 @@ All notable changes to this application are documented in this file.
 
 ## Unreleased
 
+- Discovery can use KAIROS audience, positioning, inbound enquiries and aggregate
+  content results. It keeps fit, recorded interest and website-supported contact
+  routes separate, requires review for enquiry links and retains source reasons.
+  Paused collectors remain visible; content metrics never imply buyer intent.
 - Lead to follow-up: Ready prospects can be added to Pipeline with their evidence; the lead editor shows
   source, evidence and an itemised completeness score that is not buying intent; **Review conversion…**
   previews and then creates linked company, contact, opportunity and follow-up task records; the local
