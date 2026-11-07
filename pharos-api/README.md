@@ -32,9 +32,28 @@ Cloudflare Worker edge contract for the native Contextward workspace.
   (kairos, contextward, quickscan, pharos, security, lavoie, fba, secondact, aid,
   northbound, meta-ads, research) to a Project Control project, copies it into the
   lead inbox as `intake:<id>`, and files a Project Control intake item with the
-  `PC_FEED_TOKEN` feed key (masked email only). Browser posts are limited to 5 per
-  IP per hour and have a `website` honeypot. Nothing is ever sent to the lead.
-- `GET /v1/intake` (Contextward key only): the 100 most recent intake rows.
+  `PC_FEED_TOKEN` feed key (the lead line keeps the email masked). Browser posts are
+  limited to 5 per IP per hour and have a `website` honeypot. Nothing is ever sent
+  to the lead. There is no email, Gmail, or other send call.
+- KAIROS trial signup draft (`source: kairos-signup` only). Kairos posts
+  `{name, email, interest: "kairos", source: "kairos-signup", note: "KAIROS trial account <accountId>" }`
+  and adds ` (referred)` on the note when the signup came through a referral.
+  Intake then prepares one DRAFT follow-up from Martin: subject `Your KAIROS trial is active`,
+  a short plain-text body that uses the name, the account number parsed from the note,
+  and a thank-you when the note says referred. The copy promises nothing else.
+  This worker has no model binding, so the draft is a fixed template.
+  The draft is stored with the filed Project Control item (summary, plus flat
+  `draft_*` metadata and `subject` / `from`) and on the intake row
+  (`draft_subject`, `draft_body`, `draft_html`, `draft_status`). Project Control's
+  inbox, including the copy bundled in ControlWard, shows `metadata.subject` as the
+  card title and the summary (which contains the draft) as the card body. The item
+  link opens `GET /v1/intake?id=<id>`, which returns the same draft.
+  `draft_html` escapes the name and email for HTML. The plain `draft_body` is what
+  Martin copies. `draft_status` is `not_sent`. A draft failure still files the item
+  and keeps the lead. Server callers see `follow_up_draft` on the 201 response.
+  Browser callers do not. Martin sends each message himself, after an explicit go-ahead.
+- `GET /v1/intake` (Contextward key only): the 100 most recent intake rows, including
+  any stored draft columns.
 - Cron `17 3 * * *`: deletes lead rows acked more than 30 days ago (unacked
   leads stay until pulled) and exchange snapshots older than 30 days.
 
@@ -48,7 +67,9 @@ When a D1 binding is provisioned, the packet persists the payload and enforces
 idempotency. Without that binding it returns `persisted: false` and never
 pretends a receipt means durable storage.
 
-The included migrations create the receipt and lead-inbox tables. The production
+The included migrations create the receipt, lead-inbox, and intake tables.
+`0005_intake_draft.sql` adds the nullable KAIROS draft columns. Apply migrations
+before a worker that writes them. The production
 Worker is `pharos-contextward-api`, backed by the configured
 `pharos-contextward` D1 database and scheduled at `17 3 * * *`.
 
