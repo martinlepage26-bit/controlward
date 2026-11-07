@@ -287,14 +287,20 @@ struct LeadEditorView: View {
                 }
                 HStack {
                     Button("Copy", systemImage: "doc.on.doc") { copyMessage() }
-                    Button("Email", systemImage: "envelope") { emailMessage() }
+                    Menu("Email", systemImage: "envelope") {
+                        Button("Default mail app") { emailMessage(.defaultMail) }
+                        Button("Gmail in browser…") { emailMessage(.gmail) }
+                            .help("Shares this draft's recipient, subject and message with Gmail. Check the sending account there; nothing is sent automatically.")
+                    }
                         .disabled(draft.email.isEmpty || message.isEmpty || emailDraftIssue != nil)
-                        .help(emailDraftIssue ?? "Opens this draft in your mail app. Nothing is sent until you send it there.")
+                        .help(emailDraftIssue ?? "Choose where to review this unsent draft. Gmail uses the account signed in to your browser.")
                     Spacer()
                     Button("Mark as sent", systemImage: "paperplane") { markSent() }
                         .buttonStyle(.borderedProminent)
                         .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                Text("In Gmail, check the sending account before sending. Gmail may save the unsent draft.")
+                    .font(.caption2).foregroundStyle(.secondary)
                 if let issue = emailDraftIssue { Text(issue).font(.caption).foregroundStyle(CRMTheme.rust) }
             } else {
                 Button {
@@ -416,18 +422,19 @@ struct LeadEditorView: View {
         writerNote = "Copied to the clipboard."
     }
 
-    private func emailMessage() {
+    private func emailMessage(_ destination: LeadWorkflow.EmailDraftDestination) {
         // Files or evidence may change while the editor is open; the action checks again too.
-        if let issue = emailDraftIssue { validationMessage = issue; return }
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = MailAddress.bare(draft.email)
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: emailSubject),
-            URLQueryItem(name: "body", value: message),
-        ]
-        guard let url = components.url else { validationMessage = "This email draft could not be prepared. Check the recipient and message."; return }
-        if !NSWorkspace.shared.open(url) { validationMessage = "No email application could open this draft. Copy the text or configure your default mail app." }
+        let config = ICPConfig.defaultDirectory(bundle: AppResources.bundle).flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
+        do {
+            let url = try LeadWorkflow.emailDraftURL(for: draft, body: message, subject: emailSubject,
+                                                    destination: destination, config: config,
+                                                    suppression: store.suppressionList, now: .now)
+            guard NSWorkspace.shared.open(url) else {
+                validationMessage = "No application could open this draft. Use Copy, or choose another Email destination."
+                return
+            }
+            writerNote = "Draft requested in \(destination == .gmail ? "Gmail" : "your default mail app"). Review the sending account, recipient and text there. If no composer appears, use Copy."
+        } catch { validationMessage = error.localizedDescription }
     }
 
     private func markSent() {
