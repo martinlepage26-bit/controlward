@@ -105,9 +105,13 @@ enum AgentResearchTests {
                 let message = result.draft(config: config, suppression: SuppressionList(), now: now)!
                 var lead = Lead.blank(); lead.email = result.email!; lead.quickScanResearch = result; lead.outreachDraft = message.body
                 func issue(_ lead: Lead, _ body: String, _ list: SuppressionList = SuppressionList(), at: Date? = nil) -> String? {
-                    LeadWorkflow.emailDraftIssue(for: lead, body: body, subject: message.subject, config: config, suppression: list, now: at ?? now)
+                    let fallback = LeadWorkflow.draft(for: lead, in: PersistentWorkspace(), business: BusinessProfile()).subject
+                    let subject = LeadWorkflow.emailSubject(for: lead, body: body, fallback: fallback)
+                    return LeadWorkflow.emailDraftIssue(for: lead, body: body, subject: subject, config: config, suppression: list, now: at ?? now)
                 }
+                try expect(LeadWorkflow.emailSubject(for: lead, body: message.body, fallback: "Introduction") == message.subject, "editor and handoff preserve approved offer subject")
                 try expect(issue(lead, message.body) == nil, "valid saved cold draft can be opened for review")
+                try expect(issue(lead, message.body.replacingOccurrences(of: "99 $ CA", with: "199 $ CA")) != nil, "different price remains refused")
                 let list = SuppressionList(); list.record(lead.email, at: now, via: "unsubscribe")
                 try expect(issue(lead, message.body, list) != nil && lead.outreachDraft == message.body, "later unsubscribe blocks handoff without deleting text")
                 var changed = lead; changed.email = "other@other.test"
@@ -119,6 +123,7 @@ enum AgentResearchTests {
                 try Data("broken unsubscribe list".utf8).write(to: file)
                 try expect(issue(lead, message.body, SuppressionList(storageURL: file)) != nil, "damaged exclusions block a saved draft")
                 var manual = Lead.blank(); manual.email = "warm@example.test"
+                try expect(LeadWorkflow.emailSubject(for: manual, body: "Recorded warm follow-up", fallback: "Following up") == "Following up", "ordinary correspondence keeps grounded subject")
                 try expect(LeadWorkflow.emailDraftIssue(for: manual, body: "Recorded warm follow-up", subject: "Following up", config: nil, suppression: SuppressionList(), now: now) == nil, "ordinary owner-entered correspondence remains available")
             }),
             ("Cancellation performs no network request and creates no draft", {

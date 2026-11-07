@@ -17,9 +17,13 @@ struct LeadEditorView: View {
     @State private var groundedDraft: LeadWorkflow.GroundedDraft?
     private let isNew: Bool
 
+    private var emailSubject: String {
+        LeadWorkflow.emailSubject(for: draft, body: message, fallback: store.groundedDraft(for: draft).subject)
+    }
+
     private var emailDraftIssue: String? {
         let config = ICPConfig.defaultDirectory(bundle: AppResources.bundle).flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
-        return LeadWorkflow.emailDraftIssue(for: draft, body: message, subject: store.groundedDraft(for: draft).subject,
+        return LeadWorkflow.emailDraftIssue(for: draft, body: message, subject: emailSubject,
                                            config: config, suppression: store.suppressionList, now: .now)
     }
 
@@ -419,7 +423,7 @@ struct LeadEditorView: View {
         components.scheme = "mailto"
         components.path = MailAddress.bare(draft.email)
         components.queryItems = [
-            URLQueryItem(name: "subject", value: store.groundedDraft(for: draft).subject),
+            URLQueryItem(name: "subject", value: emailSubject),
             URLQueryItem(name: "body", value: message),
         ]
         guard let url = components.url else { validationMessage = "This email draft could not be prepared. Check the recipient and message."; return }

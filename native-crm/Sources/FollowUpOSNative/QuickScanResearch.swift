@@ -50,6 +50,7 @@ struct PublishedContactEvidence: Codable, Equatable, Sendable {
 }
 
 struct QuickScanResearchResult: Codable, Equatable, Sendable {
+    static let offerSubject = "Un premier bilan de vos usages d’IA — 99 $ CA"
     var record: ProspectRecord
     var checkedAt: Date
     /// Optional so findings from earlier releases remain readable; revised research is rechecked.
@@ -99,7 +100,7 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
         let greeting = record.contact?.name.split(separator: " ").first.map(String.init) ?? ""
         var draft = OutreachDraftBuilder.build(for: record, config: config, language: "fr", messageID: "quickscan-\(record.id)-\(ISODates.string(checkedAt))")
         draft.approvedOffer = .quickScan99CAD
-        draft.subject = "Un premier bilan de vos usages d’IA — 99 $ CA"
+        draft.subject = Self.offerSubject
         draft.body = """
         Bonjour \(greeting),
 

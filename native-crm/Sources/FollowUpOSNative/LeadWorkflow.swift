@@ -536,6 +536,15 @@ enum LeadWorkflow {
 
     /// Recheck a saved draft immediately before handing it to the mail application. Saving text does
     /// not preserve permission to contact a route after an unsubscribe or a change in the evidence.
+    /// A saved Quick Scan body needs its approved offer subject at both validation and handoff.
+    /// Other correspondence keeps the ordinary grounded subject; this grants no send approval.
+    static func emailSubject(for lead: Lead, body: String, fallback: String) -> String {
+        if lead.quickScanResearch != nil, body.contains("Quick Scan à 99 $ CA, plus taxes") {
+            return QuickScanResearchResult.offerSubject
+        }
+        return fallback
+    }
+
     static func emailDraftIssue(for lead: Lead, body: String, subject: String, config: ICPConfig?,
                                 suppression: SuppressionList, now: Date) -> String? {
         let recipient = MailAddress.bare(lead.email)

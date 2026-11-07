@@ -11,6 +11,10 @@ Build198, clean source `d6b0dd71590a5867c202298bba823fa063967093`, ad-hoc signed
 - WebKit8 assertions, release compilation, bundle signature and extracted ZIP signature passed.
 - Exact-source GitHub [CI42313600247](https://github.com/martinlepage26-bit/controlward/actions/runs/42313600247) and [macOS packaging42313600321](https://github.com/martinlepage26-bit/controlward/actions/runs/42313600321) passed.
 
+## Follow-up subject correction
+
+A final healthy-draft check on installed198 found a conservative false refusal: the editor passed its generic Introduction subject to the99CAD pricing gate. The follow-up repair shares the approved offer subject between draft creation, validation and mailto preparation, while retaining the generic grounded subject for ordinary correspondence. The native regression now follows this actual editor path and still refuses a changed price, stale evidence, altered recipient and damaged exclusions. Full native checks pass; the subsequent packaged running-app result is recorded on the current public evidence page. The198 backup/restore evidence below remains historical and unchanged.
+
 ## Running Mac acceptance
 
 Only the isolated review workspace was used; normal owner files were not opened as application data. All15 normal workspace/research file hashes and the full enumerated file set remained unchanged at the verification checkpoint. No account connection, credential inspection, mail launch, outreach, live register write, deployment or notification permission change occurred.
