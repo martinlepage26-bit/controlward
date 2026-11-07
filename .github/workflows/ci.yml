@@ -93,19 +93,9 @@ jobs:
         run: ./bin/test-native-app
       - name: Native PHAROS client against disposable Worker and D1
         run: ./bin/test-connected-pharos
-      - name: Check out the pinned KAIROS service for native acceptance
-        uses: actions/checkout@v4
-        with:
-          repository: martinlepage26-bit/kairos
-          ref: b37e1f792b0ca3f11a760779d0eb5b0047f8ec35
-          path: native-crm/.build/kairos-connected-source
-          persist-credentials: false
-      - name: Install the pinned KAIROS local runtime
-        working-directory: native-crm/.build/kairos-connected-source
-        run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Native KAIROS client against its actual Worker and disposable D1
-        run: ./bin/test-connected-kairos
-        env:
-          CONTROLWARD_KAIROS_SOURCE: ${{ github.workspace }}/native-crm/.build/kairos-connected-source
+      # KAIROS connected acceptance is an explicit local release check: its
+      # private repository is outside this job's repository-scoped token.
+      # Do not add a cross-repository credential or silently skip that check.
+      # See docs/readonly-import-acceptance-20261107.md for reproduction.
       - name: Native release build
         run: swift build -c release --package-path native-crm

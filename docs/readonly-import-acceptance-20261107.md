@@ -101,8 +101,12 @@ CONTROLWARD_KAIROS_SOURCE=/absolute/path/to/clean/kairos \
 The script refuses another source commit, a dirty source tree, an unexpected
 Wrangler version or an occupied test port. An optional
 `CONTROLWARD_KAIROS_REPORT` path receives private proof JSON after cleanup.
-The macOS CI job checks out that exact service commit and runs this acceptance
-alongside native and real PHAROS acceptance.
+This connected acceptance is an explicit local release check. Ordinary CI runs
+the native KAIROS fixture cases and real PHAROS acceptance, but cannot check out
+the private KAIROS repository with its repository-scoped GitHub token. The first
+attempt failed at that checkout, before any connected KAIROS test ran. No broader
+credential was added. The private release receipt records the actual local
+connected run separately from CI; a green CI result does not imply this check ran.
 
 ## Boundaries and remaining work
 
