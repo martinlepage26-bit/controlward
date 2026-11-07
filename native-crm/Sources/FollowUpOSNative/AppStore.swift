@@ -517,6 +517,10 @@ final class AppStore: ObservableObject {
     @discardableResult
     func pushToTwenty() async -> SyncJob {
         var job = SyncJob(target: .twenty, status: "sending")
+        guard !busyTargets.contains(.twenty) else {
+            job.status = "failed"; job.error = "A Twenty push is already running."
+            return job
+        }
         guard let preview = twentyPreview else {
             job.status = "failed"; job.error = "Run the preview before pushing."
             showNotice("Preview the Twenty push first.")
@@ -534,6 +538,14 @@ final class AppStore: ObservableObject {
             showNotice(job.error ?? "Preview again before pushing.")
             return job
         }
+        let approvedWorkspace = workspace, approvedLinks = workspace.twentyLinks
+        let configuration = credentialConfigurationRevisions[.twenty]
+        func requireCurrentApproval() throws {
+            guard !Task.isCancelled, credentialConfigurationRevisions[.twenty] == configuration,
+                  TwentyMapper.plan(workspace, links: approvedLinks).fingerprint == preview.fingerprint else {
+                throw IntegrationError.unexpected("CRM data or the connection changed during the push. Preview again before continuing.")
+            }
+        }
         workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.twenty); defer { busyTargets.remove(.twenty) }
         var created = 0, updated = 0
@@ -541,13 +553,18 @@ final class AppStore: ObservableObject {
             // Refuse remote writes when the workspace cannot retain their identities.
             try persistOrThrow()
             let client = try await twentyClient()
+            try requireCurrentApproval()
             for object in TwentyObject.allCases {
-                for operation in TwentyMapper.plan(workspace, links: workspace.twentyLinks, only: object).operations {
+                // Resolve new remote identities against durable progress, while all
+                // business content remains bound to the approved value snapshot.
+                for operation in TwentyMapper.plan(approvedWorkspace, links: workspace.twentyLinks, only: object).operations {
+                    try requireCurrentApproval()
                     var durableLink = workspace.twentyLinks[operation.localKey]
                     var id = operation.twentyID
                     if let existing = id, try await client.update(object, id: existing, operation.payload) {
                         updated += 1
                     } else {
+                        try requireCurrentApproval()
                         // A completed link returning404 gets a fresh identity. Pending
                         // creates reuse their durable UUID, including after a lost response.
                         let resumingCreate = durableLink?.pendingCreate == true || (operation.kind == .create && id != nil)

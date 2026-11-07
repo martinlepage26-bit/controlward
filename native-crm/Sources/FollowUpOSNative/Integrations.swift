@@ -779,7 +779,8 @@ struct TwentyPlan: Equatable, Sendable {
     var unchangedTotal: Int { unchanged.values.reduce(0, +) }
 
     /// Stable identity for the exact operations and unchanged counts shown in a preview.
-    /// A push recomputes this before constructing a client, so stale previews cause zero writes.
+    /// A push revalidates the original approval after credential access and before
+    /// later operations; durable progress does not authorize changed business content.
     var fingerprint: String {
         var lines = operations.map {
             "\($0.object.rawValue)|\($0.localKey)|\($0.kind.rawValue)|\($0.twentyID ?? "")|\($0.payloadHash)"
