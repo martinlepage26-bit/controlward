@@ -59,6 +59,7 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var nextFollowUp: String?
     var sequenceStage = 0
     var notes = ""
+    /// Last outgoing-message context. Older KAIROS imports mixed incoming text into this field.
     var lastMessage = ""
     /// Unsent work, kept separate from recorded contact and sent-message history.
     var outreachDraft: String?
@@ -72,6 +73,10 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
     var sourceID: String?
     /// Timestamp of the latest upstream message applied to this lead, when source-backed.
     var sourceUpdatedAt: String?
+    /// Latest source-backed incoming message, separate from unsent drafts and sent history.
+    var sourceMessage: String?
+    /// Channel reported by the source. This is provenance, not a requested service.
+    var sourcePlatform: String?
     /// The open follow-up task created when the owner converted this lead (its next action).
     var followUpTaskID: UUID?
 

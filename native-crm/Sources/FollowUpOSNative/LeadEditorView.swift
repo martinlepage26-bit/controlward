@@ -28,10 +28,11 @@ struct LeadEditorView: View {
     }
 
     init(lead: Lead, isNew: Bool) {
-        _draft = State(initialValue: lead)
-        _message = State(initialValue: lead.outreachDraft ?? lead.lastMessage)
-        _showWriter = State(initialValue: lead.outreachDraft != nil || !lead.lastMessage.isEmpty)
-        _writerNote = State(initialValue: lead.outreachDraft == nil ? nil : "Saved unsent draft. Review against the current record before sending.")
+        let initial = LeadWorkflow.normalizeKairosLead(lead)
+        _draft = State(initialValue: initial)
+        _message = State(initialValue: initial.outreachDraft ?? initial.lastMessage)
+        _showWriter = State(initialValue: initial.outreachDraft != nil || !initial.lastMessage.isEmpty)
+        _writerNote = State(initialValue: initial.outreachDraft == nil ? nil : "Saved unsent draft. Review against the current record before sending.")
         self.isNew = isNew
     }
 
@@ -123,6 +124,17 @@ struct LeadEditorView: View {
                             Text("Record completeness \(completeness.score)/100 · missing: \(missing.isEmpty ? "none" : missing.joined(separator: ", "))")
                                 .font(.caption.monospacedDigit())
                             Text(LeadWorkflow.Completeness.meaning).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding(12).background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if let incoming = draft.sourceMessage, !incoming.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            SectionLabel(text: "Latest incoming message")
+                            if let platform = draft.sourcePlatform { Text("Source channel: \(platform)").font(.caption).foregroundStyle(.secondary) }
+                            if let timestamp = draft.sourceUpdatedAt { Text("Source message timestamp: \(timestamp)").font(.caption2).foregroundStyle(.secondary) }
+                            Text(incoming).font(.body).textSelection(.enabled)
+                            Text("Review the incoming message, then write your follow-up below.").font(.caption2).foregroundStyle(.secondary)
                         }
                         .padding(12).background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 8))
                     }

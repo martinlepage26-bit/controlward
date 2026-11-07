@@ -606,9 +606,28 @@ enum LeadWorkflow {
         return url
     }
 
+    /// Prepare an editable copy of a legacy KAIROS record without rewriting its stored bytes.
+    /// Incoming text moves to its source field; actual sent history remains authoritative for replies.
+    /// A saved unsent draft and any owner-entered service are retained. Re-import uses the same repair.
+    static func normalizeKairosLead(_ original: Lead) -> Lead {
+        guard origin(of: original) == .kairos,
+              original.sourceMessage == nil, original.sourcePlatform == nil else { return original }
+        var lead = original
+        let sent = lead.history.last?.message ?? ""
+        if !lead.lastMessage.isEmpty, lead.lastMessage != sent { lead.sourceMessage = lead.lastMessage }
+        lead.lastMessage = sent
+        let knownPlatforms = ["x", "linkedin", "instagram", "threads", "youtube"]
+        if let platform = knownPlatforms.first(where: { lead.service.caseInsensitiveCompare("Kairos · \($0)") == .orderedSame }) {
+            lead.sourcePlatform = platform
+            lead.service = ""
+        }
+        return lead
+    }
+
     /// A local draft that states only what the workspace records. It never claims a quote, a meeting or
     /// interest that is not recorded, and never quotes private notes.
-    static func draft(for lead: Lead, in workspace: PersistentWorkspace, business: BusinessProfile) -> GroundedDraft {
+    static func draft(for originalLead: Lead, in workspace: PersistentWorkspace, business: BusinessProfile) -> GroundedDraft {
+        let lead = normalizeKairosLead(originalLead)
         let origin = origin(of: lead)
         let context = context(for: lead, in: workspace)
         var grounded: [String] = []

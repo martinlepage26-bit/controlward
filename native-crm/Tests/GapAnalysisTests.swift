@@ -19,6 +19,7 @@ enum GapAnalysisTests {
             ("Gaps: scores embedded as an object or an array both work", embedShapes),
             ("Gaps: key never reaches activity, jobs, health, or logs", keyHygiene),
             ("Gaps: import without setup does nothing", needsSetup),
+            ("Gaps: a blocked save publishes no new, updated or retired signal; retry survives reload", failedSaveAndRetry),
         ]
         var failures = 0
         for (name, test) in tests {
@@ -256,5 +257,43 @@ enum GapAnalysisTests {
         let job = await store.importGaps()
         try expect(job.status == "failed" && fake.readCount == 0, "import ran without a key")
         guard case .needsSetup = store.connectorStatus(.gaps) else { throw SmokeTestFailure.failed("status not Needs setup") }
+    }
+
+    static func failedSaveAndRetry() async throws {
+        let fm = FileManager.default
+        for existing in [false, true] {
+            let fake = FakeSupabase(key: key)
+            let store = try makeStore(fake)
+            let directory = store.storageURL.deletingLastPathComponent(), retained = store.storageURL.deletingLastPathComponent().appendingPathExtension("retained")
+            defer { try? fm.removeItem(at: directory); try? fm.removeItem(at: retained) }
+            _ = store.saveBusiness(BusinessProfile())
+            if existing {
+                fake.clusters = [cluster("c1", label: "Original", total: 0.4), cluster("c2", label: "Previously active", total: 0.6)]
+                _ = await store.importGaps()
+                var signal = store.signals.first { $0.sourceID == "gap:c1" }!; signal.owner = "Martin"; signal.status = .routed; store.update(signal)
+            }
+            fake.clusters = [cluster("c1", label: "Updated", total: 0.9), cluster("c3", label: "New", total: 0.7)]
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let before = try encoder.encode(store.workspace), disk = try Data(contentsOf: store.storageURL)
+            try fm.moveItem(at: directory, to: retained)
+            try Data("synthetic storage blocker".utf8).write(to: directory)
+            let failed = await store.importGaps()
+            try expect(failed.status == "failed", "blocked write reported a synced import")
+            try expect(store.latestSyncJob(for: .gaps) == failed, "the connector panel would show an older success instead of the failed attempt")
+            try expect(try encoder.encode(store.workspace) == before, "failed import published new/updated/retired signals or healthy status")
+            try expect(try Data(contentsOf: retained.appendingPathComponent("workspace.json")) == disk, "failed import changed durable data")
+            try expect(store.saveFailure != nil, "storage failure was not surfaced")
+            try fm.removeItem(at: directory); try fm.moveItem(at: retained, to: directory)
+            let retry = await store.importGaps()
+            try expect(retry.status == "synced" && store.activeSignals.count == 2, "retry lost or duplicated signals")
+            try expect(store.latestSyncJob(for: .gaps) == retry, "successful retry did not replace the failed-attempt display")
+            if existing {
+                let current = store.signals.first { $0.sourceID == "gap:c1" }!
+                try expect(current.owner == "Martin" && current.status == .routed && current.title == "Market gap: Updated", "retry overwrote owner decisions or lost upstream update")
+                try expect(store.signals.first { $0.sourceID == "gap:c2" }?.sourceActive == false, "durable retry did not retire missing signal")
+            }
+            let reloaded = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+            try expect(try encoder.encode(reloaded.workspace) == encoder.encode(store.workspace), "successful retry did not survive reload")
+        }
     }
 }

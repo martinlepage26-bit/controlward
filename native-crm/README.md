@@ -2,8 +2,8 @@
 
 This is the native, persistent macOS workspace for ControlWard, the PHAROS
 relationship and operations system. It uses SwiftUI/AppKit, stores its JSON data in
-an owner-only folder (see Data location), and does not start Docker, a browser, or a
-localhost server.
+an owner-only folder (see Data location), and opens without Docker or a localhost
+server. Explicit Email actions can open a mail application or Gmail in the browser.
 
 The workspace now includes separate Contacts, Companies, Opportunities, Tasks,
 Notes, LeadGen Signals, Lantern bilingual audits, local automation rules, and an
@@ -14,8 +14,15 @@ transcript-level language scores, taxonomy codes, and quoted notes. This is a lo
 multi-user sync service or the full Twenty server platform.
 Kairos can be connected as a read-only source: a user-triggered import copies
 only lead-intent conversations into local leads, deduplicated by conversation id.
-The Kairos API key is stored in macOS Keychain; Contextward never sends replies
+Use a KAIROS customer-account API key. The current service deliberately refuses operator
+API keys on inbox/account routes; an operator's interactive browser session is not imported
+into ControlWard. The inbox endpoint returns up to 200 prioritized conversations. The
+Kairos API key is stored in macOS Keychain; Contextward never sends replies
 or publishing actions back to Kairos.
+Incoming KAIROS text and channel provenance are stored separately from requested
+services, unsent drafts and sent-message history. The editor shows incoming text
+read-only above the follow-up composer. Legacy mixed fields are repaired in the
+editable copy and on re-import; cancelling the editor preserves the stored file.
 Due follow-ups can also be scheduled as explicit native macOS notifications;
 the app does not send outbound messages automatically.
 The default Overview combines CRM, LeadGen, Lantern, Pharos findings, automation,

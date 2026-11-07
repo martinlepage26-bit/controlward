@@ -88,7 +88,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
-if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty ]]; then
+if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos ]]; then
   "${TEST_BINARY}" "$@"
   exit
 fi

@@ -28,6 +28,9 @@ final class AppStore: ObservableObject {
     /// Connectors whose API key is in the secret store. The key itself is never held here.
     @Published private(set) var savedKeys: Set<SyncTarget> = []
     @Published private(set) var busyTargets: Set<SyncTarget> = []
+    /// Latest read-only import attempt, including a failure that storage could not retain.
+    /// Kept outside the workspace so reporting a failed save cannot publish partial records.
+    @Published private var readImportJobs: [SyncTarget: SyncJob] = [:]
     /// Dry-run result that must exist before a Twenty push is allowed.
     @Published private(set) var twentyPreview: TwentyPlan?
     @Published private(set) var pharosPreviewFingerprint: String?
@@ -499,62 +502,64 @@ final class AppStore: ObservableObject {
         var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.inbox.v1")
         guard case .ready = recoveryState else {
             job.status = "failed"; job.error = "Workspace recovery is blocked; no Kairos data was imported."
+            readImportJobs[.kairos] = job
             return job
         }
         guard !busyTargets.contains(.kairos) else {
             job.status = "failed"; job.error = "A Kairos import is already running."
             return job
         }
-        workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.kairos); defer { busyTargets.remove(.kairos) }
+        readImportJobs[.kairos] = job
         var created = 0, updated = 0, unchanged = 0, skipped = 0
         do {
             let inbox = try await kairosClient().pullInbox()
-            for conversation in inbox.conversations {
-                guard conversation.intent.lowercased() == "lead",
-                      conversation.status.lowercased() != "ignored" else { skipped += 1; continue }
-                switch applyKairosLead(conversation) {
-                case .created: created += 1
-                case .updated: updated += 1
-                case .unchanged: unchanged += 1
-                case .skipped: skipped += 1
+            try commitWorkspace { next in
+                for conversation in inbox.conversations {
+                    guard conversation.intent.lowercased() == "lead",
+                          conversation.status.lowercased() != "ignored" else { skipped += 1; continue }
+                    switch Self.applyKairosLead(conversation, to: &next) {
+                    case .created: created += 1
+                    case .updated: updated += 1
+                    case .unchanged: unchanged += 1
+                    case .skipped: skipped += 1
+                    }
                 }
+                job.status = "synced"
+                job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged, \(skipped) skipped."
+                job.completedAt = Date.now.ISO8601Format()
+                next.syncJobs.insert(job, at: 0)
+                next.connectorHealth[SyncTarget.kairos.rawValue] = ConnectorHealth(ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+                next.activity.insert(ActivityEvent(kind: "kairos_import", message: "Imported Kairos leads: \(job.detail ?? "")", sourceID: job.id), at: 0)
             }
-            try persistOrThrow()
-            job.status = "synced"
-            job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged, \(skipped) skipped."
-            recordHealth(.kairos, ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            saveFailure = nil
+            readImportJobs[.kairos] = job
+            showNotice("Kairos import complete: \(job.detail ?? "")")
             Self.syncLog.notice("kairos import ok created=\(created) updated=\(updated) unchanged=\(unchanged) skipped=\(skipped)")
         } catch {
-            job.status = "failed"
-            job.error = message(for: error)
-            recordHealth(.kairos, ok: false, detail: job.error ?? "Import failed.")
             Self.syncLog.error("kairos import failed")
+            return failedReadOnlyImport(job, error: error)
         }
-        job.completedAt = Date.now.ISO8601Format()
-        replace(&workspace.syncJobs, with: job)
-        workspace.activity.insert(ActivityEvent(kind: "kairos_import", message: job.status == "synced"
-            ? "Imported Kairos leads: \(job.detail ?? "")"
-            : "Kairos import failed: \(job.error ?? "unknown error")", sourceID: job.id), at: 0)
-        persist(message: job.status == "synced" ? "Kairos import complete: \(job.detail ?? "")" : "Kairos import failed: \(job.error ?? "")")
         return job
     }
 
     private enum KairosLeadOutcome { case created, updated, unchanged, skipped }
 
-    private func applyKairosLead(_ conversation: KairosConversation) -> KairosLeadOutcome {
+    private static func applyKairosLead(_ conversation: KairosConversation, to workspace: inout PersistentWorkspace) -> KairosLeadOutcome {
         let handle = conversation.authorHandle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !conversation.id.isEmpty, !handle.isEmpty else { return .skipped }
         let sourceID = "kairos:\(conversation.id)"
         if let index = workspace.leads.firstIndex(where: { $0.sourceID == sourceID }) {
-            var lead = workspace.leads[index]
-            if let appliedAt = lead.sourceUpdatedAt, conversation.lastMessageAt < appliedAt { return .unchanged }
-            if lead.sourceUpdatedAt != conversation.lastMessageAt {
+            let original = workspace.leads[index]
+            if let appliedAt = original.sourceUpdatedAt, conversation.lastMessageAt < appliedAt { return .unchanged }
+            var lead = LeadWorkflow.normalizeKairosLead(original)
+            if lead.sourceUpdatedAt != conversation.lastMessageAt || original.sourceMessage == nil {
                 if let latestMessage = conversation.latestMessage, !latestMessage.isEmpty {
-                    lead.lastMessage = String(latestMessage.prefix(4_000))
+                    lead.sourceMessage = String(latestMessage.prefix(4_000))
                 }
                 lead.sourceUpdatedAt = conversation.lastMessageAt
             }
+            lead.sourcePlatform = String(conversation.platform.prefix(80))
             // Sending a reply changes Kairos status without advancing its inbound
             // message timestamp. Reconcile that status even when the message is unchanged.
             if lead.status == .new && conversation.status.lowercased() == "answered" { lead.status = .contacted }
@@ -565,8 +570,8 @@ final class AppStore: ObservableObject {
 
         var lead = Lead.blank()
         lead.name = handle
-        lead.service = "Kairos · \(conversation.platform)"
-        lead.lastMessage = String((conversation.latestMessage ?? "").prefix(4_000))
+        lead.sourcePlatform = String(conversation.platform.prefix(80))
+        lead.sourceMessage = conversation.latestMessage.map { String($0.prefix(4_000)) }
         lead.notes = "Imported from a Kairos conversation classified as a lead."
         lead.status = conversation.status.lowercased() == "answered" ? .contacted : .new
         lead.sourceID = sourceID
@@ -778,42 +783,74 @@ final class AppStore: ObservableObject {
     @discardableResult
     func importGaps() async -> SyncJob {
         var job = SyncJob(target: .gaps, status: "sending", snapshotSchema: "gap_clusters")
+        guard case .ready = recoveryState else {
+            job.status = "failed"; job.error = "Workspace recovery is blocked; no market gaps were imported."
+            readImportJobs[.gaps] = job
+            return job
+        }
         guard !busyTargets.contains(.gaps) else {
             job.status = "failed"; job.error = "A gap import is already running."
             return job
         }
-        workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.gaps); defer { busyTargets.remove(.gaps) }
+        readImportJobs[.gaps] = job
         var created = 0, updated = 0, unchanged = 0, retired = 0
         do {
             let clusters = try await gapClient().activeClusters()
-            for cluster in clusters {
-                switch applyGap(cluster) {
-                case .created: created += 1
-                case .updated: updated += 1
-                default: unchanged += 1
+            try commitWorkspace { next in
+                for cluster in clusters {
+                    switch Self.applyGap(cluster, to: &next) {
+                    case .created: created += 1
+                    case .updated: updated += 1
+                    default: unchanged += 1
+                    }
                 }
+                retired = Self.retireMissingGaps(activeSourceIDs: Set(clusters.map { "gap:\($0.id)" }), in: &next)
+                job.status = "synced"
+                job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged\(retired > 0 ? ", \(retired) retired" : "")."
+                job.completedAt = Date.now.ISO8601Format()
+                next.syncJobs.insert(job, at: 0)
+                next.connectorHealth[SyncTarget.gaps.rawValue] = ConnectorHealth(ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+                next.activity.insert(ActivityEvent(kind: "gap_import", message: "Imported market gaps: \(job.detail ?? "")", sourceID: job.id), at: 0)
             }
-            retired = retireMissingGaps(activeSourceIDs: Set(clusters.map { "gap:\($0.id)" }))
-            job.status = "synced"
-            job.detail = "\(created) new, \(updated) updated, \(unchanged) unchanged\(retired > 0 ? ", \(retired) retired" : "")."
-            recordHealth(.gaps, ok: true, detail: "Last import \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            saveFailure = nil
+            readImportJobs[.gaps] = job
+            showNotice("Market gaps: \(job.detail ?? "")")
             logSync("gap import ok created=\(created) updated=\(updated) unchanged=\(unchanged) retired=\(retired)")
         } catch {
-            job.status = "failed"
-            job.error = message(for: error)
-            recordHealth(.gaps, ok: false, detail: job.error ?? "Import failed.")
             logSync("gap import failed", error: true)
+            return failedReadOnlyImport(job, error: error)
         }
-        job.completedAt = Date.now.ISO8601Format()
-        replace(&workspace.syncJobs, with: job)
-        workspace.activity.insert(ActivityEvent(kind: "gap_import", message: job.status == "synced"
-            ? "Imported market gaps: \(job.detail ?? "")" : "Gap import failed: \(job.error ?? "")", sourceID: job.id), at: 0)
-        persist(message: job.status == "synced" ? "Market gaps: \(job.detail ?? "")" : "Gap import failed: \(job.error ?? "")")
         return job
     }
 
-    private func applyGap(_ cluster: GapCluster) -> LeadPullCounts.Outcome {
+    /// Failed reads can retain a diagnostic when storage works. A failed save publishes no records,
+    /// retirement, success job or health result; the visible error stays outside the saved workspace.
+    private func failedReadOnlyImport(_ original: SyncJob, error: Error) -> SyncJob {
+        var job = original
+        job.status = "failed"; job.detail = nil; job.error = message(for: error)
+        job.completedAt = Date.now.ISO8601Format()
+        let summary = "\(job.target.label) import failed: \(job.error ?? "unknown error")"
+        do {
+            try commitWorkspace { next in
+                next.syncJobs.insert(job, at: 0)
+                next.connectorHealth[job.target.rawValue] = ConnectorHealth(ok: false, detail: job.error ?? "Import failed.")
+                next.activity.insert(ActivityEvent(kind: job.target == .gaps ? "gap_import" : "kairos_import", message: summary, sourceID: job.id), at: 0)
+            }
+            showNotice(summary)
+        } catch {
+            saveFailure = "Changes were not saved. \(error.localizedDescription)"
+            showNotice(saveFailure ?? summary)
+        }
+        readImportJobs[job.target] = job
+        return job
+    }
+
+    func latestSyncJob(for target: SyncTarget) -> SyncJob? {
+        readImportJobs[target] ?? syncJobs.first { $0.target == target && $0.status != "queued" && $0.status != "staged" }
+    }
+
+    private static func applyGap(_ cluster: GapCluster, to workspace: inout PersistentWorkspace) -> LeadPullCounts.Outcome {
         func percent(_ value: Double?) -> Int { min(max(Int(((value ?? 0) * 100).rounded()), 0), 100) }
         let sourceID = "gap:\(cluster.id)"
         let label = [cluster.label, cluster.summary].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? "Unlabelled gap"
@@ -847,7 +884,7 @@ final class AppStore: ObservableObject {
 
     /// Marks imported gap signals absent from a complete active-cluster read as retired.
     /// The signal and all user-owned workflow fields remain intact.
-    private func retireMissingGaps(activeSourceIDs: Set<String>) -> Int {
+    private static func retireMissingGaps(activeSourceIDs: Set<String>, in workspace: inout PersistentWorkspace) -> Int {
         var retired = 0
         for index in workspace.signals.indices {
             guard let sourceID = workspace.signals[index].sourceID,
@@ -1932,7 +1969,8 @@ final class AppStore: ObservableObject {
         return text
     }
 
-    func generateMessage(for lead: Lead) async -> GeneratedMessage {
+    func generateMessage(for originalLead: Lead) async -> GeneratedMessage {
+        let lead = LeadWorkflow.normalizeKairosLead(originalLead)
         let grounded = groundedDraft(for: lead)
 #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return LeadWorkflow.AIDraft.accept(nil, draft: grounded, lead: lead) }

@@ -93,5 +93,9 @@ jobs:
         run: ./bin/test-native-app
       - name: Native PHAROS client against disposable Worker and D1
         run: ./bin/test-connected-pharos
+      # KAIROS connected acceptance is an explicit local release check: its
+      # private repository is outside this job's repository-scoped token.
+      # Do not add a cross-repository credential or silently skip that check.
+      # See docs/readonly-import-acceptance-20261107.md for reproduction.
       - name: Native release build
         run: swift build -c release --package-path native-crm
