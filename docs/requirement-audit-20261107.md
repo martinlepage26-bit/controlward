@@ -1,6 +1,8 @@
-# Full requirement audit and connected acceptance — 2026-11-07
+# Historical209 requirement audit and connected acceptance — 2026-11-07
 
-Build209 remains installed at reviewed app source `4c74c87ab186875548d60a34df84f84b72ffb436`, merged as `9a266f848a39002e724402187d1f3ace9ec75d32`. This pass changes the acceptance harness and guidance; no shipping app source changed. [The25-row ledger](completion-ledger-20261106.md) replaces its stale198/192 checkpoint with current evidence and explicit remaining acceptance. The full hosted task remains in progress.
+> Historical checkpoint: build228 is now installed. Use the [current25-row ledger](completion-ledger-20261106.md) and [published release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research) for current results. The209 observations below remain evidence for their stated scope; their then-unverified paths are not a current status inventory.
+
+At this checkpoint, build209 remained installed at reviewed app source `4c74c87ab186875548d60a34df84f84b72ffb436`, merged as `9a266f848a39002e724402187d1f3ace9ec75d32`. This pass changes the acceptance harness and guidance; no shipping app source changed. [The25-row ledger](completion-ledger-20261106.md) replaces its stale198/192 checkpoint with current evidence and explicit remaining acceptance. The full hosted task remains in progress.
 
 ## Additional installed-app journeys
 
