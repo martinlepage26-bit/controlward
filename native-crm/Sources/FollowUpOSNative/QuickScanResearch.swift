@@ -127,7 +127,7 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 /// Runs after map discovery, through the same public-site transport and policy as the existing lead pipeline.
 /// The page budget, robots rules, host exclusions, pacing and cancellation remain enforced.
 struct QuickScanResearcher: Sendable {
-    static let version = 2
+    static let version = 3
     let config: ICPConfig
     let transport: GuardedLeadTransport
     let clock: any LeadClock
@@ -145,7 +145,12 @@ struct QuickScanResearcher: Sendable {
             return result
         }
         let domain = HostMatch.registrable(host)
-        let (pages, issues) = await crawl(root: root, domain: domain)
+        let fetched = await crawl(root: root, domain: domain)
+        var pages = fetched.0
+        let issues = fetched.1
+        for index in pages.indices {
+            pages[index].people += SiteExtractor.declaredExecutives(in: pages[index].claimText, organisation: candidate.name)
+        }
         result.issues = issues
         result.complete = !Task.isCancelled
         guard !pages.isEmpty else { result.complete = false; return result }

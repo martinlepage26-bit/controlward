@@ -47,6 +47,43 @@ enum QuickScanResearchTests {
                     try expect(AIUseEvidence.find(in: [page], organisation: "Clinique Exemple Nord").count == 1, statement)
                 }
             }),
+            ("An explicit executive statement retains the named person and literal own-site source", {
+                let statement = "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, présidente fondatrice. Pour toute question, écrivez-nous."
+                let (researcher, _, candidate) = try fixture("""
+                <h1>Clinique Exemple Nord</h1><p>\(statement)</p>
+                <address>\(LeadKit.clinicAddress)</address>
+                <p>Nous utilisons ChatGPT pour préparer nos documents internes.</p>
+                <a href="mailto:info@clinique-exemple.test">Contact</a>
+                """)
+                let result = await researcher.research(candidate, segmentID: "clinic")
+                try expect(result.record.status == .ready, "executive statement was missed: \(result.record.reasons)")
+                try expect(result.record.contact?.name == "Alex Fictif" && result.record.contact?.title == "présidente fondatrice", "only the explicitly printed name and title")
+                try expect(result.record.contact?.sourceURL == LeadKit.homePage && result.record.snapshots.contains { $0.url == LeadKit.homePage && $0.text.contains(statement) }, "literal source retained")
+                let draft = result.draft(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now)
+                try expect(draft?.body.hasPrefix("Bonjour Alex,") == true, "named greeting from source")
+                if let draft { try expect(OutreachSendGate.check(draft, approval: nil, config: researcher.config, suppression: SuppressionList()) != nil, "send still needs approval") }
+            }),
+            ("Other organisations, future or negated roles and unnamed contacts remain withheld", {
+                for statement in [
+                    "Le responsable de la protection des renseignements personnels chez Autre Entreprise est Alex Fictif, présidente fondatrice.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord sera Alex Fictif, présidente fondatrice.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord n’est pas Alex Fictif, présidente fondatrice.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, déléguée à la confidentialité.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, ancienne présidente fondatrice.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est notre équipe.",
+                    "Notre client dit : Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, présidente fondatrice."
+                ] {
+                    let (researcher, _, candidate) = try fixture("""
+                    <h1>Clinique Exemple Nord</h1><p>\(statement)</p>
+                    <address>\(LeadKit.clinicAddress)</address>
+                    <p>Nous utilisons ChatGPT pour préparer nos documents internes.</p>
+                    <a href="mailto:info@clinique-exemple.test">Contact</a>
+                    """)
+                    let result = await researcher.research(candidate, segmentID: "clinic")
+                    try expect(result.record.contact == nil && result.record.reasons.contains("no named person"), statement)
+                    try expect(result.draft(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now) == nil, "no draft for unsupported person: \(statement)")
+                }
+            }),
             ("Generic mentions, negations, questions, future plans and third-party quotes do not qualify", {
                 let negatives = ["<p>AI is changing our industry</p>", "<p>Prendre rendez-vous en ligne</p>", "<p>Loi 25 et protection des renseignements personnels</p>", "<p>We do not use AI</p>", "<p>Nous n’utilisons pas ChatGPT</p>", "<p>Nous utilisons pas ChatGPT</p>", "<p>We could use AI in the future</p>", "<p>Do we use AI?</p>", "<p>If we use AI, we will review it</p>", "<p>Our clients use AI</p>", "<p>We help our clients use AI</p>", "<blockquote>We use ChatGPT every day</blockquote>", "<footer>We use AI</footer>", "<nav>We use ChatGPT</nav>", "<p>Our client says we use AI</p>"]
                 for html in negatives {
