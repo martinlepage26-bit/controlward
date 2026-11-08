@@ -1,5 +1,44 @@
 import Foundation
 
+/// Search the same local records as the existing Overview plus the loaded
+/// Project Control register. Typing never refreshes a provider or writes data.
+struct OverviewSearchSnapshot: Sendable {
+    var records: [WorkspaceRecord]
+    var projects: [ProjectModuleRecord]
+    var projectRegister: String?
+    var projectsOffline: Bool
+    var count: Int { records.count + projects.count }
+    static let visibleLimit = 8
+
+    static func make(records: [WorkspaceRecord], projectSnapshot: ProjectModuleSnapshot?, query: String,
+                     today: String = CalendarCRM.dayString()) -> Self {
+        let connected = projectSnapshot?.connected == true &&
+            !(projectSnapshot?.register.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        var result = Self(records: [], projects: [], projectRegister: connected ? projectSnapshot?.register : nil,
+                          projectsOffline: connected && projectSnapshot?.online == false)
+        let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return result }
+        result.records = WorkspaceRecord.query(records, search: query, filter: .all, sort: .name, today: today)
+        if connected, let projectSnapshot {
+            result.projects = projectSnapshot.projects.filter { project in
+                guard !project.id.isEmpty, !project.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+                let text = "\(project.title) \(project.workspace) \(project.status)"
+                return words.allSatisfy { text.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+            }.sorted { lhs, rhs in
+                let order = lhs.title.localizedStandardCompare(rhs.title)
+                return order == .orderedSame ? lhs.id < rhs.id : order == .orderedAscending
+            }
+        }
+        return result
+    }
+}
+
+struct SearchProjectDestination: Identifiable, Sendable {
+    let id = UUID()
+    let projectID: String
+    let register: String
+}
+
 /// Counts actual public discovery and research across both native discovery paths and saved CRM
 /// evidence. A business is counted once by its own domain (or source ID when no domain is known).
 /// The last stage means a draft passes the existing gates now, not that a sale or opportunity exists.

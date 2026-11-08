@@ -162,6 +162,7 @@ struct OverviewView: View {
     @State private var record: WorkspaceRecord?
     @State private var projects: ProjectModuleSnapshot?
     @State private var projectError: String?
+    @State private var searchProject: SearchProjectDestination?
 
     private static let toronto = TimeZone(identifier: "America/Toronto") ?? .current
     private var snapshot: OverviewSnapshot {
@@ -199,11 +200,24 @@ struct OverviewView: View {
         .background(CWPalette.canvas)
         .sheet(item: $record) { RecordProjectSheet(record: $0) }
         .task { await loadProjects() }
+        .task(id: searchProject?.id) { await openSearchProject() }
+        .onChange(of: search) { _, _ in searchProject = nil }
     }
 
     private func loadProjects() async {
         do { projects = try await modules.controller(for: .projects).projectSnapshot() }
         catch { projectError = "Open Projects to load Project Control." }
+    }
+
+    private func openSearchProject() async {
+        guard let request = searchProject else { return }
+        do {
+            try Task.checkCancellation()
+            try await modules.controller(for: .projects).openProject(request.projectID, expectedRegister: request.register)
+            try Task.checkCancellation()
+            navigation.show(.projects)
+        } catch is CancellationError { }
+        catch { if !Task.isCancelled { store.showNotice(error.localizedDescription) } }
     }
 
     private var hero: some View {
@@ -232,14 +246,44 @@ struct OverviewView: View {
     }
 
     private var searchResults: some View {
-        let matches = store.records(search: search)
+        let matches = OverviewSearchSnapshot.make(records: store.allWorkspaceRecords, projectSnapshot: projects, query: search)
         return VStack(alignment: .leading, spacing: 6) {
-            Text("\(matches.count) matches for “\(search)”").font(.caption.weight(.semibold)).foregroundStyle(CWPalette.gray)
-            ForEach(matches.prefix(8)) { row in
+            Text("\(matches.count) matches in loaded data for “\(search)”").font(.caption.weight(.semibold)).foregroundStyle(CWPalette.gray)
+            ForEach(matches.records.prefix(OverviewSearchSnapshot.visibleLimit)) { row in
                 Button { record = row } label: {
                     HStack { Text(row.title).fontWeight(.medium); Text(row.kind.capitalized).font(.caption).foregroundStyle(CWPalette.gray); Spacer(); Image(systemName: "link") }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+            }
+            if matches.records.count > OverviewSearchSnapshot.visibleLimit {
+                Text("Showing \(OverviewSearchSnapshot.visibleLimit) of \(matches.records.count) CRM and mail matches. Refine the search to narrow the results.")
+                    .font(.caption).foregroundStyle(CWPalette.gray)
+            }
+            if let register = matches.projectRegister {
+                if !matches.projects.isEmpty {
+                    Divider()
+                    Text(matches.projectsOffline ? "Projects · loaded register, offline" : "Projects · loaded register")
+                        .font(.caption.weight(.semibold)).foregroundStyle(CWPalette.gray)
+                    ForEach(matches.projects.prefix(OverviewSearchSnapshot.visibleLimit)) { project in
+                        Button { searchProject = SearchProjectDestination(projectID: project.id, register: register) } label: {
+                            HStack {
+                                Image(systemName: "folder")
+                                Text(project.title).fontWeight(.medium)
+                                Text("\(project.workspace) · \(project.status)").font(.caption).foregroundStyle(CWPalette.gray)
+                                Spacer(); Image(systemName: "arrow.up.right")
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                    if matches.projects.count > OverviewSearchSnapshot.visibleLimit {
+                        Text("Showing \(OverviewSearchSnapshot.visibleLimit) of \(matches.projects.count) project matches. Refine the search to narrow the results.")
+                            .font(.caption).foregroundStyle(CWPalette.gray)
+                    }
+                }
+            } else {
+                HStack {
+                    Text(projectError ?? "Project search needs a loaded, connected register.").font(.caption).foregroundStyle(CWPalette.gray)
+                    Button("Open Projects") { navigation.show(.projects) }.buttonStyle(.plain)
+                }
             }
         }.cwCard()
     }

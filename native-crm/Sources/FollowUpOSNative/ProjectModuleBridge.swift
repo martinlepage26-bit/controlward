@@ -30,9 +30,19 @@ extension WorkspaceWebController {
         return try await projectCall("return await window.controlWard.capture(item, expectedRegister);", arguments: ["item": value, "expectedRegister": expectedRegister ?? ""], as: ProjectModuleReceipt.self)
     }
 
-    func openProject(_ id: String) async throws {
+    func openProject(_ id: String, expectedRegister: String? = nil) async throws {
+        if let expectedRegister, expectedRegister.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ControlWardError.invalid("Choose a project from a connected register.")
+        }
         _ = try await projectSnapshot()
-        let opened = try await webView.callAsyncJavaScript("return window.controlWard.openProject(id);", arguments: ["id": id], in: nil, contentWorld: .page)
-        guard opened as? Bool == true else { throw ControlWardError.invalid("This project is absent from the loaded register. Refresh Projects and check the link.") }
+        try Task.checkCancellation()
+        // Check and open in one synchronous JS turn; a same-ID project in a
+        // replacement register must not satisfy an earlier search/link action.
+        let opened = try await webView.callAsyncJavaScript("""
+            const current = window.controlWard.snapshot();
+            if (expectedRegister && (!current.connected || current.register !== expectedRegister)) return false;
+            return window.controlWard.openProject(id);
+            """, arguments: ["id": id, "expectedRegister": expectedRegister ?? ""], in: nil, contentWorld: .page)
+        guard opened as? Bool == true else { throw ControlWardError.invalid("This project is absent or the connected register changed. Refresh Projects and check the link.") }
     }
 }

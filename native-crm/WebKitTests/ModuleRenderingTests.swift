@@ -92,6 +92,55 @@ struct ModuleRenderingTests {
         try expect(first.failure != nil)
         try expect(first.webView.url?.isFileURL == true)
     }
+
+    func projectOpensStayInTheirRegister() async throws {
+        let controller = WorkspaceWebController(module: .projects, document: document, dataStore: .nonPersistent())
+        controller.start(); try await wait("typeof window.controlWard === 'object'", in: controller.webView)
+        let register = "https://first.example.test", other = "https://second.example.test"
+        let projectID = "quoted \" id <script>"
+        // Exercise the native WKWebView call boundary with a held first snapshot
+        // and a changed second snapshot. No account, provider or real register.
+        func configure(secondRegister: String, connected: Bool = true) async throws {
+            _ = try await controller.webView.callAsyncJavaScript("""
+                window.searchOpenCalls = [];
+                let reads = 0;
+                window.controlWard = {
+                    snapshot() { reads++; return { connected: reads === 1 || secondConnected,
+                        online: true, register: reads === 1 ? firstRegister : secondRegister,
+                        projects: [{id: knownID, title: 'Synthetic project', status: 'active', workspace: 'Test'}] }; },
+                    openProject(id) { if (id !== knownID) return false; window.searchOpenCalls.push(id); return true; }
+                };
+                return true;
+                """, arguments: ["firstRegister": register, "secondRegister": secondRegister,
+                                  "secondConnected": connected, "knownID": projectID], in: nil, contentWorld: .page)
+        }
+        try await configure(secondRegister: register)
+        try await controller.openProject(projectID, expectedRegister: register)
+        let opened = try await controller.webView.evaluateJavaScript("window.searchOpenCalls") as? [String]
+        try expect(opened == [projectID])
+
+        try await configure(secondRegister: other)
+        var refused = false
+        do { try await controller.openProject(projectID, expectedRegister: register) } catch { refused = true }
+        let changedCalls = try await controller.webView.evaluateJavaScript("window.searchOpenCalls.length") as? Int
+        try expect(refused && changedCalls == 0)
+
+        try await configure(secondRegister: register, connected: false)
+        refused = false
+        do { try await controller.openProject(projectID, expectedRegister: register) } catch { refused = true }
+        let disconnectedCalls = try await controller.webView.evaluateJavaScript("window.searchOpenCalls.length") as? Int
+        try expect(refused && disconnectedCalls == 0)
+
+        try await configure(secondRegister: register)
+        refused = false
+        do { try await controller.openProject("absent", expectedRegister: register) } catch { refused = true }
+        let absentCalls = try await controller.webView.evaluateJavaScript("window.searchOpenCalls.length") as? Int
+        try expect(refused && absentCalls == 0)
+
+        refused = false
+        do { try await controller.openProject(projectID, expectedRegister: " ") } catch { refused = true }
+        try expect(refused)
+    }
 }
 
 @main
@@ -105,6 +154,7 @@ struct WebKitTestRunner {
                 let tests = ModuleRenderingTests()
                 try await tests.dashboardRendersAndPreservesEdits()
                 try await tests.storageIsIsolatedAndUnsafeNavigationIsDenied()
+                try await tests.projectOpensStayInTheirRegister()
                 try await tests.connectedCaptureIfRequested()
                 print("WebKit integration tests: \(ModuleRenderingTests.checks) assertions passed")
                 exit(0)

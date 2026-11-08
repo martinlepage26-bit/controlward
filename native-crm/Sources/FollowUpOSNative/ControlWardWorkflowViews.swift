@@ -44,7 +44,7 @@ struct RecordProjectSheet: View {
                             do {
                                 let current = try await modules.controller(for: .projects).projectSnapshot()
                                 guard current.register == link.register, current.connected else { throw ControlWardError.invalid("Connect Projects to this link's register first.") }
-                                try await modules.controller(for: .projects).openProject(link.projectID)
+                                try await modules.controller(for: .projects).openProject(link.projectID, expectedRegister: link.register)
                                 navigation.show(.projects); dismiss()
                             } catch { self.error = error.localizedDescription }
                         }
