@@ -10,6 +10,23 @@ enum MailControlTests {
 
     static func run() async -> Bool {
         await PortableCheck.suite("Mail control", [
+            ("Lead outreach refuses mailbox sends before HTTP and preserves ordinary mailbox actions", {
+                var policy = MailSendPolicy.testMode([MailFixture.allowed]); policy.outreachRequiresResend = true
+                for action in [MailboxAction.reply, .replyAll, .forward] {
+                    let http = CountingMailHTTP(); let sink = MemoryAuditSink()
+                    let runner = MailControlKit.runner(MailControlKit.gmail(http), sink: sink, policy: policy)
+                    let result = await runner.perform(MailFixture.command(action)) {}
+                    try expect(result.receipt == nil && result.failure?.contains("Resend") == true, "known lead outreach reached a mailbox sender")
+                    try expect(http.count == 0 && sink.lines.count == 1 && sink.lines[0].result == "refused:resend-required", "mailbox request occurred or refusal was not audited")
+                }
+                let http = CountingMailHTTP(); let sink = MemoryAuditSink()
+                let restricted = MailControlKit.runner(MailControlKit.gmail(http), sink: sink, policy: policy)
+                let archived = await restricted.perform(MailFixture.command(.archive)) {}
+                try expect(archived.failure == nil, "routing restriction blocked a non-send mailbox action")
+                let ordinary = MailControlKit.runner(MailControlKit.gmail(http), sink: sink)
+                let replied = await ordinary.perform(MailFixture.command(.reply)) {}
+                try expect(replied.receipt?.messageID != nil, "ordinary personal-mail reply was blocked")
+            }),
             ("Mail UI: dialog Cancel produces no command and no request", {
                 for kind in MailDialogKind.allCases {
                     let action: MailboxAction = kind == .send ? .reply : .trash

@@ -28,6 +28,19 @@ extension AppStore {
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Lead-related sends cannot fall back to a mailbox sender. Check the saved association,
+    /// exact sender suggestions and the current To/Cc fields, including a compose opened earlier.
+    func mailRequiresResend(_ message: MailMetadata, compose: MailCompose? = nil) -> Bool {
+        if message.leadID != nil || !mailLeadMatches(message).isEmpty { return true }
+        guard let compose else { return false }
+        let recipients = Set((compose.to + compose.cc).flatMap { MailComposePrefill.addresses(in: $0) })
+        let owners = Set(MailAccount.all.map(\.email) + MailComposePrefill.addresses(in: message.accountID))
+        let routes = Set(leads.flatMap { lead in
+            MailComposePrefill.addresses(in: lead.email) + MailComposePrefill.addresses(in: contacts.first { $0.id == lead.contactID }?.email ?? "")
+        }).subtracting(owners)
+        return !routes.isDisjoint(with: recipients)
+    }
+
     func reviewMail(_ id: UUID, reviewed: Bool, contactID: UUID?, companyID: UUID?, leadID: UUID? = nil) throws {
         try commitWorkspace { next in
             guard let i = next.controlWard.mail.firstIndex(where: { $0.id == id }) else { throw ControlWardError.invalid("This message is no longer available.") }

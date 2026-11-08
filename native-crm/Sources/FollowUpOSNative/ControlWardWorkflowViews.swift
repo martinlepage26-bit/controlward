@@ -313,6 +313,8 @@ private struct MailReviewDetail: View {
                 if let lead = store.leads.first(where: { $0.id == id }) { contactID = lead.contactID; companyID = lead.companyID }
             }
             .task(id: mail.id) { await actions.load(message: mail, intake: intake, store: store) }
+            .onChange(of: mail.leadID) { _, _ in actions.refreshSupport(message: mail, store: store) }
+            .onChange(of: mail.sender) { _, _ in actions.refreshSupport(message: mail, store: store) }
             .sheet(item: $editingLead) { lead in LeadEditorView(lead: lead, isNew: false) }
             .sheet(isPresented: $showCapture) { CaptureReviewSheet(recordKey: "mail:\(mail.id.uuidString.lowercased())", initial: mail.capture) }
             .sheet(item: $compose) { request in

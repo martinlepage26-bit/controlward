@@ -152,6 +152,11 @@ enum ControlWardTests {
         let baseline = store.workspace
         try expect(store.mailLeadMatches(mail).map(\.id) == [lead.id], "linked-contact address should suggest the existing lead")
         try expect(store.workspace == baseline, "suggestions changed the workspace")
+        try expect(store.mailRequiresResend(mail), "exact lead sender was permitted to fall back to the mailbox")
+        var personal = mail; personal.sender = "friend@elsewhere.example.test"
+        try expect(!store.mailRequiresResend(personal), "unrelated personal mail was treated as lead outreach")
+        try expect(store.mailRequiresResend(personal, compose: MailCompose(draftID: nil, to: ["studio@example.test"], cc: [], subject: "Synthetic", body: "Synthetic")), "edited To field bypassed the lead sender route")
+        try expect(store.mailRequiresResend(personal, compose: MailCompose(draftID: nil, to: ["friend@elsewhere.example.test"], cc: ["camille@example.test"], subject: "Synthetic", body: "Synthetic")), "edited Cc field bypassed the lead sender route")
         var shared = other; shared.email = lead.email; _ = store.update(shared)
         var sharedMail = mail; sharedMail.sender = "studio@example.test"
         try expect(store.mailLeadMatches(sharedMail).count == 2, "shared business routes must retain ambiguity")
@@ -165,6 +170,8 @@ enum ControlWardTests {
         try expect(store.workspace == beforeInvalid, "rejected association partially saved")
         try store.reviewMail(mail.id, reviewed: true, contactID: nil, companyID: nil, leadID: lead.id)
         try expect(store.mail[0].leadID == lead.id && store.mail[0].contactID == contact.id && store.mail[0].companyID == company.id, "review did not use the lead's existing relationships")
+        personal.leadID = lead.id
+        try expect(store.mailRequiresResend(personal), "manual lead association bypassed the Resend route")
         try expect(store.leads.first { $0.id == lead.id } == lead && store.workspace.resendDispatches.isEmpty, "association changed lead context, history, dates or send state")
         try expect(try store.createMailTask(mail.id) == task.id && store.tasks == [task], "mail review duplicated or rewrote the existing next action")
         try expect(try store.createMailTask(mail.id) == task.id && store.tasks.count == 1, "repeated next-action link duplicated work")
