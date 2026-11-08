@@ -213,8 +213,11 @@ struct LeadEditorView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: "paperplane.fill").foregroundStyle(CRMTheme.steel)
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text("\(CalendarCRM.display(event.date)) · follow-up sent")
+                                            Text("\(CalendarCRM.display(event.date)) · \(event.provider == "resend" ? "acceptance confirmed" : "follow-up sent")")
                                                 .font(.callout.weight(.semibold))
+                                            if let receipt = event.providerMessageID {
+                                                Text("Resend receipt: \(receipt)").font(.caption.monospaced()).textSelection(.enabled)
+                                            }
                                             Text(event.message)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)

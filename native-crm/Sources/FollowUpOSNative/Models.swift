@@ -62,6 +62,7 @@ struct ResendDispatch: Codable, Identifiable, Equatable, Sendable {
     var createdAt: String
     var state: State = .queued
     var providerMessageID: String?
+    /// Local receipt-confirmation time, not a verified original provider send timestamp.
     var acceptedAt: String?
 }
 

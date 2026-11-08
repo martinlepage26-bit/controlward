@@ -531,7 +531,7 @@ enum LeadWorkflow {
         var groundedIn: [String]
         /// Facts the draft deliberately does not state because they are not recorded.
         var notMentioned: [String]
-        static let reviewNotice = "Draft only. Review and edit it; nothing is sent from ControlWard."
+        static let reviewNotice = "Draft only. Review and edit it; sending requires a separate confirmation."
     }
 
     /// Recheck a saved draft immediately before handing it to the mail application. Saving text does
@@ -648,8 +648,14 @@ enum LeadWorkflow {
 
         var body: [String] = []
         if let last = lead.history.last {
-            body.append("I'm following up on my message of \(last.date)\(service.isEmpty ? "" : " about \(service)").")
-            grounded.append("Logged follow-up on \(last.date)")
+            if last.provider == "resend" {
+                body.append("I'm following up on my earlier message\(service.isEmpty ? "" : " about \(service)").")
+                grounded.append("Resend acceptance was confirmed for the earlier message.")
+                notMentioned.append("The original provider send date, delivery and any reply are not verified; no send date is stated.")
+            } else {
+                body.append("I'm following up on my message of \(last.date)\(service.isEmpty ? "" : " about \(service)").")
+                grounded.append("Logged follow-up on \(last.date)")
+            }
         } else if lead.status == .quoteSent {
             if let amount = lead.quoteAmount {
                 body.append("I'm following up on the quote\(service.isEmpty ? "" : " for \(service)") (\(formatAmount(amount)) CAD).")

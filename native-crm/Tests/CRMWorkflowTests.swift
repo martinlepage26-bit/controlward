@@ -21,6 +21,7 @@ enum CRMWorkflowTests {
             ("Outcomes: won/lost mirrors between a converted lead and its opportunity", outcomeMirrors),
             ("Draft: states only recorded facts (no invented quote, intent or notes)", draftIsGrounded),
             ("Draft: a manually entered lead with no inbound interaction is never told it contacted us", manualLeadDraftDoesNotImplyInbound),
+            ("Draft: a Resend confirmation date is not asserted as the original send date", resendConfirmationDate),
             ("Draft: an imported KAIROS platform label is not a requested service", kairosPlatformIsNotRequestedService),
             ("KAIROS: legacy incoming text, sent context and saved drafts keep separate roles", legacyKairosMessageRoles),
             ("AI draft: unrecorded contact, conversation, quote, numbers or placeholders fall back to the grounded draft", aiDraftIsGuarded),
@@ -39,6 +40,15 @@ enum CRMWorkflowTests {
         try PortableCheck.expect(try condition(), message)
     }
     private static let now = ISO8601DateFormatter().date(from: "2026-11-05T15:00:00Z")!
+
+    static func resendConfirmationDate() async throws {
+        var lead = Lead(); lead.name = "Synthetic"; lead.status = .contacted
+        lead.history = [FollowUpEvent(date: "2030-01-05", message: "Earlier message", provider: "resend", providerMessageID: "synthetic-receipt")]
+        let draft = LeadWorkflow.draft(for: lead, in: PersistentWorkspace(), business: BusinessProfile())
+        try expect(draft.text.contains("earlier message") && !draft.text.contains("2030"), "local confirmation became an original send date")
+        try expect(draft.notMentioned.joined().contains("send date"), "timestamp uncertainty was omitted")
+        try expect(!LeadWorkflow.AIDraft.violations(in: "I'm following up on the message I sent on 2030-01-05.", draft: draft, lead: lead).isEmpty, "AI was allowed to invent the original send date")
+    }
 
     static func kairosPlatformIsNotRequestedService() async throws {
         var lead = Lead.blank()
