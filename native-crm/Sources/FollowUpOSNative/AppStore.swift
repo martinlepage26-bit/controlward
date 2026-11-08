@@ -40,6 +40,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var pendingResendReceipt: (dispatchID: UUID, providerID: String, acceptedAt: Date)?
     var resendNow: () -> Date = { .now }
     let resendConfig: ICPConfig?
+    @Published private(set) var resendRecipientDecision: ResendRecipientDecisionState = .missing
+    @Published private(set) var resendRecipientDecisionFailure: String?
+    private var resendRecipientPolicyRevision = UUID()
+    private var resendRecipientDecisionSaveFailed = false
     /// Latest read-only import attempt, including a failure that storage could not retain.
     /// Kept outside the workspace so reporting a failed save cannot publish partial records.
     @Published private var readImportJobs: [SyncTarget: SyncJob] = [:]
@@ -95,6 +99,7 @@ final class AppStore: ObservableObject {
         let loaded = Self.load(from: storageURL)
         self.workspace = loaded.workspace
         self.recoveryState = loaded.recovery
+        refreshResendRecipientDecision()
         for target in SyncTarget.keyed {
             applyCredentialAvailability(selectedSecrets.cachedAvailability(target) ?? .checking, for: target)
         }
@@ -2396,13 +2401,105 @@ final class AppStore: ObservableObject {
 
     // MARK: - Owner-confirmed Resend outreach
 
+    var resendRecipientDecisionURL: URL {
+        storageURL.deletingPathExtension().appendingPathExtension("resend-recipient-decision.json")
+    }
+
+    var resendExternalRecipientsAllowed: Bool {
+        guard !resendRecipientDecisionSaveFailed, let config = resendConfig else { return false }
+        switch resendRecipientDecision {
+        case .missing: return config.loi25Gate.open
+        case .unavailable: return false
+        case .recorded(let decision, _):
+            return decision.allowed && decision.matches(config: config, storageURL: storageURL,
+                                                         generation: workspace.researchGeneration)
+        }
+    }
+
+    var resendRecipientDecisionSummary: String {
+        guard let config = resendConfig else { return "Outreach configuration is unavailable. External recipients are disabled." }
+        if resendRecipientDecisionSaveFailed { return "The decision change was not saved. External sending is paused for this session. Retry saving; after a restart the earlier saved decision may still apply." }
+        switch resendRecipientDecision {
+        case .unavailable: return "The saved decision cannot be read. External recipients are disabled; review and record a new decision."
+        case .missing:
+            return config.loi25Gate.open ? "The packaged policy permits reviewed external recipients. Each message still needs confirmation."
+                : "Owner addresses only. Record your privacy-assessment ruling to permit reviewed external recipients."
+        case .recorded(let decision, _):
+            guard decision.matches(config: config, storageURL: storageURL, generation: workspace.researchGeneration) else {
+                return "The workspace or outreach policy changed. External recipients are disabled until a new review."
+            }
+            return decision.allowed ? "Reviewed external recipients are allowed on this Mac for this workspace. Each message still needs confirmation."
+                : "Owner addresses only, as recorded in your latest decision."
+        }
+    }
+
+    func refreshResendRecipientDecision() {
+        guard !resendRecipientDecisionSaveFailed else { return }
+        let current = ResendRecipientDecisionState.read(from: resendRecipientDecisionURL)
+        if current != resendRecipientDecision {
+            resendRecipientDecision = current
+            resendRecipientPolicyRevision = UUID()
+            resendPreview = nil
+        }
+    }
+
+    func prepareResendRecipientReview() -> ResendRecipientReview? {
+        refreshResendRecipientDecision()
+        guard let config = resendConfig, let fingerprint = ResendRecipientDecision.fingerprint(config) else {
+            resendRecipientDecisionFailure = "Outreach configuration is unavailable. Restore it before reviewing recipients."
+            return nil
+        }
+        return ResendRecipientReview(workspaceBinding: ResendRecipientDecision.binding(for: storageURL),
+                                    workspaceGeneration: workspace.researchGeneration, policyFingerprint: fingerprint)
+    }
+
+    @discardableResult
+    func recordResendRecipientDecision(allowExternal: Bool, assessmentReference: String,
+                                      review: ResendRecipientReview, confirmed: Bool) -> Bool {
+        resendRecipientDecisionFailure = nil
+        guard confirmed else { resendRecipientDecisionFailure = "Confirm the scope before recording a decision."; return false }
+        guard let config = resendConfig,
+              review.workspaceBinding == ResendRecipientDecision.binding(for: storageURL),
+              review.workspaceGeneration == workspace.researchGeneration,
+              review.policyFingerprint == ResendRecipientDecision.fingerprint(config) else {
+            resendRecipientDecisionFailure = "The workspace or policy changed. Close this review and start a new one."; return false
+        }
+        let reference = assessmentReference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !allowExternal || ResendRecipientDecision.validReference(reference) else {
+            resendRecipientDecisionFailure = "Enter the assessment title or reference you reviewed (up to 2,000 bytes, no control characters)."; return false
+        }
+        let decision = ResendRecipientDecision(allowed: allowExternal,
+            assessmentReference: allowExternal ? reference : "Owner-only decision", recordedAt: ISODates.string(resendNow()),
+            workspaceBinding: review.workspaceBinding, workspaceGeneration: review.workspaceGeneration,
+            policyFingerprint: review.policyFingerprint)
+        do {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(decision)
+            try SecureFiles.writePrivate(data, to: resendRecipientDecisionURL)
+            resendRecipientDecisionSaveFailed = false
+            resendRecipientDecision = .recorded(decision, digest: SHA256Hex.digest(data))
+            resendRecipientPolicyRevision = UUID()
+            resendPreview = nil
+            showNotice(allowExternal ? "Recipient decision saved. Review each message separately before sending."
+                                    : "Owner-only recipient decision saved. Existing send previews were cancelled.")
+            return true
+        } catch {
+            // Do not let a later refresh of the older file undo this session's failed restriction.
+            resendRecipientDecisionSaveFailed = true
+            resendRecipientPolicyRevision = UUID()
+            resendPreview = nil
+            resendRecipientDecisionFailure = "Decision change not saved. External sending is paused for this session. Retry before restarting; the earlier saved decision may remain on disk."
+            return false
+        }
+    }
+
     private func resendIssue(for lead: Lead, recipient: String, subject: String, body: String) -> String? {
         if !lead.status.isOpen { return "This deal is closed. Review its status before sending outreach." }
         if lead.email.contains(where: { $0.isNewline }) { return "Check the recipient address." }
         if let issue = ResendPolicy.issue(recipient: recipient, subject: subject, body: body) { return issue }
         guard let config = resendConfig else { return "Outreach policy is unavailable. Sending is blocked until its configuration is restored." }
-        guard config.loi25Gate.open || config.isMartinAddress(recipient) else {
-            return "The configured privacy gate is closed. Sends are limited to Martin's own addresses until he rules on the privacy impact assessment (Resources/config/icp.json)."
+        guard resendExternalRecipientsAllowed || config.isMartinAddress(recipient) else {
+            return "External recipients are disabled. In Settings → Outreach through Resend, review and record the owner privacy-assessment decision. Each message still needs separate confirmation."
         }
         return LeadWorkflow.emailDraftIssue(for: lead, body: body, subject: subject, config: config,
                                            suppression: suppressionList, now: resendNow())
@@ -2426,6 +2523,7 @@ final class AppStore: ObservableObject {
     }
 
     func prepareResendSend(leadID: UUID, subject: String, body: String) -> ResendSendPreview? {
+        refreshResendRecipientDecision()
         resendFailure = nil
         guard !busyTargets.contains(.resend) else { resendFailure = "A Resend request is already in progress."; return nil }
         resendPreview = nil
@@ -2445,7 +2543,8 @@ final class AppStore: ObservableObject {
             let existing = try existingResendDispatch(hash: hash)
             guard existing == nil || existing?.leadID == leadID else { throw GTMError.invalid("An identical request belongs to another lead. Review the original record before retrying.") }
             let preview = ResendSendPreview(id: existing?.id ?? UUID(), lead: lead, recipient: recipient,
-                subject: subject, body: body, contentHash: hash, credentialRevision: credentialConfigurationRevisions[.resend]!)
+                subject: subject, body: body, contentHash: hash, credentialRevision: credentialConfigurationRevisions[.resend]!,
+                recipientPolicyRevision: resendRecipientPolicyRevision, workspaceGeneration: workspace.researchGeneration)
             resendPreview = preview
             return preview
         } catch { resendFailure = message(for: error); return nil }
@@ -2454,9 +2553,12 @@ final class AppStore: ObservableObject {
     func cancelResendPreview() { resendPreview = nil }
 
     private func validateResendPreview(_ preview: ResendSendPreview) throws {
+        refreshResendRecipientDecision()
         guard !isReviewMode else { throw GTMError.invalid("Sending is disabled in the isolated review workspace.") }
         guard resendPreview == preview, leads.first(where: { $0.id == preview.lead.id }) == preview.lead,
               credentialConfigurationRevisions[.resend] == preview.credentialRevision,
+              resendRecipientPolicyRevision == preview.recipientPolicyRevision,
+              workspace.researchGeneration == preview.workspaceGeneration,
               preview.contentHash == ResendPolicy.contentHash(recipient: preview.recipient, subject: preview.subject, body: preview.body) else {
             throw GTMError.invalid("The lead, draft or connection changed after review. Close this preview and review the current message again.")
         }

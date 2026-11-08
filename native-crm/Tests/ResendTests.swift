@@ -103,21 +103,178 @@ import Foundation
                 try expect(store.prepareResendSend(leadID: ownLead.id, subject: subject, body: body) != nil, "owner-only review refused")
                 try expect(await http.captured().isEmpty, "review sent a message")
             }),
+            ("recording recipient eligibility requires a confirmed assessment and saves no CRM or HTTP", {
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let before = try Data(contentsOf: store.storageURL)
+                let context = store.prepareResendRecipientReview()!
+                try expect(!store.resendExternalRecipientsAllowed && !FileManager.default.fileExists(atPath: store.resendRecipientDecisionURL.path), "default expanded recipients")
+                try expect(!store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: context, confirmed: false), "unconfirmed ruling saved")
+                try expect(!store.recordResendRecipientDecision(allowExternal: true, assessmentReference: " ", review: context, confirmed: true), "missing assessment accepted")
+                try expect(!FileManager.default.fileExists(atPath: store.resendRecipientDecisionURL.path), "cancel/invalid review wrote a policy file")
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: context, confirmed: true), "confirmed ruling not saved")
+                try expect(store.resendExternalRecipientsAllowed && store.resendConfig?.loi25Gate.open == false, "runtime ruling changed packaged policy or stayed closed")
+                _ = try preview(store, lead)
+                let reviewCalls = await http.captured()
+                try expect(try Data(contentsOf: store.storageURL) == before && reviewCalls.isEmpty, "policy review changed CRM or contacted provider")
+                let attrs = try FileManager.default.attributesOfItem(atPath: store.resendRecipientDecisionURL.path)
+                try expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600, "decision file is not private")
+                let reloaded = AppStore(storageURL: store.storageURL, resendConfig: store.resendConfig)
+                try expect(reloaded.resendExternalRecipientsAllowed, "saved ruling did not survive normal reopen")
+                let backup = try JSONEncoder().encode(ControlWardBackup(workspace: store.completeBackupWorkspace()))
+                try expect(!String(decoding: backup, as: UTF8.self).contains("Synthetic assessment"), "ruling leaked into CRM backup")
+            }),
+            ("stale policy review, copied ruling and changed configuration fail closed", {
+                let http = FakeHTTP(); let (store, _, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let stale = store.prepareResendRecipientReview()!
+                try store.commitWorkspace { $0.researchGeneration = UUID() }
+                try expect(!store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: stale, confirmed: true), "old workspace review accepted")
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "fresh review failed")
+                let other = root.appendingPathComponent("other/workspace.json")
+                try SecureFiles.writePrivate(JSONEncoder().encode(store.workspace), to: other)
+                let second = AppStore(storageURL: other, resendConfig: store.resendConfig)
+                try SecureFiles.writePrivate(Data(contentsOf: store.resendRecipientDecisionURL), to: second.resendRecipientDecisionURL)
+                second.refreshResendRecipientDecision()
+                try expect(!second.resendExternalRecipientsAllowed, "copied ruling authorized a different workspace path")
+                var changed = store.resendConfig!; changed.loi25Gate.note = (changed.loi25Gate.note ?? "") + " Policy revision."
+                let updated = AppStore(storageURL: store.storageURL, resendConfig: changed)
+                try expect(!updated.resendExternalRecipientsAllowed, "changed policy reused an old ruling")
+            }),
+            ("revocation and reapproval require a new exact-message preview", {
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                let original = try preview(store, lead)
+                try expect(store.recordResendRecipientDecision(allowExternal: false, assessmentReference: "", review: store.prepareResendRecipientReview()!, confirmed: true), "restriction failed")
+                let revokedSent = await store.sendResend(original)
+                try expect(!store.resendExternalRecipientsAllowed && !revokedSent, "revoked preview sent")
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "New synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "reapproval failed")
+                let staleSent = await store.sendResend(original); let staleCalls = await http.captured()
+                try expect(!staleSent && staleCalls.isEmpty, "old preview revived after reapproval")
+                try expect(await store.sendResend(try preview(store, lead)), "fresh confirmed message after owner ruling failed")
+                try expect((await http.captured()).count == 1 && store.leads[0].history.count == 1, "eligibility was confused with a send or receipt")
+            }),
+            ("a ruling changed by another store invalidates an existing preview", {
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                let original = try preview(store, lead)
+                let second = AppStore(storageURL: store.storageURL, resendConfig: store.resendConfig)
+                try expect(second.recordResendRecipientDecision(allowExternal: false, assessmentReference: "", review: second.prepareResendRecipientReview()!, confirmed: true), "second store restriction failed")
+                try expect(!(await store.sendResend(original)), "cached ruling bypassed another store's restriction")
+                try expect((await http.captured()).isEmpty && !store.resendExternalRecipientsAllowed, "changed ruling reached provider")
+            }),
+            ("recipient restriction during credential access prevents HTTP even after reapproval", {
+                for reapprove in [false, true] {
+                    let delayed = CredentialAccessTests.DelayedStore(delayProbes: false, delayReads: true)
+                    try delayed.write("re_synthetic_old", for: .resend); defer { delayed.release() }
+                    let http = FakeHTTP(); let (store, lead, root) = try fixture(http, secrets: delayed, privacyOpen: false)
+                    defer { try? FileManager.default.removeItem(at: root) }
+                    try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                    let approved = try preview(store, lead); let send = Task { await store.sendResend(approved) }
+                    for _ in 0..<100 where delayed.waitingReads == 0 { try await Task.sleep(for: .milliseconds(10)) }
+                    try expect(delayed.waitingReads > 0, "credential wait not exercised")
+                    try expect(store.recordResendRecipientDecision(allowExternal: false, assessmentReference: "", review: store.prepareResendRecipientReview()!, confirmed: true), "restriction failed")
+                    if reapprove {
+                        try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Replacement assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "replacement approval failed")
+                    }
+                    delayed.release()
+                    let sent = await send.value; let calls = await http.captured()
+                    try expect(!sent && calls.isEmpty && store.workspace.resendDispatches.isEmpty, "changed policy sent or queued HTTP after key access")
+                }
+            }),
+            ("CRM restore and reset cannot reinstate an earlier recipient decision", {
+                let http = FakeHTTP(); let (store, _, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                let backup = try JSONEncoder().encode(ControlWardBackup(workspace: store.completeBackupWorkspace()))
+                let decisionBytes = try Data(contentsOf: store.resendRecipientDecisionURL)
+                try store.restoreControlWardBackup(backup, confirmed: true)
+                try expect(!store.resendExternalRecipientsAllowed && (try Data(contentsOf: store.resendRecipientDecisionURL)) == decisionBytes, "restoring CRM authorized external recipients or rewrote decision")
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "New synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "post-restore review failed")
+                _ = try store.resetAll(confirmed: true)
+                try expect(!store.resendExternalRecipientsAllowed, "reset reused previous generation's ruling")
+                try expect((await http.captured()).isEmpty, "restore/reset performed HTTP")
+            }),
+            ("malformed, unsupported and missing decision files preserve owner-only behavior", {
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                let encoded = try Data(contentsOf: store.resendRecipientDecisionURL)
+                var future = try JSONDecoder().decode(ResendRecipientDecision.self, from: encoded); future.schemaVersion = 99
+                for bytes in [Data("not JSON".utf8), try JSONEncoder().encode(future), Data(repeating: 32, count: 16_385)] {
+                    try SecureFiles.writePrivate(bytes, to: store.resendRecipientDecisionURL)
+                    store.refreshResendRecipientDecision()
+                    try expect(!store.resendExternalRecipientsAllowed && store.prepareResendSend(leadID: lead.id, subject: subject, body: body) == nil, "invalid decision expanded recipients")
+                }
+                try FileManager.default.removeItem(at: store.resendRecipientDecisionURL)
+                store.refreshResendRecipientDecision()
+                let invalidCalls = await http.captured()
+                try expect(!store.resendExternalRecipientsAllowed && invalidCalls.isEmpty, "missing ruling performed or permitted HTTP")
+            }),
+            ("a failed decision save blocks external sends until an explicit successful retry", {
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment", review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                let original = try preview(store, lead); let oldBytes = try Data(contentsOf: store.resendRecipientDecisionURL)
+                try FileManager.default.removeItem(at: store.resendRecipientDecisionURL)
+                try FileManager.default.createDirectory(at: store.resendRecipientDecisionURL, withIntermediateDirectories: false)
+                try expect(!store.recordResendRecipientDecision(allowExternal: false, assessmentReference: "", review: store.prepareResendRecipientReview()!, confirmed: true), "directory target falsely saved a ruling")
+                try FileManager.default.removeItem(at: store.resendRecipientDecisionURL)
+                try SecureFiles.writePrivate(oldBytes, to: store.resendRecipientDecisionURL)
+                store.refreshResendRecipientDecision()
+                let failedSaveSent = await store.sendResend(original)
+                try expect(!store.resendExternalRecipientsAllowed && !failedSaveSent, "refresh revived earlier approval after save failure")
+                try expect(store.recordResendRecipientDecision(allowExternal: false, assessmentReference: "", review: store.prepareResendRecipientReview()!, confirmed: true), "explicit retry failed")
+                let reloaded = AppStore(storageURL: store.storageURL, resendConfig: store.resendConfig)
+                let failedSaveCalls = await http.captured()
+                try expect(!reloaded.resendExternalRecipientsAllowed && failedSaveCalls.isEmpty, "restriction/restart performed HTTP")
+            }),
+            ("a restriction after HTTP is issued retains the actual acceptance receipt", {
+                let box = StoreBox()
+                let http = FakeHTTP(beforeReply: {
+                    guard let store = box.store else { throw SmokeTestFailure.failed("store fixture missing") }
+                    try expect(store.recordResendRecipientDecision(allowExternal: false, assessmentReference: "",
+                        review: store.prepareResendRecipientReview()!, confirmed: true), "in-flight restriction failed")
+                })
+                let (store, lead, root) = try fixture(http, privacyOpen: false); box.store = store
+                defer { box.store = nil; try? FileManager.default.removeItem(at: root) }
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic assessment",
+                    review: store.prepareResendRecipientReview()!, confirmed: true), "approval failed")
+                try expect(await store.sendResend(try preview(store, lead)), "actual accepted outcome was discarded after restriction")
+                let calls = await http.captured()
+                try expect(!store.resendExternalRecipientsAllowed && calls.count == 1 && store.leads[0].history.count == 1
+                    && store.workspace.resendDispatches.first?.providerMessageID == providerID, "restriction erased or duplicated accepted facts")
+            }),
             ("researched messages still require supported AI/contact evidence and an intact footer", {
                 let (researcher, _, candidate) = try QuickScanResearchTests.fixture()
                 let research = await researcher.research(candidate, segmentID: "clinic")
-                let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false); defer { try? FileManager.default.removeItem(at: root) }
                 store.resendNow = { LeadKit.now }
                 var sourced = lead; sourced.email = research.email!; sourced.quickScanResearch = research
                 _ = store.update(sourced)
                 let config = store.resendConfig!
                 guard let message = research.draft(config: config, suppression: store.suppressionList, now: LeadKit.now) else { throw SmokeTestFailure.failed("research fixture refused") }
+                try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) == nil, "researched offer bypassed default closed recipients")
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic researched-offer assessment",
+                    review: store.prepareResendRecipientReview()!, confirmed: true), "researched offer ruling failed")
                 try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) != nil, "valid researched draft refused")
                 let withoutFooter = message.body.replacingOccurrences(of: OutreachDraftBuilder.footer(config: config, language: "fr"), with: "")
                 try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: withoutFooter) == nil, "missing footer allowed")
                 sourced.quickScanResearch?.aiUse = []; _ = store.update(sourced)
                 try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) == nil, "missing AI evidence allowed")
                 try expect(await http.captured().isEmpty, "refused research reached provider")
+                sourced.quickScanResearch = research; _ = store.update(sourced)
+                guard let confirmed = store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) else {
+                    throw SmokeTestFailure.failed(store.resendFailure ?? "researched offer preview unavailable after ruling")
+                }
+                try expect(await store.sendResend(confirmed), "recorded owner ruling did not permit confirmed researched offer")
+                let sentCalls = await http.captured()
+                try expect(config.loi25Gate.open == false && sentCalls.count == 1
+                    && store.leads[0].history.first?.subject == message.subject
+                    && store.leads[0].history.first?.providerMessageID == providerID,
+                    "researched offer acceptance bypassed closed base policy or lost its receipt")
             }),
             ("preview, cancel and fabricated approval perform zero HTTP", {
                 let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
