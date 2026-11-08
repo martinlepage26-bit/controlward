@@ -57,6 +57,76 @@ struct ResendSendPreview: Equatable, Identifiable, Sendable {
     var body: String
     var contentHash: String
     var credentialRevision: UUID
+    var recipientPolicyRevision: UUID
+    var workspaceGeneration: UUID
+}
+
+/// An owner decision is local configuration, never part of a CRM backup/import.
+/// It applies to every otherwise eligible native Resend recipient, not one message.
+struct ResendRecipientDecision: Codable, Equatable, Sendable {
+    var schemaVersion = 1
+    var id = UUID()
+    var allowed: Bool
+    var assessmentReference: String
+    var recordedAt: String
+    var workspaceBinding: String
+    var workspaceGeneration: UUID
+    var policyFingerprint: String
+
+    static let reviewURL = URL(string: "https://pharos-ai.ca/artifacts/controlward/outreach-privacy-review")!
+    static let scopeVersion = "native-reviewed-resend-recipients-v1"
+
+    static func binding(for storageURL: URL) -> String {
+        SHA256Hex.digest(Data(storageURL.standardizedFileURL.path.utf8))
+    }
+
+    static func fingerprint(_ config: ICPConfig) -> String? {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(config) else { return nil }
+        return SHA256Hex.digest(Data(scopeVersion.utf8) + data)
+    }
+
+    static func validReference(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed.utf8.count <= 2_000
+            && !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    func matches(config: ICPConfig, storageURL: URL, generation: UUID) -> Bool {
+        schemaVersion == 1 && Self.validReference(assessmentReference)
+            && ISODates.date(recordedAt) != nil
+            && workspaceBinding == Self.binding(for: storageURL)
+            && workspaceGeneration == generation
+            && policyFingerprint == Self.fingerprint(config)
+    }
+}
+
+struct ResendRecipientReview: Identifiable, Equatable, Sendable {
+    var id = UUID()
+    var workspaceBinding: String
+    var workspaceGeneration: UUID
+    var policyFingerprint: String
+}
+
+enum ResendRecipientDecisionState: Equatable, Sendable {
+    case missing
+    case recorded(ResendRecipientDecision, digest: String)
+    case unavailable
+
+    static func read(from url: URL) -> Self {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular,
+                  let count = attributes[.size] as? NSNumber, count.intValue <= 16_384 else { return .unavailable }
+            let data = try Data(contentsOf: url)
+            guard data.count <= 16_384 else { return .unavailable }
+            return .recorded(try JSONDecoder().decode(ResendRecipientDecision.self, from: data),
+                             digest: SHA256Hex.digest(data))
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain
+            && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) {
+            return .missing
+        } catch { return .unavailable }
+    }
 }
 
 enum ResendError: LocalizedError {

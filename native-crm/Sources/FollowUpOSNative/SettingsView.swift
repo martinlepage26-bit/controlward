@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var confirmReset = false
     @State private var keyDrafts: [SyncTarget: String] = [:]
     @State private var autoPilotEnabled = false
+    @State private var recipientReview: ResendRecipientReview?
+    @State private var confirmOwnerOnly = false
 
     private func keyBinding(_ target: SyncTarget) -> Binding<String> {
         Binding(get: { keyDrafts[target] ?? "" }, set: { keyDrafts[target] = $0 })
@@ -79,10 +81,21 @@ struct SettingsView: View {
                         .font(.callout).foregroundStyle(.secondary)
                     Link("Open existing Resend account", destination: URL(string: "https://resend.com/api-keys")!)
                     Text("A saved key is configuration only. A successful send records the Resend receipt; delivery and replies remain separate outcomes.").font(.caption)
-                    if let config = store.resendConfig, !config.loi25Gate.open {
-                        Text("The configured privacy gate is closed: live sends are limited to Martin's own addresses until he rules on the privacy impact assessment. This setting comes from Resources/config/icp.json.")
-                            .font(.caption).foregroundStyle(CRMTheme.rust)
+                    Text(store.resendRecipientDecisionSummary)
+                        .font(.callout).foregroundStyle(store.resendExternalRecipientsAllowed ? CRMTheme.moss : CRMTheme.rust)
+                    if case .recorded(let decision, _) = store.resendRecipientDecision {
+                        Text("Last saved decision: \(decision.recordedAt) · \(decision.assessmentReference)")
+                            .font(.caption).textSelection(.enabled)
                     }
+                    Button("Review recipient policy…") { recipientReview = store.prepareResendRecipientReview() }
+                    if store.resendExternalRecipientsAllowed {
+                        Button("Restrict to owner addresses…") { confirmOwnerOnly = true }
+                    }
+                    if let failure = store.resendRecipientDecisionFailure {
+                        Text(failure).font(.caption).foregroundStyle(CRMTheme.rust)
+                    }
+                    Text("This Mac's decision stays outside CRM backups. A restored workspace or changed outreach policy needs a fresh review. Changing recipient policy cancels existing message previews.")
+                        .font(.caption).foregroundStyle(.secondary)
                     if store.pendingResendReceipt != nil {
                         Text(store.resendFailure ?? "An accepted Resend message needs its local receipt saved.").font(.caption).foregroundStyle(CRMTheme.rust)
                         Button("Save pending Resend receipt") { _ = store.retrySavingResendReceipt() }
@@ -150,6 +163,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .onAppear {
+            store.refreshResendRecipientDecision()
             name = store.business.name
             industry = store.business.industry
             autoPilotEnabled = store.workspace.autoPilotEnabled
@@ -157,6 +171,20 @@ struct SettingsView: View {
         .onChange(of: store.business.name) { _, value in name = value }
         .onChange(of: store.business.industry) { _, value in industry = value }
         .onChange(of: store.workspace.autoPilotEnabled) { _, value in autoPilotEnabled = value }
+        .sheet(item: $recipientReview) { review in
+            RecipientPolicyReviewSheet(review: review).environmentObject(store)
+        }
+        .confirmationDialog("Restrict future sends to owner addresses?", isPresented: $confirmOwnerOnly, titleVisibility: .visible) {
+            Button("Save owner-only decision") {
+                if let review = store.prepareResendRecipientReview() {
+                    _ = store.recordResendRecipientDecision(allowExternal: false, assessmentReference: "",
+                                                           review: review, confirmed: true)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Existing message previews are cancelled. Requests already sent to Resend retain their observed outcome.")
+        }
         .confirmationDialog("Reset the local CRM workspace?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Back up and erase CRM data", role: .destructive) {
                 do { try store.resetAll(confirmed: true) }
@@ -178,5 +206,50 @@ struct SettingsView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try store.importLegacyWorkspace(from: url) }
         catch { store.notice = "Legacy import failed: \(error.localizedDescription)" }
+    }
+}
+
+private struct RecipientPolicyReviewSheet: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    let review: ResendRecipientReview
+    @State private var assessmentReference = ""
+    @State private var confirmedScope = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Review external recipients").font(.title2.bold())
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if store.isReviewMode {
+                        Text("Isolated review: this decision affects only the review workspace. Account access and sending remain disabled.")
+                            .font(.callout).foregroundStyle(CRMTheme.rust)
+                    }
+                    Text("This owner decision permits all otherwise eligible external recipients in this Mac's native Resend workflow. It applies beyond a single prospect or message.")
+                    Text("Each send still requires the exact recipient, subject and body to be reviewed and confirmed, with suppression, duplicate prevention and a provider receipt. Researched cold outreach also requires current contact and AI-use evidence. Auto-Pilot and reminders do not send outreach.")
+                    Text("When you confirm a message, Resend receives the recipient, subject, body, sender and unsubscribe information. Public business details alone do not establish consent, personal-inbox ownership or delivery. Review the applicable contact basis, provider processing, retention and opt-out handling in your assessment.")
+                    Link("Open the outreach privacy review", destination: ResendRecipientDecision.reviewURL)
+                    Text("Record the title or reference of the assessment you reviewed. This records your ruling; it does not certify legal compliance. Enter a reference only, without passwords or API keys.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    TextField("Assessment title or reference", text: $assessmentReference).textFieldStyle(.roundedBorder)
+                    Toggle("I reviewed the referenced assessment and approve this scope for external recipients", isOn: $confirmedScope)
+                    Text("You can restrict recipients again in Settings. A successful change cancels message previews, including a confirmation waiting for credential access. A request already issued to Resend cannot be undone here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let failure = store.resendRecipientDecisionFailure {
+                        Text(failure).foregroundStyle(CRMTheme.rust)
+                    }
+                }.padding(.trailing, 4)
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { dismiss() }
+                Spacer()
+                Button("Allow reviewed external recipients") {
+                    if store.recordResendRecipientDecision(allowExternal: true, assessmentReference: assessmentReference,
+                                                           review: review, confirmed: confirmedScope) { dismiss() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!confirmedScope || !ResendRecipientDecision.validReference(assessmentReference))
+            }
+        }.padding(24).frame(width: 620, height: 620)
     }
 }

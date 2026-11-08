@@ -18,11 +18,34 @@ credential access. Neither Auto-Pilot nor a scheduled reminder sends outreach.
 Gmail/default-mail handoffs and manual “Mark as sent” are removed from this lead
 outreach flow. Copy remains available.
 
-The existing `Resources/config/icp.json` privacy gate remains closed. It permits
-sends only to the configured Martin addresses until Martin rules on the privacy
-impact assessment. Implementing Resend does not change that gate. No new prospect
-send or diagnostic message is authorized by the standing sender preference.
-Packaged apps resolve this policy only from their own resource bundle and ignore
+The existing `Resources/config/icp.json` privacy gate remains closed by default.
+In **Settings → Outreach through Resend → Review recipient policy…**, the owner
+can record a privacy-assessment ruling for native Resend outreach. The sheet
+states that this permits all otherwise eligible external recipients in the
+current workspace, requires an assessment reference and explicit scope
+confirmation, and saves nothing on Cancel. Installing the controls does not
+record a ruling or enable external recipients. This records the owner's
+decision; it is not a legal-compliance certificate or a decision made by the app.
+No new prospect send or diagnostic message is authorized by the standing sender
+preference or by recording recipient eligibility.
+
+The decision is a private, non-secret file next to the native workspace, outside
+CRM backups and imports. It is bound to that workspace's location, generation
+and current packaged outreach policy. A normal reopen retains a valid decision;
+restoring/resetting the CRM, copying the file to another workspace, changing the
+policy, or an unreadable/unsupported decision requires another review. The
+legacy pipeline/command-line policy is not opened by the native Settings ruling.
+
+**Restrict to owner addresses…** records a new owner-only decision. Every policy
+change invalidates outstanding message previews. The application rereads the
+decision before message review and before sending, including after suspended
+credential access, so a restriction from another instance also applies. An
+already-issued request retains its actual provider result. If saving a decision
+fails, external sending is blocked for that session until an explicit successful
+retry. The UI explains that an earlier on-disk ruling may still apply after
+restart; a failed restriction is never reported as saved.
+
+Packaged apps resolve the base ICP configuration only from their own resource bundle and ignore
 the `CONTROLWARD_CONFIG_DIR` development override. Command-line/development
 configuration and the other research/proof loaders retain their existing behavior.
 
