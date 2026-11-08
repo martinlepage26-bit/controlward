@@ -7,14 +7,14 @@ Reference inspected: `https://followupos.pages.dev/`, as linked by
 | --- | --- |
 | Business onboarding and industry selection | `OnboardingView` |
 | New, Contacted, Quote Sent, Won, Lost stages | `LeadStatus` and lead editor |
-| Close rate, won revenue, open pipeline | `AppStore` metrics and pipeline cards |
+| Close rate, won value, open pipeline | Owner-entered values in `AppStore` and pipeline cards; no payment or generated-revenue claim |
 | Due and overdue follow-ups | `dueLeads` and due section |
 | Search and Open/All/Won/Lost filters | `filteredLeads` and native controls |
 | Add, edit, save, and delete leads | `LeadEditorView` |
 | Contact, company, service, amount, date, notes | Native lead form |
 | CSV import with flexible headers | `CSVParser` and native open panel |
 | Follow-up drafting | On-device Apple Intelligence with local template fallback |
-| Copy and email message | macOS clipboard and default mail application |
+| Copy and reviewed lead outreach | macOS clipboard; exact-message Resend preview from ml@pharos-ai.ca, privacy gate, provider receipt and duplicate handling |
 | 1, 3, 7, 14-day sequence | `FollowUpCadence` and follow-up logging |
 | Follow-up history | Persisted `FollowUpEvent` records |
 | Privacy workspace review | Native Security view and review receipt |

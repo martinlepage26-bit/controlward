@@ -28,8 +28,9 @@ Due follow-ups can also be scheduled as explicit native macOS notifications;
 the app does not send outbound messages automatically.
 The default Overview combines CRM, LeadGen, Lantern, Pharos findings, automation,
 and sync-queue state in one command-center view.
-Configured adapter endpoints expose a read-only HTTP preflight; the preflight
-does not transmit workspace data or provider credentials.
+The endpoint **Test** action performs an unauthenticated HTTP preflight.
+**Verify** uses the configured connector key for its read-only check. Neither
+action uploads the CRM snapshot; pushes require their own preview and confirmation.
 Staged outbox packages include deterministic sync manifests with entity counts
 and idempotency keys for downstream adapters.
 
@@ -69,8 +70,8 @@ The locally signed bundle is created at:
 native-crm/dist/ControlWard.app
 ```
 
-The bundle intentionally remains in this workspace to comply with the managed
-Mac host boundary. `bin/build-native-app` uses the installed Developer ID
+The build output remains in this workspace. A separately authorized installation
+can replace the existing app with a rollback copy; the [release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research) records the installed version and its verification. `bin/build-native-app` uses the installed Developer ID
 Application identity when available and otherwise falls back to an ad-hoc local
 signature. Both paths enable the hardened runtime and App Sandbox
 (`Resources/Contextward.entitlements`: sandbox, user-selected read-write files,
@@ -104,7 +105,11 @@ Integrations → **Mail accounts** pulls message metadata into Email → Local r
   in HTML are stripped before display. Reply, reply all, forward, draft edit, Trash,
   archive, and mark read/unread call the Gmail connector. Sending and Trash ask for
   confirmation first. Trash uses `messages.trash` and does not erase the message.
-  A connector that cannot perform an action disables that button and says why.
+  Known lead associations, exact sender matches and lead recipients require the
+  reviewed Resend lead-editor route, so those mailbox send actions are refused
+  before HTTP. Ordinary personal correspondence and non-send actions retain the
+  Gmail connector. A connector that cannot perform an action disables that button
+  and says why.
   An expired or existing read-only sign-in can use **Reconnect** directly. Cancelled, failed or wrong-account sign-ins keep the previous token. Signing into Chrome or another Gmail app does not connect this native inbox.
 - Last 14 days, up to 100 messages per account per refresh; manual **Refresh** and every
   10 minutes while the app is open. Dedupe by `source_id` (`gmail:<id>`); review state,

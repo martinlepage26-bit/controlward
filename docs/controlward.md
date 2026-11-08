@@ -37,7 +37,7 @@ unknown. Apple Intelligence may only rephrase it, and its text is replaced by th
 contact, a conversation, a quote or a number that is not recorded. Lead outreach uses Resend from
 ml@pharos-ai.ca after review of the exact recipient and message. A provider receipt is required before
 sent history is added, and the existing privacy gate still applies. Pipeline totals count owner-entered values only, and a converted lead counts once,
-through its opportunity. Status and evidence: [promise-status-20261105.md](promise-status-20261105.md).
+through its opportunity. Status and evidence: [current acceptance ledger](completion-ledger-20261106.md) and [installed release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research).
 
 ## Project record links and capture
 
@@ -61,7 +61,7 @@ inspected source is `martinlepageai-ux/email-aggregator` at
 `0c1b72c213c3f02164c2d508d7befc2f35f24e68`. Its current sign-in screen labels it a
 prototype; provider OAuth/mailbox synchronization is not implemented in the
 inspected source. ControlWard's own live Gmail metadata intake is native (see
-`native-crm/README.md`, Live mail intake) and does not use this hosted app. No credentials or provider mailbox contents were used in QA.
+`native-crm/README.md`, Live mail intake) and does not use this hosted app. The hosted prototype was not given provider credentials or mailbox contents in this acceptance. The separate native Gmail runtime evidence is recorded in the current acceptance ledger.
 
 The local inbox imports `controlward.mail.v1` JSON or the existing Project Control
 synthetic Email Aggregator fixture. Unknown fields such as body text and tokens
@@ -146,8 +146,7 @@ queue claims. This is not a complete migration compatibility certificate.
 - `empty_or_unrelated` or `mixed_or_incomplete`: inspect the intended project and
   migration history before applying anything.
 
-No production Supabase project, endpoint, credentials or migration application
-was verified in this work. Tests use in-memory PGlite and synthetic inputs.
+The configured owner Supabase project and its authenticated import remain separate acceptance. Controlled connected tests now use the actual migrated PostgreSQL/PostgREST schema and official Envoy gateway, in addition to earlier PGlite checks. See [GAP runtime acceptance and limits](gap-connected-acceptance-20261107.md); those disposable results do not prove a production migration or owner-account import.
 
 ## Data and recovery
 
