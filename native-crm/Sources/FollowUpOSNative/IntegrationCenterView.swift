@@ -296,7 +296,10 @@ struct IntegrationCenterView: View {
 
     @ViewBuilder private func lastJobText(_ target: SyncTarget) -> some View {
         if let job = store.latestSyncJob(for: target) {
-            Text(job.status == "failed" ? "Last: failed. \(job.error ?? "")" : "Last: \(job.status). \(job.detail ?? "")")
+            let phase = job.status == "sending" && [SyncTarget.kairos, .gaps, .leadgen].contains(target) ? "reading" : job.status
+            let detail = job.status == "failed" ? (job.error ?? "") :
+                ([job.detail, job.status == "cancelled" ? job.error : nil].compactMap { $0 }.joined(separator: " "))
+            Text("Last: \(phase). \(detail)")
                 .font(.caption).foregroundStyle(job.status == "failed" ? CRMTheme.rust : .secondary)
                 .lineLimit(job.status == "failed" ? nil : 2)
                 .help(job.error ?? job.detail ?? "")

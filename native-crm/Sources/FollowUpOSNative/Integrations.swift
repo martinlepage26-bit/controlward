@@ -21,27 +21,104 @@ protocol SecretStore: Sendable {
 enum CredentialAvailability: Equatable, Sendable { case checking, available, missing, accessRequired }
 
 enum CredentialIO {
-    static func perform<T: Sendable>(_ operation: @escaping @Sendable () -> T) async -> T {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async { continuation.resume(returning: operation()) }
+    /// Only settles the Swift waiter. A synchronous OS lookup may still be running;
+    /// its eventual value is discarded after timeout/cancellation, never cached here.
+    private final class Waiter<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private var continuation: CheckedContinuation<T, any Error>?
+        private var earlyResult: Result<T, any Error>?
+        private var timer: Task<Void, Never>?
+
+        var isWaiting: Bool { lock.withLock { !finished } }
+
+        func install(_ value: CheckedContinuation<T, any Error>) -> Bool {
+            let early = lock.withLock {
+                if finished { return earlyResult }
+                continuation = value
+                return nil
+            }
+            if let early { value.resume(with: early); return false }
+            return true
+        }
+
+        func setTimer(_ value: Task<Void, Never>) {
+            let cancel = lock.withLock {
+                if finished { return true }
+                timer = value
+                return false
+            }
+            if cancel { value.cancel() }
+        }
+
+        func finish(_ result: Result<T, any Error>) {
+            let completion: (CheckedContinuation<T, any Error>?, Task<Void, Never>?)? = lock.withLock {
+                guard !finished else { return nil }
+                finished = true
+                let value = continuation, clock = timer
+                if value == nil { earlyResult = result }
+                continuation = nil; timer = nil
+                return (value, clock)
+            }
+            // Resuming/cancelling while holding the lock can deadlock with task cancellation.
+            completion?.1?.cancel()
+            completion?.0?.resume(with: result)
         }
     }
-    static func read<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async { continuation.resume(with: Result(catching: operation)) }
+
+    static func read<T: Sendable>(timeout: Duration = .seconds(30),
+                                 _ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        let waiter = Waiter<T>()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                guard waiter.install(continuation) else { return }
+                waiter.setTimer(Task.detached {
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    waiter.finish(.failure(CredentialLookupError.timedOut))
+                })
+                DispatchQueue.global(qos: .utility).async {
+                    guard waiter.isWaiting else { return }
+                    waiter.finish(Result(catching: operation))
+                }
+            }
+        } onCancel: {
+            waiter.finish(.failure(CancellationError()))
         }
     }
 }
 
-enum CredentialLookupError: LocalizedError {
-    case superseded
-    var errorDescription: String? { "The connection changed while credential access was checked. Retry the current connection." }
+enum CredentialLookupError: LocalizedError, Equatable {
+    case superseded, timedOut, pending
+    var requiresAccess: Bool { self != .superseded }
+    var errorDescription: String? {
+        switch self {
+        case .superseded: "The connection changed while credential access was checked. Retry the current connection."
+        case .timedOut: "macOS credential access did not finish in time. Handle any local access prompt before retrying. The saved connection is retained."
+        case .pending: "macOS is still processing an earlier credential check. Handle any local access prompt or restore local credential access before retrying."
+        }
+    }
+}
+
+/// Tracks only item identity, never a credential or result. A timed-out caller must
+/// not start more OS reads/prompts for the same item while its first read is held.
+private final class CredentialLookupGate: @unchecked Sendable {
+    struct Key: Hashable { let service: String; let account: String }
+    private let lock = NSLock()
+    private var pending = Set<Key>()
+    func begin(_ key: Key) -> Bool { lock.withLock { pending.insert(key).inserted } }
+    func end(_ key: Key) { _ = lock.withLock { pending.remove(key) } }
 }
 
 /// Only the copy-matching call is injectable. Credential writes, identities and ACLs are unchanged.
 struct KeychainLookup: Sendable {
-    struct Result: Sendable { var status: OSStatus; var data: Data? }
+    struct Result: Sendable { var status: OSStatus; var data: Data?; var pending = false }
     var copyMatching: @Sendable ([String: Any]) -> Result
+    private let gate: CredentialLookupGate
+    init(copyMatching: @escaping @Sendable ([String: Any]) -> Result) {
+        self.copyMatching = copyMatching
+        gate = CredentialLookupGate()
+    }
     static let system = KeychainLookup { query in
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -56,6 +133,11 @@ struct KeychainLookup: Sendable {
             context.interactionNotAllowed = true
             query[kSecUseAuthenticationContext as String] = context
         }
+        guard let service = query[kSecAttrService as String] as? String,
+              let account = query[kSecAttrAccount as String] as? String else { return copyMatching(query) }
+        let identity = CredentialLookupGate.Key(service: service, account: account)
+        guard gate.begin(identity) else { return Result(status: errSecInteractionNotAllowed, data: nil, pending: true) }
+        defer { gate.end(identity) }
         return copyMatching(query)
     }
     func availability(_ base: [String: Any]) -> CredentialAvailability {
@@ -67,6 +149,7 @@ struct KeychainLookup: Sendable {
     }
     func read(_ base: [String: Any], interactive: Bool) throws -> String? {
         let result = request(base, data: true, interactive: interactive)
+        if result.pending { throw CredentialLookupError.pending }
         if result.status == errSecItemNotFound { return nil }
         guard result.status == errSecSuccess else { throw SecretStoreError.keychain(result.status) }
         guard let data = result.data, let text = String(data: data, encoding: .utf8) else { throw SecretStoreError.keychain(errSecDecode) }
@@ -1033,7 +1116,7 @@ struct GapClient: Sendable {
         guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis key check") }
     }
 
-    func activeClusters() async throws -> [GapCluster] {
+    func activeClusters(requireCurrent: @Sendable () async throws -> Void = {}) async throws -> [GapCluster] {
         var clusters: [GapCluster] = []
         var seenIDs: Set<String> = []
         var lastID: String?
@@ -1045,7 +1128,9 @@ struct GapClient: Sendable {
                 URLQueryItem(name: "limit", value: String(Self.pageSize)),
             ]
             if let lastID { query.append(URLQueryItem(name: "id", value: "gt.\(lastID)")) }
+            try await requireCurrent()
             let response = try await get(query)
+            try await requireCurrent()
             guard response.status == 200 else { throw IntegrationError.from(response, context: "Gap analysis read") }
             guard let page = try? JSONDecoder().decode([GapCluster].self, from: response.body) else {
                 throw IntegrationError.unexpected("gap clusters could not be read")

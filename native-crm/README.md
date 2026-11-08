@@ -34,6 +34,13 @@ action uploads the CRM snapshot; pushes require their own preview and confirmati
 Staged outbox packages include deterministic sync manifests with entity counts
 and idempotency keys for downstream adapters.
 
+Credential checks and reads have a30-second application-wait deadline. Access
+needed retains the saved connection; handle any local macOS prompt before
+retrying. A still-running OS lookup is not duplicated. Connection changes and
+Stop are rechecked before pending read results are imported; PHAROS snapshot
+changes require a fresh push preview. See [credential wait acceptance](../docs/credential-wait-acceptance-20261108.md)
+for tested behavior and the distinction between a bounded waiter and live access.
+
 The companion `pharos-api` directory contains the PHAROS-owned edge endpoint
 contract for health checks and authenticated exchange intake. The Worker is
 deployed to the configured Cloudflare account with D1 receipt persistence;

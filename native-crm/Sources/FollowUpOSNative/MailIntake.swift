@@ -296,11 +296,12 @@ struct MailIntakeEngine: Sendable {
     let config: GoogleOAuthConfig
     let tokens: MailTokenStore
     let transport: HTTPTransport
+    var credentialWaitLimit: Duration = .seconds(30)
 
     func accessToken(for email: String, userInitiated: Bool = true,
                      credentialIsCurrent: @Sendable () async -> Bool = { true }) async throws -> String {
         let reader = tokens
-        let value = try await CredentialIO.read {
+        let value = try await CredentialIO.read(timeout: credentialWaitLimit) {
             try userInitiated ? reader.read(email) : reader.readWithoutInteraction(email)
         }
         guard !Task.isCancelled, await credentialIsCurrent() else { throw CredentialLookupError.superseded }
@@ -419,9 +420,12 @@ final class MailIntakeController: ObservableObject {
     private var credentialRevisions: [String: UUID] = [:]
     private var credentialProbeTasks: [String: Task<Void, Never>] = [:]
     let accessMode: MailAccessMode
+    let credentialWaitLimit: Duration
 
     init(tokens: MailTokenStore? = nil, transport: HTTPTransport = URLSessionTransport(), defaults: UserDefaults = .standard,
-         accessMode: MailAccessMode = .applicationDefault, reviewMode: Bool = StorageLocation.isReview) {
+         accessMode: MailAccessMode = .applicationDefault, reviewMode: Bool = StorageLocation.isReview,
+         credentialWaitLimit: Duration = .seconds(30)) {
+        self.credentialWaitLimit = credentialWaitLimit
         let selectedMode: MailAccessMode = reviewMode ? .isolated : accessMode
         self.accessMode = selectedMode
         // Choose before querying account state. The preview must never instantiate or query the owner's store.
@@ -455,9 +459,11 @@ final class MailIntakeController: ObservableObject {
     }
 
     private func startCredentialProbe(_ email: String) {
-        let revision = advanceCredentialRevision(email), reader = tokens
+        let revision = advanceCredentialRevision(email), reader = tokens, limit = credentialWaitLimit
         credentialProbeTasks[email] = Task { [weak self] in
-            let value = await CredentialIO.perform { reader.availability(email) }
+            let value: CredentialAvailability
+            do { value = try await CredentialIO.read(timeout: limit) { reader.availability(email) } }
+            catch { value = .accessRequired }
             guard let self, !Task.isCancelled, self.credentialRevisions[email] == revision else { return }
             self.applyAvailability(value, email: email)
             self.credentialProbeTasks.removeValue(forKey: email)
@@ -482,7 +488,7 @@ final class MailIntakeController: ObservableObject {
         guard !clientID.isEmpty else { throw MailIntakeError.missingClientID }
         return try GoogleOAuthConfig(clientID: clientID)
     }
-    private func engine() throws -> MailIntakeEngine { MailIntakeEngine(config: try config(), tokens: tokens, transport: transport) }
+    private func engine() throws -> MailIntakeEngine { MailIntakeEngine(config: try config(), tokens: tokens, transport: transport, credentialWaitLimit: credentialWaitLimit) }
 
     /// `authorize` opens the system browser sheet and returns the callback URL.
     func connect(_ account: MailAccount, store: AppStore, authorize: (URL, String) async throws -> URL) async {
@@ -535,6 +541,10 @@ final class MailIntakeController: ObservableObject {
             } else { states[account.email] = .failed(message(error)) }
         } catch {
             guard credentialRevisions[account.email] == revision else { return }
+            if let lookup = error as? CredentialLookupError, lookup.requiresAccess {
+                credentialAvailability[account.email] = .accessRequired; states[account.email] = .accessRequired
+                return
+            }
             if (error as? MailIntakeError) == .notConnected { credentialAvailability[account.email] = .missing }
             states[account.email] = .failed(message(error))
         }

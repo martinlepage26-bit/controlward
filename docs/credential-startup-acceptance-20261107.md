@@ -1,5 +1,9 @@
 # Credential access at startup
 
+The [November8 deadline and connection-binding repair](credential-wait-acceptance-20261108.md)
+extends this earlier work: background execution alone did not bound a blocked
+OS lookup. The focused entry now contains23 credential cases.
+
 The earlier installed233 normal launch timed out while macOS SecurityAgent was
 active. The exact blocking call was not identified. Source inspection found that
 connector/mail constructors queried Keychain presence synchronously without
