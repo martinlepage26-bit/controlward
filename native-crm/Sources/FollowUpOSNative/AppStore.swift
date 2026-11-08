@@ -33,6 +33,7 @@ final class AppStore: ObservableObject {
     private var credentialReadRevisions: [SyncTarget: UUID] = [:]
     private var credentialProbeIDs: [SyncTarget: UUID] = [:]
     private var credentialProbeTasks: [SyncTarget: Task<Void, Never>] = [:]
+    var credentialWaitLimit: Duration
     @Published private(set) var busyTargets: Set<SyncTarget> = []
     @Published private(set) var resendPreview: ResendSendPreview?
     @Published private(set) var resendFailure: String?
@@ -64,7 +65,8 @@ final class AppStore: ObservableObject {
     /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
     private var importedCSVFiles: [String: Date] = [:]
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview, researchRoot: URL? = nil, resendTransport: any HTTPTransport = ResendHTTPTransport(), resendConfig: ICPConfig? = nil) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview, researchRoot: URL? = nil, resendTransport: any HTTPTransport = ResendHTTPTransport(), resendConfig: ICPConfig? = nil, credentialWaitLimit: Duration = .seconds(30)) {
+        self.credentialWaitLimit = credentialWaitLimit
         self.storageURL = storageURL
         self.researchRoot = researchRoot ?? (storageURL.standardizedFileURL == StorageLocation.workspaceFile.standardizedFileURL
             ? LeadPipelineEnvironment.defaultRoot() : storageURL.deletingLastPathComponent().appendingPathComponent("leads", isDirectory: true))
@@ -313,11 +315,13 @@ final class AppStore: ObservableObject {
 
     private func startCredentialProbe(_ target: SyncTarget) {
         cancelCredentialProbe(target)
-        let reader = secrets, revision = credentialConfigurationRevisions[target], id = UUID()
+        let reader = secrets, revision = credentialConfigurationRevisions[target], id = UUID(), limit = credentialWaitLimit
         credentialProbeIDs[target] = id
         applyCredentialAvailability(.checking, for: target)
         credentialProbeTasks[target] = Task { [weak self] in
-            let value = await CredentialIO.perform { reader.availability(target) }
+            let value: CredentialAvailability
+            do { value = try await CredentialIO.read(timeout: limit) { reader.availability(target) } }
+            catch { value = .accessRequired }
             guard let self, !Task.isCancelled, self.credentialProbeIDs[target] == id,
                   self.credentialConfigurationRevisions[target] == revision else { return }
             self.applyCredentialAvailability(value, for: target)
@@ -383,12 +387,39 @@ final class AppStore: ObservableObject {
         workspace.connectorHealth[target.rawValue] = ConnectorHealth(ok: ok, detail: detail)
     }
 
+    private struct ConnectorRequestContext: Equatable, Sendable {
+        let credentialRevision: UUID?
+        let workspaceGeneration: UUID
+    }
+
+    private func requestContext(_ target: SyncTarget) -> ConnectorRequestContext {
+        ConnectorRequestContext(credentialRevision: credentialConfigurationRevisions[target], workspaceGeneration: workspace.researchGeneration)
+    }
+
+    private func connectionIsCurrent(_ target: SyncTarget, _ context: ConnectorRequestContext) -> Bool {
+        requestContext(target) == context
+    }
+
+    private func requireCurrentConnection(_ target: SyncTarget, _ context: ConnectorRequestContext) throws {
+        try Task.checkCancellation()
+        guard connectionIsCurrent(target, context) else { throw CredentialLookupError.superseded }
+    }
+
+    private func stoppedReadJob(_ original: SyncJob, detail: String? = nil) -> SyncJob {
+        var job = original
+        job.status = "cancelled"; job.detail = detail
+        job.error = "The connection or workspace changed, or the request was stopped. Existing records and saved progress were retained."
+        job.completedAt = Date.now.ISO8601Format()
+        if readImportJobs[job.target]?.id == job.id { readImportJobs[job.target] = job }
+        return job
+    }
+
     private func apiKey(for target: SyncTarget, userInitiated: Bool = true) async throws -> String {
         cancelCredentialProbe(target)
         let reader = secrets, configuration = credentialConfigurationRevisions[target], readID = UUID()
         credentialReadRevisions[target] = readID
         do {
-            let value = try await CredentialIO.read {
+            let value = try await CredentialIO.read(timeout: credentialWaitLimit) {
                 try userInitiated ? reader.read(target) : reader.readWithoutInteraction(target)
             }
             guard !Task.isCancelled, credentialConfigurationRevisions[target] == configuration,
@@ -399,10 +430,16 @@ final class AppStore: ObservableObject {
             }
             applyCredentialAvailability(.available, for: target)
             return key
-        } catch let error as SecretStoreError {
-            guard credentialConfigurationRevisions[target] == configuration,
+        } catch {
+            guard !Task.isCancelled,
+                  credentialConfigurationRevisions[target] == configuration,
                   credentialReadRevisions[target] == readID else { throw CredentialLookupError.superseded }
-            if case .keychain = error { applyCredentialAvailability(.accessRequired, for: target) }
+            if let lookup = error as? CredentialLookupError, lookup.requiresAccess {
+                applyCredentialAvailability(.accessRequired, for: target)
+            }
+            if let secret = error as? SecretStoreError, case .keychain = secret {
+                applyCredentialAvailability(.accessRequired, for: target)
+            }
             throw error
         }
     }
@@ -467,7 +504,8 @@ final class AppStore: ObservableObject {
             persist(message: "\(target.label) verified. The key is accepted.")
             return true
         } catch {
-            guard credentialConfigurationRevisions[target] == configuration, !(error is CredentialLookupError) else { return false }
+            guard credentialConfigurationRevisions[target] == configuration,
+                  (error as? CredentialLookupError) != .superseded else { return false }
             let reason = message(for: error)
             recordHealth(target, ok: false, detail: reason)
             Self.syncLog.error("verify target=\(target.rawValue, privacy: .public) failed")
@@ -491,6 +529,10 @@ final class AppStore: ObservableObject {
         let snapshot = exchange
         let key = ExchangeFingerprint.idempotencyKey(for: snapshot)
         var job = SyncJob(target: .pharos, status: "sending", idempotencyKey: key)
+        guard !busyTargets.contains(.pharos) else {
+            job.status = "failed"; job.error = "A PHAROS request is already running."
+            return job
+        }
         guard let preview = pharosPreviewFingerprint, preview == key, confirmedFingerprint == preview else {
             job.status = "failed"
             job.error = "Preview the current snapshot and confirm before pushing."
@@ -501,23 +543,37 @@ final class AppStore: ObservableObject {
         pharosPreviewFingerprint = nil
         workspace.syncJobs.insert(job, at: 0)
         busyTargets.insert(.pharos); defer { busyTargets.remove(.pharos) }
+        let context = requestContext(.pharos)
+        var issued = false
         do {
             let client = try await pharosClient()
+            try requireCurrentConnection(.pharos, context)
+            guard ExchangeFingerprint.idempotencyKey(for: exchange) == key else {
+                throw ControlWardError.invalid("The CRM snapshot changed during credential access. Preview and confirm the current snapshot before pushing.")
+            }
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-            let receipt = try await client.push(try encoder.encode(snapshot), idempotencyKey: key)
+            let payload = try encoder.encode(snapshot)
+            issued = true
+            let receipt = try await client.push(payload, idempotencyKey: key)
             job.status = "synced"
             job.detail = receipt.duplicate == true
                 ? "Already stored (same Idempotency-Key)."
                 : "Stored successfully."
-            recordHealth(.pharos, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)) stored by the backend.")
+            if connectionIsCurrent(.pharos, context) {
+                recordHealth(.pharos, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)) stored by the backend.")
+            } else { job.detail = (job.detail ?? "") + " This completed at the previous connection; the current connection was not verified." }
             Self.syncLog.notice("pharos push ok duplicate=\(receipt.duplicate == true, privacy: .public)")
         } catch {
-            job.status = "failed"
+            job.status = !issued && (error is CancellationError || (error as? CredentialLookupError) == .superseded) ? "cancelled" : "failed"
             job.error = message(for: error)
-            recordHealth(.pharos, ok: false, detail: job.error ?? "Push failed.")
+            if issued, connectionIsCurrent(.pharos, context) { recordHealth(.pharos, ok: false, detail: job.error ?? "Push failed.") }
             Self.syncLog.error("pharos push failed")
         }
         job.completedAt = Date.now.ISO8601Format()
+        guard workspace.researchGeneration == context.workspaceGeneration else {
+            showNotice("A PHAROS request finished for an earlier workspace. Check that request before pushing again.")
+            return job
+        }
         replace(&workspace.syncJobs, with: job)
         workspace.activity.insert(ActivityEvent(kind: "sync", message: job.status == "synced"
             ? "Pushed the exchange snapshot to the PHAROS backend. \(job.detail ?? "")"
@@ -611,12 +667,14 @@ final class AppStore: ObservableObject {
             }
             job.status = "synced"
             job.detail = "\(created) created, \(updated) updated."
-            recordHealth(.twenty, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            if credentialConfigurationRevisions[.twenty] == configuration {
+                recordHealth(.twenty, ok: true, detail: "Last push \(Date.now.formatted(date: .abbreviated, time: .shortened)): \(job.detail ?? "")")
+            } else { job.detail = (job.detail ?? "") + " This completed at the previous connection; the current connection was not verified." }
             Self.syncLog.notice("twenty push ok created=\(created, privacy: .public) updated=\(updated, privacy: .public)")
         } catch {
             job.status = "failed"
             job.error = "\(message(for: error)) Progress kept: \(created) created, \(updated) updated."
-            recordHealth(.twenty, ok: false, detail: message(for: error))
+            if credentialConfigurationRevisions[.twenty] == configuration { recordHealth(.twenty, ok: false, detail: message(for: error)) }
             Self.syncLog.error("twenty push failed created=\(created, privacy: .public) updated=\(updated, privacy: .public)")
         }
         twentyPreview = nil
@@ -646,9 +704,13 @@ final class AppStore: ObservableObject {
         }
         busyTargets.insert(.kairos); defer { busyTargets.remove(.kairos) }
         readImportJobs[.kairos] = job
+        let context = requestContext(.kairos)
         var created = 0, updated = 0, unchanged = 0, skipped = 0
         do {
-            let inbox = try await kairosClient().pullInbox()
+            let client = try await kairosClient()
+            try requireCurrentConnection(.kairos, context)
+            let inbox = try await client.pullInbox()
+            try requireCurrentConnection(.kairos, context)
             try commitWorkspace { next in
                 for conversation in inbox.conversations {
                     guard conversation.intent.lowercased() == "lead",
@@ -679,6 +741,8 @@ final class AppStore: ObservableObject {
             showNotice("Kairos import complete: \(job.detail ?? "")")
             Self.syncLog.notice("kairos import ok created=\(created) updated=\(updated) unchanged=\(unchanged) skipped=\(skipped)")
         } catch {
+            guard connectionIsCurrent(.kairos, context), !Task.isCancelled,
+                  (error as? CredentialLookupError) != .superseded else { return stoppedReadJob(job) }
             Self.syncLog.error("kairos import failed")
             return failedReadOnlyImport(job, error: error)
         }
@@ -695,12 +759,18 @@ final class AppStore: ObservableObject {
         busyTargets.insert(.kairos); defer { busyTargets.remove(.kairos) }
         let generation = kairosDiscoveryGeneration
         let researchGeneration = workspace.researchGeneration
+        let context = requestContext(.kairos)
         var job = SyncJob(target: .kairos, status: "sending", snapshotSchema: "kairos.discovery.v1")
+        readImportJobs[.kairos] = job
         do {
             let client = try await kairosClient()
+            try requireCurrentConnection(.kairos, context)
             let strategy = try await client.strategy()
+            try requireCurrentConnection(.kairos, context)
             let inbox = try await client.pullInbox()
+            try requireCurrentConnection(.kairos, context)
             let insights = try await client.insights()
+            try requireCurrentConnection(.kairos, context)
             guard generation == kairosDiscoveryGeneration, researchGeneration == workspace.researchGeneration else {
                 throw ControlWardError.invalid("The connection or workspace changed during refresh. Refresh the current connection again.")
             }
@@ -735,6 +805,8 @@ final class AppStore: ObservableObject {
             showNotice(job.detail ?? "KAIROS context saved.")
             return true
         } catch {
+            guard connectionIsCurrent(.kairos, context), !Task.isCancelled,
+                  (error as? CredentialLookupError) != .superseded else { _ = stoppedReadJob(job); return false }
             _ = failedReadOnlyImport(job, error: error)
             return false
         }
@@ -858,23 +930,27 @@ final class AppStore: ObservableObject {
         readImportJobs[.leadgen] = job
         busyTargets.insert(.leadgen); defer { busyTargets.remove(.leadgen) }
         var counts = LeadPullCounts()
+        let context = requestContext(.pharos)
+        func requireCurrentPull() throws {
+            try requireCurrentConnection(.pharos, context)
+            guard !((!userInitiated || requiresAutoPilot) && !workspace.autoPilotEnabled) else { throw CancellationError() }
+        }
         do {
             let client = try await pharosClient(userInitiated: userInitiated)
-            // The owner can stop Auto-Pilot while credential I/O is pending.
-            guard !Task.isCancelled, !((!userInitiated || requiresAutoPilot) && !workspace.autoPilotEnabled) else {
-                job.status = "cancelled"
-                readImportJobs[.leadgen] = job
-                return job
-            }
+            try requireCurrentPull()
             var cursor = workspace.leadInboxCursor ?? 0
             for _ in 0..<Self.maxInboxPages {
+                try requireCurrentPull()
                 var page = try await client.pullLeads(since: cursor)
+                try requireCurrentPull()
                 var resetCursor = false
                 // A recreated inbox restarts its sequence; a cursor from the old one would skip every new lead.
                 if let epoch = page.epoch, let known = workspace.leadInboxEpoch, epoch != known, cursor != 0 {
                     cursor = 0
                     resetCursor = true
+                    try requireCurrentPull()
                     page = try await client.pullLeads(since: 0)
+                    try requireCurrentPull()
                 }
                 var committedCounts = counts
                 // Publish the page and epoch only after the complete candidate is durable.
@@ -886,11 +962,14 @@ final class AppStore: ObservableObject {
                 }
                 counts = committedCounts
                 if page.leads.isEmpty { break }
+                try requireCurrentPull()
                 counts.acked += try await client.ackLeads(page.leads).acked
+                try requireCurrentPull()
                 cursor = page.cursor
                 try commitWorkspace { $0.leadInboxCursor = cursor }
                 if !page.hasMore { break }
             }
+            try requireCurrentPull()
             job.status = "synced"
             job.detail = counts.summary
             job.completedAt = Date.now.ISO8601Format()
@@ -904,6 +983,9 @@ final class AppStore: ObservableObject {
             showNotice(counts.total == 0 ? "No new leads in the PHAROS inbox." : "Pulled leads: \(counts.summary)")
             logSync("lead pull ok created=\(counts.created) updated=\(counts.updated) unchanged=\(counts.unchanged) skipped=\(counts.skipped) acked=\(counts.acked)")
         } catch {
+            guard connectionIsCurrent(.pharos, context), !Task.isCancelled,
+                  (error as? CredentialLookupError) != .superseded,
+                  !((!userInitiated || requiresAutoPilot) && !workspace.autoPilotEnabled) else { return stoppedReadJob(job, detail: counts.summary) }
             job.status = "failed"
             job.detail = nil
             job.error = "\(message(for: error)) Progress kept: \(counts.summary)"
@@ -1072,9 +1154,16 @@ final class AppStore: ObservableObject {
         }
         busyTargets.insert(.gaps); defer { busyTargets.remove(.gaps) }
         readImportJobs[.gaps] = job
+        let context = requestContext(.gaps)
         var created = 0, updated = 0, unchanged = 0, retired = 0
         do {
-            let clusters = try await gapClient().activeClusters()
+            let client = try await gapClient()
+            try requireCurrentConnection(.gaps, context)
+            let clusters = try await client.activeClusters { [weak self] in
+                guard let self else { throw CredentialLookupError.superseded }
+                try await self.requireCurrentConnection(.gaps, context)
+            }
+            try requireCurrentConnection(.gaps, context)
             try commitWorkspace { next in
                 for cluster in clusters {
                     switch Self.applyGap(cluster, to: &next) {
@@ -1096,6 +1185,8 @@ final class AppStore: ObservableObject {
             showNotice("Market gaps: \(job.detail ?? "")")
             logSync("gap import ok created=\(created) updated=\(updated) unchanged=\(unchanged) retired=\(retired)")
         } catch {
+            guard connectionIsCurrent(.gaps, context), !Task.isCancelled,
+                  (error as? CredentialLookupError) != .superseded else { return stoppedReadJob(job) }
             logSync("gap import failed", error: true)
             return failedReadOnlyImport(job, error: error)
         }
@@ -1668,7 +1759,9 @@ final class AppStore: ObservableObject {
 
     /// One-time, user-selected import of the pre-sandbox `native-crm/data/workspace.json`.
     func importLegacyWorkspace(from legacy: URL) throws {
-        guard !busyTargets.contains(.resend), pendingResendReceipt == nil else { throw ControlWardError.invalid("Finish the Resend request and save its receipt before importing another workspace.") }
+        guard busyTargets.isEmpty, activeResearch.isEmpty, pendingResendReceipt == nil else {
+            throw ControlWardError.invalid("Finish running research and integrations and save any pending receipt before importing another workspace.")
+        }
         let outcome = try WorkspaceMigration.migrateLegacy(from: legacy, to: storageURL)
         let loaded = Self.load(from: storageURL)
         workspace = loaded.workspace
