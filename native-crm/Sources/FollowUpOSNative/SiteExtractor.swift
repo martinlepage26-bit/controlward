@@ -130,9 +130,11 @@ enum SiteExtractor {
                              "dentiste", "médecin", "physiothérapeute", "pharmacien", "pharmacienne", "chef", "responsable", "coordonnateur",
                              "coordonnatrice", "vice-président", "vice-présidente", "ceo", "coo", "cto", "dg", "chief"]
 
+    private static let personNamePattern = "((?:Dr\\.? |Dre |Me )?[A-ZÀ-Ý][a-zà-ÿ'’]+(?:-[A-ZÀ-Ý][a-zà-ÿ'’]+)?(?: [A-ZÀ-Ý][a-zà-ÿ'’]+(?:-[A-ZÀ-Ý][a-zà-ÿ'’]+)?){1,2})"
+
     /// "Prénom Nom, Titre", "Prénom Nom – Titre", "Titre : Prénom Nom" or "Dr Prénom Nom" followed by a title line.
     static func people(in text: String) -> [Person] {
-        let name = "((?:Dr\\.? |Dre |Me )?[A-ZÀ-Ý][a-zà-ÿ'’]+(?:-[A-ZÀ-Ý][a-zà-ÿ'’]+)?(?: [A-ZÀ-Ý][a-zà-ÿ'’]+(?:-[A-ZÀ-Ý][a-zà-ÿ'’]+)?){1,2})"
+        let name = personNamePattern
         var found: [Person] = []
         let lines = text.components(separatedBy: "\n")
         for (index, line) in lines.enumerated() where line.count <= 160 {
@@ -149,6 +151,25 @@ enum SiteExtractor {
         }
         var seen = Set<String>()
         return found.filter { seen.insert($0.name.lowercased()).inserted }
+    }
+
+    /// Some own-site notices explicitly identify the company's privacy officer and executive title
+    /// in a sentence. Require the exact researched organisation and a current executive role;
+    /// do not infer that a privacy officer is an executive, or that a client belongs to this business.
+    static func declaredExecutives(in text: String, organisation: String) -> [Person] {
+        guard !organisation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        let company = NSRegularExpression.escapedPattern(for: organisation)
+        let prefix = "(?i:Le responsable de la protection des renseignements personnels chez \(company) est )"
+        let pattern = "^\(prefix)\(personNamePattern)\\s*,\\s*([^.!?;\\n]{3,80})(?:\\.|$)"
+        let executive = #"(?i)\b(?:président|présidente|president|fondateur|fondatrice|founder|CEO|directeur général|directrice générale)\b"#
+        let former = #"(?i)\b(?:ancien|ancienne|former|retired)\b|\bex[- ]"#
+        return text.components(separatedBy: .newlines).filter { $0.count <= 500 }.flatMap { line in
+            capturePairs(line, pattern).compactMap { name, title in
+                guard title.range(of: executive, options: .regularExpression) != nil,
+                      title.range(of: former, options: .regularExpression) == nil else { return nil }
+                return Person(name: clean(name), title: title.trimmingCharacters(in: .whitespaces))
+            }
+        }
     }
 
     static func isTitle(_ text: String) -> Bool {
