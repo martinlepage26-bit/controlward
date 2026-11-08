@@ -14,6 +14,17 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        if CommandLine.arguments.dropFirst() == ["--mail-leads"] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-mail-lead-tests-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            try ControlWardTests.mailLeadReview(root)
+            print("Mail-to-lead review tests: \(ControlWardTests.count) assertions passed")
+            return
+        }
+        if CommandLine.arguments.dropFirst() == ["--quickscan-research"] {
+            guard await QuickScanResearchTests.run() else { throw SmokeTestFailure.failed("Quick Scan website research tests failed") }
+            return
+        }
         if CommandLine.arguments.dropFirst() == ["--resend"] {
             guard await ResendTests.run() else { throw SmokeTestFailure.failed("Resend tests failed") }; return
         }

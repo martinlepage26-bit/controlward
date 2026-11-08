@@ -123,10 +123,91 @@ enum ControlWardTests {
             try expect(hygiene.exposureFindings.count == 1 && hygiene.exposureFindings[0].resolved, "rescan discarded the operator resolution")
             let reopenedHygiene = AppStore(storageURL: hygiene.storageURL, secrets: InMemorySecretStore())
             try expect(reopenedHygiene.exposureFindings == hygiene.exposureFindings && reopenedHygiene.tasks.map(\.id) == taskIDs, "security decisions did not survive reopen")
+            try mailLeadReview(root.appendingPathComponent("mail-leads"))
             try BackupIdentityTests.run()
             print("ControlWard workflow tests: \(count) assertions passed")
             return true
         } catch { print("FAIL ControlWard workflow tests: \(error)"); return false }
+    }
+
+    static func mailLeadReview(_ root: URL) throws {
+        let store = AppStore(storageURL: root.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore())
+        store.createWorkspace(name: "Synthetic mail-to-lead acceptance", industry: "Consulting")
+        var company = Company(); company.name = "Synthetic Studio"
+        var contact = Contact(); contact.firstName = "Camille"; contact.email = "camille@example.test"; contact.companyID = company.id
+        var lead = Lead.blank(); lead.name = "Camille Example"; lead.email = "studio@example.test"
+        lead.companyID = company.id; lead.contactID = contact.id; lead.nextFollowUp = "2026-11-09"
+        lead.outreachDraft = "Saved unsent draft"; lead.notes = "Private notes stay private"
+        var opportunity = Opportunity(); opportunity.name = "Synthetic unsent review"; opportunity.leadID = lead.id
+        opportunity.companyID = company.id; opportunity.contactID = contact.id
+        var task = CRMTask(); task.title = "Existing owner next action"; task.details = "Keep this wording"
+        task.leadID = lead.id; task.contactID = contact.id; task.companyID = company.id; task.opportunityID = opportunity.id
+        task.dueDate = lead.nextFollowUp; task.reminderAt = "2026-11-09T14:00:00Z"; lead.followUpTaskID = task.id
+        var other = Lead.blank(); other.name = "Different record"; other.email = "other@example.test"
+        var mail = MailMetadata(sourceID: "gmail:synthetic-received", subject: "Synthetic incoming review", sender: "Camille <CAMILLE@example.test>", recipient: "owner@example.test", receivedAt: "2026-11-08T12:00:00Z", provider: "gmail", accountID: "owner@example.test", synthetic: true)
+        try store.commitWorkspace { w in
+            w.leads = [lead, other]; w.companies = [company]; w.contacts = [contact]
+            w.opportunities = [opportunity]; w.tasks = [task]; w.controlWard.mail = [mail]
+        }
+        let baseline = store.workspace
+        try expect(store.mailLeadMatches(mail).map(\.id) == [lead.id], "linked-contact address should suggest the existing lead")
+        try expect(store.workspace == baseline, "suggestions changed the workspace")
+        var shared = other; shared.email = lead.email; _ = store.update(shared)
+        var sharedMail = mail; sharedMail.sender = "studio@example.test"
+        try expect(store.mailLeadMatches(sharedMail).count == 2, "shared business routes must retain ambiguity")
+        for sender in ["Name only", "studio@lookalike.example.test", "studio@example.test, other@example.test", "ml@pharos-ai.ca", "owner@example.test"] {
+            var candidate = mail; candidate.sender = sender
+            try expect(store.mailLeadMatches(candidate).isEmpty, "unsafe, owner or nonmatching sender suggestion: \(sender)")
+        }
+        let beforeInvalid = store.workspace
+        try rejects("missing lead accepted") { try store.reviewMail(mail.id, reviewed: true, contactID: nil, companyID: nil, leadID: UUID()) }
+        try rejects("conflicting contact accepted") { try store.reviewMail(mail.id, reviewed: true, contactID: UUID(), companyID: nil, leadID: lead.id) }
+        try expect(store.workspace == beforeInvalid, "rejected association partially saved")
+        try store.reviewMail(mail.id, reviewed: true, contactID: nil, companyID: nil, leadID: lead.id)
+        try expect(store.mail[0].leadID == lead.id && store.mail[0].contactID == contact.id && store.mail[0].companyID == company.id, "review did not use the lead's existing relationships")
+        try expect(store.leads.first { $0.id == lead.id } == lead && store.workspace.resendDispatches.isEmpty, "association changed lead context, history, dates or send state")
+        try expect(try store.createMailTask(mail.id) == task.id && store.tasks == [task], "mail review duplicated or rewrote the existing next action")
+        try expect(try store.createMailTask(mail.id) == task.id && store.tasks.count == 1, "repeated next-action link duplicated work")
+        let beforeConflict = store.workspace
+        try rejects("mail task reassigned to another lead") { try store.reviewMail(mail.id, reviewed: true, contactID: nil, companyID: nil, leadID: other.id) }
+        try expect(store.workspace == beforeConflict, "task ownership conflict changed data")
+        var incoming = mail; incoming.subject = "Refreshed metadata"; incoming.leadID = other.id
+        _ = try store.mergeMail([incoming], activity: "Synthetic metadata refresh")
+        try expect(store.mail[0].leadID == lead.id && store.mail[0].taskID == task.id && store.mail[0].reviewed, "refresh overwrote the owner association or task receipt")
+        try store.completeTask(task.id, completed: true)
+        let completed = store.tasks[0]
+        try expect(try store.createMailTask(mail.id) == task.id && store.tasks[0] == completed, "mail retry revived completed next-action work")
+        let saved = store.workspace
+        let reopened = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore())
+        try expect(reopened.workspace.controlWard.mail == saved.controlWard.mail && reopened.leads == saved.leads && reopened.tasks == saved.tasks, "mail association and lead work did not survive reopen")
+        // Upstream JSON is untrusted metadata, not permission to set local CRM associations.
+        var file = try JSONSerialization.jsonObject(with: metadata(source: "untrusted-local-links")) as! [String: Any]
+        var rows = file["messages"] as! [[String: Any]]; rows[0]["leadID"] = lead.id.uuidString; rows[0]["lead_id"] = lead.id.uuidString; file["messages"] = rows
+        let imported = try MailMetadataImport.decode(JSONSerialization.data(withJSONObject: file))
+        try expect(imported[0].leadID == nil, "metadata import supplied a local lead association")
+        var legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(mail)) as! [String: Any]; legacy.removeValue(forKey: "leadID")
+        try expect(try JSONDecoder().decode(MailMetadata.self, from: JSONSerialization.data(withJSONObject: legacy)).leadID == nil, "older metadata no longer decodes")
+        // A lead without an existing action gets one, with the already recorded date and links.
+        var fresh = Lead.blank(); fresh.name = "New review"; fresh.nextFollowUp = "2026-11-10"
+        _ = store.add(fresh)
+        var second = mail; second.id = UUID(); second.sourceID = "gmail:second"; second.taskID = nil; second.leadID = nil
+        _ = try store.mergeMail([second], activity: "Synthetic second message")
+        try store.reviewMail(second.id, reviewed: true, contactID: nil, companyID: nil, leadID: fresh.id)
+        let newTaskID = try store.createMailTask(second.id)
+        try expect(store.tasks.first { $0.id == newTaskID }?.leadID == fresh.id && store.tasks.first { $0.id == newTaskID }?.dueDate == fresh.nextFollowUp, "new lead action lost its relationship or existing date")
+        try expect(store.leads.first { $0.id == fresh.id }?.followUpTaskID == newTaskID, "new action is detached from the Pipeline next action")
+        _ = store.delete(store.tasks.first { $0.id == newTaskID }!)
+        try rejects("deleted mail task recreated") { _ = try store.createMailTask(second.id) }
+        var closed = Lead.blank(); closed.name = "Closed record"; closed.status = .lost; _ = store.add(closed)
+        var closedMail = mail; closedMail.id = UUID(); closedMail.sourceID = "gmail:closed"; closedMail.taskID = nil; closedMail.leadID = nil
+        _ = try store.mergeMail([closedMail], activity: "Synthetic closed record")
+        try store.reviewMail(closedMail.id, reviewed: true, contactID: nil, companyID: nil, leadID: closed.id)
+        let closedBefore = store.workspace
+        try rejects("closed lead silently reopened") { _ = try store.createMailTask(closedMail.id) }
+        try expect(store.workspace == closedBefore, "closed-lead refusal changed records")
+        _ = store.delete(store.leads.first { $0.id == lead.id }!)
+        try expect(store.mail.first { $0.id == mail.id }?.leadID == nil && store.mail.first { $0.id == mail.id }?.taskID == task.id, "lead deletion left a dangling association or lost a task receipt")
+        mail.leadID = nil
     }
 }
 

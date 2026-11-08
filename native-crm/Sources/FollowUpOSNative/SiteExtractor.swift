@@ -161,12 +161,13 @@ enum SiteExtractor {
         let company = NSRegularExpression.escapedPattern(for: organisation)
         let prefix = "(?i:Le responsable de la protection des renseignements personnels chez \(company) est )"
         let pattern = "^\(prefix)\(personNamePattern)\\s*,\\s*([^.!?;\\n]{3,80})(?:\\.|$)"
-        let executive = #"(?i)\b(?:président|présidente|president|fondateur|fondatrice|founder|CEO|directeur général|directrice générale)\b"#
-        let former = #"(?i)\b(?:ancien|ancienne|former|retired)\b|\bex[- ]"#
+        // The whole title must consist of affirmative roles, not merely contain a role word.
+        // This also withholds e.g. "not CEO", "future CEO" and "CEO starting next year".
+        let role = #"(?:(?:co[- ]?|vice[- ]?)?(?:président(?:e)?|president|fondateur|fondatrice|founder)|CEO|directeur général|directrice générale)"#
+        let executive = "(?i)^\\s*\(role)(?:(?:\\s*[,/&-]\\s*|\\s+(?:(?:et|and)\\s+)?)\(role))*\\s*$"
         return text.components(separatedBy: .newlines).filter { $0.count <= 500 }.flatMap { line in
             capturePairs(line, pattern).compactMap { name, title in
-                guard title.range(of: executive, options: .regularExpression) != nil,
-                      title.range(of: former, options: .regularExpression) == nil else { return nil }
+                guard title.range(of: executive, options: .regularExpression) != nil else { return nil }
                 return Person(name: clean(name), title: title.trimmingCharacters(in: .whitespaces))
             }
         }

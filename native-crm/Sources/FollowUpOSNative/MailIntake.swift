@@ -358,6 +358,7 @@ extension AppStore {
                     let previous = next.controlWard.mail[index]
                     updated.id = previous.id; updated.reviewed = previous.reviewed
                     updated.contactID = previous.contactID; updated.companyID = previous.companyID; updated.taskID = previous.taskID
+                    updated.leadID = previous.leadID
                     next.controlWard.mail[index] = updated
                 } else { next.controlWard.mail.append(message); count += 1 }
             }

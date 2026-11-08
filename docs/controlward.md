@@ -9,7 +9,7 @@ system's records and authority explicit.
 | --- | --- |
 | Overview | Search across local records, due tasks with completion actions, review queues and compact activity/context |
 | Projects | Full bundled Project Control dashboard, persistent module state, native JSON import/export, explicit intake bridge |
-| Email | Hosted Email Aggregator plus a local metadata review inbox, search, review state, contact/company links and deduplicated tasks |
+| Email | Hosted Email Aggregator plus a local metadata review inbox, search, review state, reviewed lead/contact/company links and existing next-action reuse |
 | Activity | Filter/search local activity, export visible events and inspect confirmed project capture receipts |
 | Pipeline | Due-only filtering, keyboard-openable leads, project links and readable scrolling opportunity stages |
 | Operations | Search signals, include retired evidence explicitly, and link/capture active signals for project review |
@@ -34,7 +34,9 @@ the confirmed preview is saved, and existing links are never overwritten. The fo
 action and carries the local reminder. Its date and the lead's next follow-up stay the same in both directions,
 and a won or lost lead closes it. The local draft states only recorded facts and lists them, along with what is
 unknown. Apple Intelligence may only rephrase it, and its text is replaced by the local draft when it adds
-contact, a conversation, a quote or a number that is not recorded. Nothing is sent from ControlWard. Pipeline totals count owner-entered values only, and a converted lead counts once,
+contact, a conversation, a quote or a number that is not recorded. Lead outreach uses Resend from
+ml@pharos-ai.ca after review of the exact recipient and message. A provider receipt is required before
+sent history is added, and the existing privacy gate still applies. Pipeline totals count owner-entered values only, and a converted lead counts once,
 through its opportunity. Status and evidence: [promise-status-20261105.md](promise-status-20261105.md).
 
 ## Project record links and capture
@@ -68,6 +70,22 @@ fetches the body when a message is opened and does not write it back. Source/acc
 review decisions and local links survive a refresh. A task action keeps one task
 per message, including after completion; a deleted task receipt is not silently
 revived. Synthetic mail capture is restricted to loopback test registers.
+
+The local review inbox suggests existing leads only from an exact sender email
+address already recorded on the lead or its linked contact. Shared addresses show
+all matching records; names, domains, subjects and body text do not decide a match.
+Suggestions save nothing. Select a lead, review its existing relationships, then
+choose **Save review**. The association does not authenticate the sender or prove
+that a message is a reply or a buying enquiry. It leaves lead status, drafts,
+sent history and follow-up dates unchanged.
+
+After saving the association, **Use lead next action** reuses that lead's existing
+task. Completion and deletion receipts are retained. When an open lead has no next
+action and no other open task, one review task is created with its existing date;
+an unset date remains unset. Existing work is never silently relinked. **Open lead
+and draft** opens Pipeline editing, including date changes that keep the next
+action in sync. Linked metadata is visible in that lead's editor; message bodies
+remain in the mailbox. Import refresh and normal reopen retain the association.
 
 Example (synthetic data only):
 

@@ -32,6 +32,8 @@ struct MailMetadata: Codable, Equatable, Identifiable, Sendable {
     var contactID: UUID?
     var companyID: UUID?
     var taskID: UUID?
+    /// Owner-reviewed association only; metadata imports never supply this local CRM identity.
+    var leadID: UUID?
 
     static func sourceIdentity(account: String, message: String, synthetic: Bool) -> String {
         // Preserve the Email Aggregator adapter's UUID pair contract. Arbitrary

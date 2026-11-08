@@ -129,6 +129,8 @@ struct LeadEditorView: View {
                         .padding(12).background(CRMTheme.paper, in: RoundedRectangle(cornerRadius: 8))
                     }
 
+                    if !isNew { LeadMailContextView(leadID: draft.id) }
+
                     if let incoming = draft.sourceMessage, !incoming.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             SectionLabel(text: "Latest incoming message")
