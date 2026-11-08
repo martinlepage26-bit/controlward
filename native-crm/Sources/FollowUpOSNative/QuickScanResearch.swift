@@ -39,6 +39,7 @@ struct PublishedContactEvidence: Codable, Equatable, Sendable {
     var evidence: FactEvidence
 
     func isSupported(in record: ProspectRecord) -> Bool {
+        if kind == .phone && PublishedPhoneRules.key(value) == nil { return false }
         guard let domain = record.businessDomain, let host = URL(string: evidence.url)?.host,
               HostMatch.belongs(host, to: domain), ProspectResearcher.isEvidenced(evidence, in: record.snapshots) else { return false }
         if SiteExtractor.normalizePrintedEmail(evidence.excerpt).range(of: value, options: .caseInsensitive) != nil { return true }
@@ -55,6 +56,8 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
     var checkedAt: Date
     /// Optional so findings from earlier releases remain readable; revised research is rechecked.
     var researchVersion: Int?
+    /// The requested page, distinct from a discovered evidence page or a business's host identity.
+    var requestedURL: String?
     var aiUse: [FactEvidence] = []
     var contacts: [PublishedContactEvidence] = []
     var issues: [String] = []
@@ -65,20 +68,51 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
     }
 
     var email: String? {
-        contacts.first {
-            $0.kind == .email && $0.isSupported(in: record)
-        }?.value
+        supportedContacts.first { $0.kind == .email }?.value
+    }
+
+    var supportedContacts: [PublishedContactEvidence] {
+        var seen = Set<String>()
+        return contacts.filter { item in
+            guard item.isSupported(in: record) else { return false }
+            guard let key = item.kind == .phone ? PublishedPhoneRules.key(item.value) : MailAddress.bare(item.value) else { return false }
+            return seen.insert(item.kind.rawValue + ":" + key).inserted
+        }
+    }
+
+    /// Reuse is bounded by the actual requested URL, parser version, age and local calendar day.
+    /// Missing provenance from an older result causes a recheck rather than an assumed match.
+    func canReuse(for url: String, organisation: String? = nil, now: Date, calendar: Calendar = .current) -> Bool {
+        guard complete, researchVersion == QuickScanResearcher.version,
+              let requestedURL, Self.requestKey(requestedURL) == Self.requestKey(url),
+              Self.requestKey(url) != nil,
+              now.timeIntervalSince(checkedAt) >= -0.001, now.timeIntervalSince(checkedAt) < 3600,
+              calendar.isDate(now, inSameDayAs: checkedAt) else { return false }
+        if let organisation, record.organisation.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(organisation.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame { return false }
+        return true
+    }
+
+    private static func requestKey(_ raw: String) -> String? {
+        guard var value = URLComponents(string: raw), let scheme = value.scheme?.lowercased(),
+              ["https", "http"].contains(scheme), let host = value.host?.lowercased(),
+              value.user == nil, value.password == nil else { return nil }
+        value.scheme = scheme; value.host = host; value.fragment = nil
+        if value.path.isEmpty { value.path = "/" }
+        if (scheme == "https" && value.port == 443) || (scheme == "http" && value.port == 80) { value.port = nil }
+        return value.string
     }
 
     var lines: [String] {
         var out = ["Website research checked: \(ISODates.string(checkedAt))",
                    hasAIUseEvidence ? "AI use: own-business statement found." : "AI use: not established from the pages checked."]
         for item in aiUse { out.append("AI evidence: « \(item.excerpt) » — \(item.url)") }
-        for item in contacts {
+        for item in supportedContacts {
             out.append("Published \(item.kind.rawValue): \(item.value) — \(item.evidence.url)")
             out.append("Contact evidence: \(item.evidence.excerpt)")
         }
-        if contacts.isEmpty { out.append("Contact: no supported public route found on the checked website.") }
+        if supportedContacts.isEmpty { out.append("Contact: no supported public route found on the checked website.") }
+        let withheldPhones = contacts.filter { $0.kind == .phone && PublishedPhoneRules.key($0.value) == nil }.count
+        if withheldPhones > 0 { out.append("\(withheldPhones) phone candidate(s) withheld: incomplete, malformed or in the North American fictional-number range. Original source evidence is retained.") }
         if let person = record.contact { out.append("Named person: \(person.name), \(person.title ?? "title unknown") — \(person.sourceURL ?? "")") }
         out.append("Published contact details have source evidence; mailbox deliverability and recipient identity are not confirmed.")
         out.append("Buying intent: unknown.")
@@ -95,6 +129,7 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 
     func draftAssessment(config: ICPConfig, suppression: SuppressionList, now: Date) -> (draft: OutreachDraft?, reason: String?) {
         guard complete else { return (nil, "Website research is incomplete.") }
+        guard researchVersion == QuickScanResearcher.version else { return (nil, "Recheck this website with the current research version before using its cold-outreach draft. Saved text is retained.") }
         guard hasAIUseEvidence, let citation = aiUse.first else { return (nil, "Actual AI use is not established from the checked pages.") }
         guard record.status == .ready else { return (nil, "Qualification: " + record.reasons.joined(separator: "; ")) }
         let greeting = record.contact?.name.split(separator: " ").first.map(String.init) ?? ""
@@ -127,7 +162,7 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 /// Runs after map discovery, through the same public-site transport and policy as the existing lead pipeline.
 /// The page budget, robots rules, host exclusions, pacing and cancellation remain enforced.
 struct QuickScanResearcher: Sendable {
-    static let version = 3
+    static let version = 4
     let config: ICPConfig
     let transport: GuardedLeadTransport
     let clock: any LeadClock
@@ -145,6 +180,7 @@ struct QuickScanResearcher: Sendable {
             return result
         }
         let domain = HostMatch.registrable(host)
+        result.requestedURL = root.absoluteString
         let fetched = await crawl(root: root, domain: domain)
         var pages = fetched.0
         let issues = fetched.1
@@ -152,6 +188,8 @@ struct QuickScanResearcher: Sendable {
             pages[index].people += SiteExtractor.declaredExecutives(in: pages[index].claimText, organisation: candidate.name)
         }
         result.issues = issues
+        let rejectedPhones = Set(pages.flatMap(\.phoneCandidates).filter { PublishedPhoneRules.key($0) == nil }).count
+        if rejectedPhones > 0 { result.issues.append("\(rejectedPhones) phone candidate(s) withheld: incomplete, malformed or in the North American fictional-number range. No number was guessed or dialled.") }
         result.complete = !Task.isCancelled
         guard !pages.isEmpty else { result.complete = false; return result }
         var record = ProspectSearchRun.prospect(from: candidate, pages: pages, domain: domain, segment: segment, config: config, runID: UUID().uuidString.lowercased())
@@ -241,7 +279,8 @@ struct QuickScanResearcher: Sendable {
             }
         }
         for page in pages {
-            for phone in page.phones where seen.insert("phone:" + phone).inserted {
+            for phone in page.phones {
+                guard let key = PublishedPhoneRules.key(phone), seen.insert("phone:" + key).inserted else { continue }
                 let line = page.text.components(separatedBy: .newlines).first { $0.contains(phone) }
                     ?? page.links.first { $0 == "tel:" + phone }
                 if let line { out.append(PublishedContactEvidence(kind: .phone, value: phone, evidence: FactEvidence(url: page.url, excerpt: line))) }
@@ -269,7 +308,7 @@ struct QuickScanResearcher: Sendable {
                 }
                 let page = SiteExtractor.read(html: String(decoding: response.body, as: UTF8.self), url: response.url ?? url, fetchedAt: response.fetchedAt)
                 pages.append(page)
-                transport.registerSensitive(page.emails + page.phones + page.people.map(\.name))
+                transport.registerSensitive(page.emails + page.phones + page.phoneCandidates + page.people.map(\.name))
                 for link in page.links {
                     guard var parts = URLComponents(string: link), let host = parts.host,
                           HostMatch.belongs(host, to: domain), ["https", "http"].contains(parts.scheme ?? ""),

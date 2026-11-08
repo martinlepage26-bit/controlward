@@ -93,7 +93,7 @@ swiftc -D CONTEXTWARD_ACCEPTANCE -parse-as-library -swift-version 6 \
   "${PROJECT_ROOT}/native-crm/Tests/NativeSmokeTests.swift" \
   -o "${TEST_BINARY}"
 
-if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos || "${1:-}" == --connected-gaps || "${1:-}" == --discovery-intelligence || "${1:-}" == --credential-access || "${1:-}" == --resend || "${1:-}" == --mail-leads || "${1:-}" == --mail-control || "${1:-}" == --quickscan-research ]]; then
+if [[ "${1:-}" == --connected-pharos || "${1:-}" == --connected-twenty || "${1:-}" == --connected-kairos || "${1:-}" == --connected-gaps || "${1:-}" == --discovery-intelligence || "${1:-}" == --credential-access || "${1:-}" == --resend || "${1:-}" == --mail-leads || "${1:-}" == --mail-control || "${1:-}" == --quickscan-research || "${1:-}" == --agent-research ]]; then
   "${TEST_BINARY}" "$@"
   exit
 fi

@@ -15,7 +15,7 @@ struct DiscoveryBusiness: Identifiable, Sendable {
     }
     var supportedContacts: [PublishedContactEvidence] {
         guard verifiedWebsite, let research else { return [] }
-        return research.contacts.filter { $0.isSupported(in: research.record) }
+        return research.supportedContacts
     }
 }
 

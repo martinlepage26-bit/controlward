@@ -53,6 +53,8 @@ struct AgentResearchOutcome: Codable, Equatable, Sendable {
         var contactFound: Bool
         var leadID: UUID?
         var issues: [String]
+        /// nil means an older outcome did not record whether it fetched or reused research.
+        var reusedResearch: Bool?
     }
     var id: UUID
     var batchID: UUID
@@ -203,7 +205,10 @@ final class AgentResearchCoordinator: ObservableObject {
                     recent = Array(recent.prefix(20))
                     running = false; work = nil
                     let ready = outcome.entries.filter { $0.leadID != nil }.count
-                    summary = "Last request: \(outcome.entries.count) websites checked; \(ready) draft(s) ready in Pipeline. \(outcome.message)"
+                    let cached = outcome.entries.filter { $0.reusedResearch == true }.count
+                    let fresh = outcome.entries.filter { $0.reusedResearch == false }.count
+                    let provenance = cached + fresh == outcome.entries.count ? "\(fresh) fresh attempts, \(cached) cache reuses" : "fetch/cache provenance not recorded"
+                    summary = "Last request: \(outcome.entries.count) websites reviewed (\(provenance)); \(ready) draft(s) ready in Pipeline. \(outcome.message)"
                     if cancelledByOwner { return }
                 } catch {
                     // A malformed filename never becomes an output path supplied by a request.
@@ -246,16 +251,20 @@ final class AgentResearchCoordinator: ObservableObject {
                 summary = "Agent research: \(candidate.name). Checking own-site contact and AI-use evidence."
                 let source = LeadCandidate(osmID: candidate.sourceID, name: candidate.name, website: candidate.website, tags: [], city: nil,
                                            latitude: 0, longitude: 0, discoveredVia: candidate.sourceURL)
-                let result: QuickScanResearchResult
-                if let saved = cache.results[candidate.sourceID], saved.complete, saved.researchVersion == QuickScanResearcher.version,
-                   // ISO storage rounds to milliseconds; allow only that rounding interval into the future.
-                   clock.now.timeIntervalSince(saved.checkedAt) >= -0.001, clock.now.timeIntervalSince(saved.checkedAt) < 3600 {
-                    result = saved
-                } else { result = await researcher.research(source, segmentID: segment.id) }
+                let observation: QuickScanResearchResult
+                let reused: Bool
+                if let saved = cache.results[candidate.sourceID], let url = candidate.website,
+                   saved.canReuse(for: url, organisation: candidate.name, now: clock.now) {
+                    observation = saved
+                    reused = true
+                } else { observation = await researcher.research(source, segmentID: segment.id); reused = false }
                 // Load before merging so a manual research run completed during this fetch is retained too.
                 guard store.workspace.researchGeneration == generation else { throw AgentResearchError.invalidRequest }
-                try store.recordWebsiteResearch(candidate, result: result)
+                try store.recordWebsiteResearch(candidate, result: observation)
                 cache = store.websiteResearch
+                guard let result = cache.results[candidate.sourceID], result.record.id == "cw:" + candidate.sourceID else {
+                    throw GTMError.invalid("The current saved research could not be resolved. No draft was published.")
+                }
                 var leadID: UUID?
                 let assessment = result.draftAssessment(config: config, suppression: store.suppressionList, now: clock.now)
                 if assessment.draft != nil {
@@ -264,7 +273,7 @@ final class AgentResearchCoordinator: ObservableObject {
                 }
                 outcome.entries.append(.init(sourceID: candidate.sourceID, business: candidate.name, aiEvidenceFound: result.hasAIUseEvidence,
                                               contactFound: result.email != nil, leadID: leadID,
-                                              issues: result.issues + result.record.reasons + (assessment.reason.map { ["Draft withheld: " + $0] } ?? [])))
+                                              issues: result.issues + result.record.reasons + (result != observation ? ["Newer saved findings were retained instead of this superseded observation."] : []) + (assessment.reason.map { ["Draft withheld: " + $0] } ?? []), reusedResearch: reused))
                 outcome.updatedAt = clock.now
                 try AgentResearchFiles.write(outcome, to: output)
             }

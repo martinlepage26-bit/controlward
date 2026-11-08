@@ -14,6 +14,10 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        if CommandLine.arguments.dropFirst() == ["--agent-research"] {
+            guard await AgentResearchTests.run() else { throw SmokeTestFailure.failed("Agent research tests failed") }
+            return
+        }
         if CommandLine.arguments.dropFirst() == ["--mail-control"] {
             guard await MailControlTests.run() else { throw SmokeTestFailure.failed("Mail control tests failed") }
             return
