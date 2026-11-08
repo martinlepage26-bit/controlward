@@ -1,3 +1,13 @@
+## ControlWard outbound email
+
+Martin's standing instruction, 2026-11-07: send outreach through **Resend**, from
+**ml@pharos-ai.ca**. Do not use Gmail or another sender as a fallback. If the
+Resend connection is unavailable or unverified, retain the unsent draft and
+report the connection requirement. This sender preference does not authorize
+additional recipients, duplicate messages, campaigns, or automatic follow-ups.
+Verify the actual provider result before logging a send; retain the Resend
+message ID and distinguish acceptance, delivery, replies, and sales.
+
 ## Base documentation
 
 - Getting started:
