@@ -6,6 +6,13 @@ owner to record the ruling that the gate requested. The new controls retain
 the closed packaged default and let the owner review and record a decision in
 Settings, without a source edit or another release.
 
+The web review document requires reader access. A dated assessment draft and
+primary-source links are therefore included in the native review sheet, with an
+action that fills its reference without confirming the scope. The confirmation
+starts unchecked. The included draft identifier contributes to the decision
+fingerprint; a material draft revision must update that identifier. The owner can
+reference another assessment instead.
+
 The scope is all otherwise eligible external recipients in this native
 workspace. It does not approve one message, schedule a campaign, activate
 collectors or authenticate a contact. The review sheet distinguishes general

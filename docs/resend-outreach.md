@@ -26,6 +26,9 @@ current workspace, requires an assessment reference and explicit scope
 confirmation, and saves nothing on Cancel. Installing the controls does not
 record a ruling or enable external recipients. This records the owner's
 decision; it is not a legal-compliance certificate or a decision made by the app.
+The sheet includes a dated draft and primary-source links so reading it does not
+require web-reader login. Filling that draft's reference does not check the
+confirmation box. An existing owner assessment can be referenced instead.
 No new prospect send or diagnostic message is authorized by the standing sender
 preference or by recording recipient eligibility.
 

@@ -75,6 +75,8 @@ struct ResendRecipientDecision: Codable, Equatable, Sendable {
 
     static let reviewURL = URL(string: "https://pharos-ai.ca/artifacts/controlward/outreach-privacy-review")!
     static let scopeVersion = "native-reviewed-resend-recipients-v1"
+    // Revise this identifier whenever the included assessment's material scope changes.
+    static let assessmentDraftReference = "ControlWard outreach privacy draft — 2026-11-08 v1"
 
     static func binding(for storageURL: URL) -> String {
         SHA256Hex.digest(Data(storageURL.standardizedFileURL.path.utf8))
@@ -83,7 +85,7 @@ struct ResendRecipientDecision: Codable, Equatable, Sendable {
     static func fingerprint(_ config: ICPConfig) -> String? {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(config) else { return nil }
-        return SHA256Hex.digest(Data(scopeVersion.utf8) + data)
+        return SHA256Hex.digest(Data((scopeVersion + assessmentDraftReference).utf8) + data)
     }
 
     static func validReference(_ value: String) -> Bool {

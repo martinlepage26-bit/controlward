@@ -209,6 +209,33 @@ struct SettingsView: View {
     }
 }
 
+private struct IncludedOutreachPrivacyDraft: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(ResendRecipientDecision.assessmentDraftReference).font(.headline)
+            Text("Draft for the owner's decision. No ruling, signature or legal-compliance certificate is supplied by the app. Reference an existing assessment instead if it better covers your operating scope.")
+            Text("Scope and purpose").font(.headline)
+            Text("One manually reviewed business prospect at a time for the existing 99 CAD Quick Scan. This recipient ruling permits all otherwise eligible external addresses in this native workspace; it is not a one-address limit. Every actual message still needs separate confirmation. KAIROS collection and other connectors are separate decisions.")
+            Text("Data and destinations").font(.headline)
+            Text("Website research sends public URLs and normal request metadata to business sites, then retains professional contact routes, AI-use claims, sources and timestamps locally. CRM records include drafts, relationships, activity and receipts. A confirmed Resend request contains the sender ml@pharos-ai.ca, one recipient, subject, body, unsubscribe information and request identifiers. Private notes, mailbox bodies and the complete CRM are not automatically attached. User-entered outgoing text needs review.")
+            Text("Existing controls and limits").font(.headline)
+            Text("Exact-message approval, suppression, duplicate prevention and a durable provider receipt remain required. Researched cold outreach also checks current contact and AI-use evidence and the approved offer. Publication alone does not establish personal-inbox ownership, deliverability, consent, buyer need or actual internal AI use. Mail and KAIROS can contain non-public context; including that context in outgoing text needs a separate review.")
+            Text("Provider processing").font(.headline)
+            Text("Resend describes US-based storage; selecting another sending region does not relocate retained content. Published email/log retention is 30 days for Free, Pro and Scale, with remaining customer data removed within 90 days after account closure. These provider statements were checked on 8 November 2026. This review did not inspect the account's actual plan, terms or settings. Review the applicable DPA and subprocessors.")
+            Link("Resend security and retention", destination: URL(string: "https://resend.com/security")!)
+            Link("Resend data processing agreement", destination: URL(string: "https://resend.com/legal/dpa")!)
+            Text("Owner determinations still needed").font(.headline)
+            Text("For each recipient, retain where and when the route was published, any solicitation restriction, relevance to the business role and the relied-on contact basis. CRTC guidance describes conditions beyond simple public availability, alongside consent, identification and unsubscribe requirements. Assess the necessary payload, outside-Québec processing, safeguards and accepted residual risk. The CAI guide supports the assessment process; this draft does not resolve legal applicability or certify a completed EFVP.")
+            Link("CRTC commercial-message guidance", destination: URL(string: "https://crtc.gc.ca/fra/com500/faq500.htm")!)
+            Link("CAI privacy-assessment guide", destination: URL(string: "https://www.cai.gouv.qc.ca/uploads/pdfs/CAI_GU_EFVP.pdf")!)
+            Text("Retention, rights and opt-outs").font(.headline)
+            Text("Choose who handles access, correction, deletion and complaints, and set a local prospect-data review schedule. Preserve the minimum suppression and dispatch evidence needed for opt-outs and safe retries. Assign responsibility for monitoring the published reply address and recording exclusions before more outreach. Automatic local 30-day deletion and automatic processing of every incoming opt-out are not implemented. Disk/backup encryption, formal privacy-officer designation and account terms have not been inspected by this review.")
+            Text("Recording and restricting a ruling").font(.headline)
+            Text("The private local decision stays outside CRM backups and is bound to the workspace and policy. Restore/reset, copying it elsewhere or a policy change requires a new review. Restricting recipients cancels pending previews, including a credential wait. A request already issued retains its real outcome. If saving fails, external sends pause for the current session; an earlier saved ruling may still apply after restart until a successful retry. Recording eligibility sends no message and creates no buying intent or revenue.")
+        }.font(.callout).textSelection(.enabled)
+    }
+}
+
 private struct RecipientPolicyReviewSheet: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -228,7 +255,13 @@ private struct RecipientPolicyReviewSheet: View {
                     Text("This owner decision permits all otherwise eligible external recipients in this Mac's native Resend workflow. It applies beyond a single prospect or message.")
                     Text("Each send still requires the exact recipient, subject and body to be reviewed and confirmed, with suppression, duplicate prevention and a provider receipt. Researched cold outreach also requires current contact and AI-use evidence. Auto-Pilot and reminders do not send outreach.")
                     Text("When you confirm a message, Resend receives the recipient, subject, body, sender and unsubscribe information. Public business details alone do not establish consent, personal-inbox ownership or delivery. Review the applicable contact basis, provider processing, retention and opt-out handling in your assessment.")
-                    Link("Open the outreach privacy review", destination: ResendRecipientDecision.reviewURL)
+                    DisclosureGroup("Read the included assessment draft") {
+                        IncludedOutreachPrivacyDraft().padding(.top, 8)
+                    }
+                    Button("Use the included draft's reference") {
+                        assessmentReference = ResendRecipientDecision.assessmentDraftReference
+                    }
+                    Link("Latest web review (reader access required)", destination: ResendRecipientDecision.reviewURL)
                     Text("Record the title or reference of the assessment you reviewed. This records your ruling; it does not certify legal compliance. Enter a reference only, without passwords or API keys.")
                         .font(.callout).foregroundStyle(.secondary)
                     TextField("Assessment title or reference", text: $assessmentReference).textFieldStyle(.roundedBorder)
