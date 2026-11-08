@@ -34,6 +34,11 @@ final class AppStore: ObservableObject {
     private var credentialProbeIDs: [SyncTarget: UUID] = [:]
     private var credentialProbeTasks: [SyncTarget: Task<Void, Never>] = [:]
     @Published private(set) var busyTargets: Set<SyncTarget> = []
+    @Published private(set) var resendPreview: ResendSendPreview?
+    @Published private(set) var resendFailure: String?
+    @Published private(set) var pendingResendReceipt: (dispatchID: UUID, providerID: String, acceptedAt: Date)?
+    var resendNow: () -> Date = { .now }
+    let resendConfig: ICPConfig?
     /// Latest read-only import attempt, including a failure that storage could not retain.
     /// Kept outside the workspace so reporting a failed save cannot publish partial records.
     @Published private var readImportJobs: [SyncTarget: SyncJob] = [:]
@@ -47,6 +52,7 @@ final class AppStore: ObservableObject {
     let isReviewMode: Bool
     let secrets: SecretStore
     let transport: HTTPTransport
+    let resendTransport: any HTTPTransport
     var twentyPacing: Duration = .milliseconds(700)
     var twentyMaxBackoffSeconds: Double = 30
     /// Receives every sync log line (tests assert these carry no keys or PII).
@@ -58,7 +64,7 @@ final class AppStore: ObservableObject {
     /// CSV-8: the bytes (SHA-256) of each file imported this session and when, so the same file is never imported twice.
     private var importedCSVFiles: [String: Date] = [:]
 
-    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview, researchRoot: URL? = nil) {
+    init(storageURL: URL = StorageLocation.workspaceFile, secrets: SecretStore? = nil, transport: HTTPTransport = URLSessionTransport(), reminderCenter: (any ReminderSchedulingCenter)? = nil, reviewMode: Bool = StorageLocation.isReview, researchRoot: URL? = nil, resendTransport: any HTTPTransport = ResendHTTPTransport(), resendConfig: ICPConfig? = nil) {
         self.storageURL = storageURL
         self.researchRoot = researchRoot ?? (storageURL.standardizedFileURL == StorageLocation.workspaceFile.standardizedFileURL
             ? LeadPipelineEnvironment.defaultRoot() : storageURL.deletingLastPathComponent().appendingPathComponent("leads", isDirectory: true))
@@ -81,6 +87,8 @@ final class AppStore: ObservableObject {
         }
         self.secrets = selectedSecrets
         self.transport = reviewMode ? IsolatedMailTransport() : transport
+        self.resendTransport = reviewMode ? IsolatedMailTransport() : resendTransport
+        self.resendConfig = resendConfig ?? ResendPolicy.bundledConfig()
         if reviewMode { self.reminderStatus = "Review workspace: macOS notifications are not scheduled." }
         let loaded = Self.load(from: storageURL)
         self.workspace = loaded.workspace
@@ -324,7 +332,7 @@ final class AppStore: ObservableObject {
             applyCredentialAvailability(.available, for: target)
             invalidateConnector(target)
             workspace.activity.insert(ActivityEvent(kind: "credential", message: "Saved the \(target.label) API key to the Keychain."), at: 0)
-            persist(message: "\(target.label) key saved to the Keychain. Run Verify to activate it.")
+            persist(message: target == .resend ? "Resend key saved to the Keychain. Review and confirm a message to check acceptance." : "\(target.label) key saved to the Keychain. Run Verify to activate it.")
         } catch {
             showNotice("Could not save the \(target.label) key: \(error.localizedDescription)")
         }
@@ -433,6 +441,9 @@ final class AppStore: ObservableObject {
             case .leadgen: break
             case .gaps: try await gapClient().verify()
             case .kairos: try await kairosClient().verify()
+            case .resend:
+                showNotice("Resend uses a sending-only key. Review and confirm a message to check acceptance; saving a key does not verify sending.")
+                return false
             }
             guard credentialConfigurationRevisions[target] == configuration else { return false }
             recordHealth(target, ok: true, detail: "Verified \(Date.now.formatted(date: .abbreviated, time: .shortened)): endpoint reachable and key accepted.")
@@ -1617,6 +1628,7 @@ final class AppStore: ObservableObject {
     @discardableResult
     func resetAll(confirmed: Bool) throws -> URL {
         guard confirmed else { throw ResetError.notConfirmed }
+        guard pendingResendReceipt == nil else { throw ControlWardError.invalid("Save the pending Resend receipt before resetting the workspace.") }
         guard activeResearch.isEmpty, busyTargets.isEmpty else { throw ControlWardError.invalid("Wait for running research and integrations before resetting.") }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -1639,6 +1651,7 @@ final class AppStore: ObservableObject {
 
     /// One-time, user-selected import of the pre-sandbox `native-crm/data/workspace.json`.
     func importLegacyWorkspace(from legacy: URL) throws {
+        guard !busyTargets.contains(.resend), pendingResendReceipt == nil else { throw ControlWardError.invalid("Finish the Resend request and save its receipt before importing another workspace.") }
         let outcome = try WorkspaceMigration.migrateLegacy(from: legacy, to: storageURL)
         let loaded = Self.load(from: storageURL)
         workspace = loaded.workspace
@@ -2269,6 +2282,164 @@ final class AppStore: ObservableObject {
         guard update(next) else { return false }
         lead = next
         return true
+    }
+
+    // MARK: - Owner-confirmed Resend outreach
+
+    private func resendIssue(for lead: Lead, recipient: String, subject: String, body: String) -> String? {
+        if !lead.status.isOpen { return "This deal is closed. Review its status before sending outreach." }
+        if lead.email.contains(where: { $0.isNewline }) { return "Check the recipient address." }
+        if let issue = ResendPolicy.issue(recipient: recipient, subject: subject, body: body) { return issue }
+        guard let config = resendConfig else { return "Outreach policy is unavailable. Sending is blocked until its configuration is restored." }
+        guard config.loi25Gate.open || config.isMartinAddress(recipient) else {
+            return "The configured privacy gate is closed. Sends are limited to Martin's own addresses until he rules on the privacy impact assessment (Resources/config/icp.json)."
+        }
+        return LeadWorkflow.emailDraftIssue(for: lead, body: body, subject: subject, config: config,
+                                           suppression: suppressionList, now: resendNow())
+    }
+
+    private func existingResendDispatch(hash: String) throws -> ResendDispatch? {
+        let matches = workspace.resendDispatches.filter { $0.contentHash == hash }
+        guard !matches.contains(where: { $0.state == .accepted }) else { throw GTMError.invalid("This exact message was already accepted by Resend. Its receipt is retained; it will not be sent again.") }
+        guard matches.count <= 1 else { throw GTMError.invalid("Multiple earlier requests match this message. Check Resend before taking further action; sending is blocked.") }
+        guard let existing = matches.first else { return nil }
+        guard ResendPolicy.contentHash(recipient: existing.recipient, subject: existing.subject, body: existing.body) == hash else {
+            throw GTMError.invalid("The earlier request does not match its saved fingerprint. Sending is blocked; check the Resend record.")
+        }
+        guard pendingResendReceipt?.dispatchID != existing.id else { throw GTMError.invalid("Resend accepted this message, but its CRM save needs recovery. Use Save pending Resend receipt in Settings.") }
+        guard let created = ISODates.date(existing.createdAt),
+              resendNow().timeIntervalSince(created) >= 0,
+              resendNow().timeIntervalSince(created) < ResendPolicy.retryWindow else {
+            throw GTMError.invalid("This earlier request is outside the safe retry window. Check its outcome in Resend before taking any further action; sending is blocked.")
+        }
+        return existing
+    }
+
+    func prepareResendSend(leadID: UUID, subject: String, body: String) -> ResendSendPreview? {
+        resendFailure = nil
+        guard !busyTargets.contains(.resend) else { resendFailure = "A Resend request is already in progress."; return nil }
+        resendPreview = nil
+        guard pendingResendReceipt == nil else { resendFailure = "Save the pending Resend receipt in Settings before preparing another send."; return nil }
+        guard let lead = leads.first(where: { $0.id == leadID }) else { resendFailure = "Save this lead before reviewing a send."; return nil }
+        let recipient = MailAddress.bare(lead.email)
+        if let issue = resendIssue(for: lead, recipient: recipient, subject: subject, body: body) { resendFailure = issue; return nil }
+        // Includes historical manually logged sends, such as the original Gmail pilot message.
+        guard !lead.history.contains(where: { $0.message == body }) else {
+            resendFailure = "This message is already in the lead's sent history. It will not be sent again."; return nil
+        }
+        let hash = ResendPolicy.contentHash(recipient: recipient, subject: subject, body: body)
+        if workspace.resendDispatches.contains(where: { $0.leadID == leadID && ($0.state == .unknown || $0.state == .queued) && $0.contentHash != hash }) {
+            resendFailure = "An earlier message to this lead has no acceptance receipt. Check its outcome in Resend before preparing a different message."; return nil
+        }
+        do {
+            let existing = try existingResendDispatch(hash: hash)
+            guard existing == nil || existing?.leadID == leadID else { throw GTMError.invalid("An identical request belongs to another lead. Review the original record before retrying.") }
+            let preview = ResendSendPreview(id: existing?.id ?? UUID(), lead: lead, recipient: recipient,
+                subject: subject, body: body, contentHash: hash, credentialRevision: credentialConfigurationRevisions[.resend]!)
+            resendPreview = preview
+            return preview
+        } catch { resendFailure = message(for: error); return nil }
+    }
+
+    func cancelResendPreview() { resendPreview = nil }
+
+    private func validateResendPreview(_ preview: ResendSendPreview) throws {
+        guard !isReviewMode else { throw GTMError.invalid("Sending is disabled in the isolated review workspace.") }
+        guard resendPreview == preview, leads.first(where: { $0.id == preview.lead.id }) == preview.lead,
+              credentialConfigurationRevisions[.resend] == preview.credentialRevision,
+              preview.contentHash == ResendPolicy.contentHash(recipient: preview.recipient, subject: preview.subject, body: preview.body) else {
+            throw GTMError.invalid("The lead, draft or connection changed after review. Close this preview and review the current message again.")
+        }
+        if let issue = resendIssue(for: preview.lead, recipient: preview.recipient, subject: preview.subject, body: preview.body) { throw GTMError.invalid(issue) }
+        if let existing = try existingResendDispatch(hash: preview.contentHash) {
+            guard existing.id == preview.id, existing.leadID == preview.lead.id else { throw GTMError.invalid("The earlier request changed after review. Review it again.") }
+        }
+    }
+
+    /// Called only by the exact-message confirmation sheet. No background task calls this path.
+    @discardableResult
+    func sendResend(_ preview: ResendSendPreview) async -> Bool {
+        guard !busyTargets.contains(.resend) else { resendFailure = "A Resend request is already in progress."; return false }
+        resendFailure = nil
+        busyTargets.insert(.resend)
+        defer { busyTargets.remove(.resend); resendPreview = nil }
+        do {
+            try validateResendPreview(preview)
+            let key = try await apiKey(for: .resend)
+            // Credential access may suspend. Recheck the original approval and all live holds.
+            try Task.checkCancellation()
+            try validateResendPreview(preview)
+            var dispatch = try existingResendDispatch(hash: preview.contentHash) ?? ResendDispatch(id: preview.id,
+                leadID: preview.lead.id, recipient: preview.recipient, subject: preview.subject, body: preview.body,
+                contentHash: preview.contentHash, createdAt: ISODates.string(resendNow()))
+            dispatch.state = .queued
+            try commitWorkspace { next in
+                next.resendDispatches.removeAll { $0.id == dispatch.id }
+                next.resendDispatches.append(dispatch)
+            }
+            // The durable intent exists before the request, including on every retry.
+            let providerID: String
+            do {
+                providerID = try await ResendClient(transport: resendTransport).send(dispatch, apiKey: key)
+            } catch {
+                let state: ResendDispatch.State
+                if case ResendError.rejected = error { state = .rejected } else { state = .unknown }
+                try? commitWorkspace { next in
+                    if let i = next.resendDispatches.firstIndex(where: { $0.id == dispatch.id }) { next.resendDispatches[i].state = state }
+                }
+                throw error
+            }
+            pendingResendReceipt = (dispatch.id, providerID, resendNow())
+            return retrySavingResendReceipt()
+        } catch {
+            resendFailure = message(for: error)
+            showNotice(resendFailure ?? "Sending was stopped.")
+            return false
+        }
+    }
+
+    /// Retries local bookkeeping only. Never performs HTTP or reads a credential.
+    @discardableResult
+    func retrySavingResendReceipt() -> Bool {
+        guard let receipt = pendingResendReceipt else { return false }
+        do {
+            try commitWorkspace { next in
+                guard let i = next.resendDispatches.firstIndex(where: { $0.id == receipt.dispatchID }) else {
+                    throw GTMError.invalid("The approved request is no longer in this workspace.")
+                }
+                let dispatch = next.resendDispatches[i]
+                next.resendDispatches[i].state = .accepted
+                next.resendDispatches[i].providerMessageID = receipt.providerID
+                next.resendDispatches[i].acceptedAt = ISODates.string(receipt.acceptedAt)
+                if let index = next.leads.firstIndex(where: { $0.id == dispatch.leadID }),
+                   !next.leads[index].history.contains(where: { $0.providerMessageID == receipt.providerID }) {
+                    var lead = next.leads[index]
+                    let today = CalendarCRM.dayString(receipt.acceptedAt)
+                    let stage = lead.sequenceStage
+                    lead.lastMessage = dispatch.body
+                    if lead.outreachDraft == dispatch.body { lead.outreachDraft = nil }
+                    if lead.status == .new { lead.status = .contacted }
+                    lead.sequenceStage = min(stage + 1, FollowUpCadence.days.count)
+                    if lead.status.isOpen, lead.nextFollowUp == nil || lead.nextFollowUp! <= today {
+                        lead.nextFollowUp = stage < FollowUpCadence.days.count ? CalendarCRM.addDays(FollowUpCadence.days[stage], to: today) : nil
+                    }
+                    lead.history.append(FollowUpEvent(date: today, action: "resend_accepted", message: dispatch.body,
+                        provider: "resend", providerMessageID: receipt.providerID, recipient: dispatch.recipient,
+                        subject: dispatch.subject, sender: ResendPolicy.sender))
+                    next.leads[index] = lead
+                    _ = LeadWorkflow.syncFollowUpTask(for: lead, in: &next)
+                }
+                next.activity.insert(ActivityEvent(kind: "outreach", message: "Resend accepted one approved message. Receipt: \(receipt.providerID). Delivery and replies are unconfirmed."), at: 0)
+            }
+            pendingResendReceipt = nil
+            resendFailure = nil
+            showNotice("Resend accepted the message; its receipt and sent history were saved. Delivery and replies are unconfirmed.")
+            return true
+        } catch {
+            resendFailure = "Resend accepted this message (\(receipt.providerID)), but the CRM receipt could not be saved. Do not send it again. Restore storage access, then use Save pending Resend receipt in Settings."
+            showNotice(resendFailure!)
+            return false
+        }
     }
 
     private static func load(from url: URL) -> (workspace: PersistentWorkspace, recovery: WorkspaceRecoveryState) {

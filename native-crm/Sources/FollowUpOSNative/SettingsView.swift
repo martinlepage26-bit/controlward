@@ -74,6 +74,22 @@ struct SettingsView: View {
                 .crmCard()
 
                 VStack(alignment: .leading, spacing: 12) {
+                    Text("Outreach through Resend").font(.headline)
+                    Text("Sender: ml@pharos-ai.ca · Resend account: martinlepage26@me.com, team martinlepage26. Use a sending-only API key restricted to the existing pharos-ai.ca domain. Each message requires its own review and confirmation.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Link("Open existing Resend account", destination: URL(string: "https://resend.com/api-keys")!)
+                    Text("A saved key is configuration only. A successful send records the Resend receipt; delivery and replies remain separate outcomes.").font(.caption)
+                    if let config = store.resendConfig, !config.loi25Gate.open {
+                        Text("The configured privacy gate is closed: live sends are limited to Martin's own addresses until he rules on the privacy impact assessment. This setting comes from Resources/config/icp.json.")
+                            .font(.caption).foregroundStyle(CRMTheme.rust)
+                    }
+                    if store.pendingResendReceipt != nil {
+                        Text(store.resendFailure ?? "An accepted Resend message needs its local receipt saved.").font(.caption).foregroundStyle(CRMTheme.rust)
+                        Button("Save pending Resend receipt") { _ = store.retrySavingResendReceipt() }
+                    }
+                }.crmCard()
+
+                VStack(alignment: .leading, spacing: 12) {
                     Text("API keys").font(.headline)
                     Text(store.isReviewMode ? "Account connections are off in this review workspace. Keys cannot be saved here." : "Keys are stored in the macOS login Keychain, never in workspace data or exports. They are write-only here: paste to save or replace.")
                         .font(.callout).foregroundStyle(.secondary)
@@ -88,10 +104,10 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .disabled((keyDrafts[target] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            Text(store.keyAccessChecking.contains(target) ? "Checking access…" : (store.keyAccessNeeded.contains(target) ? "Access needed: use Integrations → Verify" : (store.hasKey(target) ? "Saved" : "Not set")))
+                            Text(store.keyAccessChecking.contains(target) ? "Checking access…" : (store.keyAccessNeeded.contains(target) ? (target == .resend ? "Access needed: confirm a send" : "Access needed: use Integrations → Verify") : (store.hasKey(target) ? "Saved" : "Not set")))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(store.hasKey(target) ? .green : .secondary)
-                                .frame(width: 52)
+                                .frame(width: 130)
                             Button("Remove", role: .destructive) { store.removeAPIKey(for: target) }
                                 .buttonStyle(.borderless)
                                 .disabled(!store.hasKey(target) && !store.keyAccessNeeded.contains(target))

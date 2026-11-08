@@ -167,6 +167,7 @@ extension AppStore {
 
     func restoreControlWardBackup(_ data: Data, confirmed: Bool) throws {
         guard confirmed else { throw ControlWardError.invalid("Review and confirm the restore first.") }
+        guard pendingResendReceipt == nil else { throw ControlWardError.invalid("Save the pending Resend receipt before restoring another workspace.") }
         let restored = try Self.readControlWardBackup(data)
         guard busyTargets.isEmpty, activeResearch.isEmpty else { throw ControlWardError.invalid("Wait for running research and integrations before restoring.") }
         let current = try completeBackupWorkspace()
@@ -176,12 +177,17 @@ extension AppStore {
         // revive a previously queued external write. Those settings stay local.
         let endpoints = workspace.connectorEndpoints
         let currentLinks = workspace.twentyLinks
+        let currentDispatches = workspace.resendDispatches
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let rollback = storageURL.deletingLastPathComponent().appendingPathComponent("before-restore-\(UUID().uuidString).json")
         try SecureFiles.writePrivate(try encoder.encode(ControlWardBackup(workspace: current)), to: rollback)
         stopPulling()
         try commitWorkspace { next in
             next = restored.workspace
+            // A CRM restore cannot undo a provider's acceptance or erase an unresolved request.
+            // Retain current outbound facts; imported requests never run automatically.
+            let currentDispatchIDs = Set(currentDispatches.map(\.id))
+            next.resendDispatches = currentDispatches + restored.workspace.resendDispatches.filter { !currentDispatchIDs.contains($0.id) }
             // Older backups did not contain unreviewed website research. Keep it explicitly.
             if !restored.workspace.researchMigrationComplete { next.websiteResearch = current.websiteResearch }
             next.researchMigrationComplete = true

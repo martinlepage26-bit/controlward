@@ -14,6 +14,7 @@ struct LeadEditorView: View {
     @State private var validationMessage: String?
     @State private var confirmDelete = false
     @State private var pendingConversion: LeadWorkflow.ConversionPlan?
+    @State private var pendingResend: ResendSendPreview?
     @State private var groundedDraft: LeadWorkflow.GroundedDraft?
     private let isNew: Bool
 
@@ -32,7 +33,7 @@ struct LeadEditorView: View {
         _draft = State(initialValue: initial)
         _message = State(initialValue: initial.outreachDraft ?? initial.lastMessage)
         _showWriter = State(initialValue: initial.outreachDraft != nil || !initial.lastMessage.isEmpty)
-        _writerNote = State(initialValue: initial.outreachDraft == nil ? nil : "Saved unsent draft. Review against the current record before sending.")
+        _writerNote = State(initialValue: initial.outreachDraft == nil ? nil : "Saved draft. Review the current record and any earlier send receipts before sending.")
         self.isNew = isNew
     }
 
@@ -212,8 +213,11 @@ struct LeadEditorView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: "paperplane.fill").foregroundStyle(CRMTheme.steel)
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text("\(CalendarCRM.display(event.date)) · follow-up sent")
+                                            Text("\(CalendarCRM.display(event.date)) · \(event.provider == "resend" ? "acceptance confirmed" : "follow-up sent")")
                                                 .font(.callout.weight(.semibold))
+                                            if let receipt = event.providerMessageID {
+                                                Text("Resend receipt: \(receipt)").font(.caption.monospaced()).textSelection(.enabled)
+                                            }
                                             Text(event.message)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
@@ -242,6 +246,12 @@ struct LeadEditorView: View {
         }
         .frame(width: 720, height: isNew ? 520 : 720)
         .background(CRMTheme.paper)
+        .sheet(item: $pendingResend) { preview in
+            ResendSendSheet(preview: preview) {
+                if let saved = store.leads.first(where: { $0.id == draft.id }) { draft = saved }
+                writerNote = "Resend accepted this message and its receipt was saved. Delivery and replies are unconfirmed."
+            }
+        }
         .confirmationDialog(
             "Delete this lead?",
             isPresented: $confirmDelete,
@@ -299,20 +309,20 @@ struct LeadEditorView: View {
                 }
                 HStack {
                     Button("Copy", systemImage: "doc.on.doc") { copyMessage() }
-                    Menu("Email", systemImage: "envelope") {
-                        Button("Default mail app") { emailMessage(.defaultMail) }
-                        Button("Gmail in browser…") { emailMessage(.gmail) }
-                            .help("Shares this draft's recipient, subject and message with Gmail. Check the sending account there; nothing is sent automatically.")
-                    }
+                    Button("Review & send via Resend", systemImage: "envelope") { reviewResend() }
                         .disabled(draft.email.isEmpty || message.isEmpty || emailDraftIssue != nil)
-                        .help(emailDraftIssue ?? "Choose where to review this unsent draft. Gmail uses the account signed in to your browser.")
-                    Spacer()
-                    Button("Mark as sent", systemImage: "paperplane") { markSent() }
+                        .help(emailDraftIssue ?? "Review the exact recipient and text before confirming one message from ml@pharos-ai.ca.")
                         .buttonStyle(.borderedProminent)
-                        .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                Text("In Gmail, check the sending account before sending. Gmail may save the unsent draft.")
+                Text("Outreach uses Resend from ml@pharos-ai.ca. Nothing is sent until you confirm the exact message. A provider receipt is required before sent history is added.")
                     .font(.caption2).foregroundStyle(.secondary)
+                ForEach(Array(store.workspace.resendDispatches.filter { $0.leadID == draft.id }.suffix(3))) { dispatch in
+                    Text(dispatch.state == .accepted
+                         ? "Resend accepted · \(dispatch.providerMessageID ?? "receipt retained")"
+                         : (dispatch.state == .rejected ? "Resend refused the request; no sent history was added."
+                            : "Resend request has no acceptance receipt. Check the provider before another attempt."))
+                        .font(.caption).foregroundStyle(dispatch.state == .accepted ? .secondary : CRMTheme.rust).textSelection(.enabled)
+                }
                 if let issue = emailDraftIssue { Text(issue).font(.caption).foregroundStyle(CRMTheme.rust) }
             } else {
                 Button {
@@ -434,25 +444,59 @@ struct LeadEditorView: View {
         writerNote = "Copied to the clipboard."
     }
 
-    private func emailMessage(_ destination: LeadWorkflow.EmailDraftDestination) {
-        // Files or evidence may change while the editor is open; the action checks again too.
-        let config = ICPConfig.defaultDirectory(bundle: AppResources.bundle).flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
-        do {
-            let url = try LeadWorkflow.emailDraftURL(for: draft, body: message, subject: emailSubject,
-                                                    destination: destination, config: config,
-                                                    suppression: store.suppressionList, now: .now)
-            guard NSWorkspace.shared.open(url) else {
-                validationMessage = "No application could open this draft. Use Copy, or choose another Email destination."
-                return
-            }
-            writerNote = "Draft requested in \(destination == .gmail ? "Gmail" : "your default mail app"). Review the sending account, recipient and text there. If no composer appears, use Copy."
-        } catch { validationMessage = error.localizedDescription }
+    private func reviewResend() {
+        guard !isNew else { validationMessage = "Save the new lead, then reopen it to review a send."; return }
+        draft.outreachDraft = message
+        let saved = store.update(draft)
+        guard saved else { validationMessage = store.saveFailure; return }
+        pendingResend = store.prepareResendSend(leadID: draft.id, subject: emailSubject, body: message)
+        if pendingResend == nil { validationMessage = store.resendFailure }
     }
+}
 
-    private func markSent() {
-        guard store.markMessageSent(on: &draft, message: message) else { validationMessage = store.saveFailure; return }
-        writerNote = draft.nextFollowUp == nil
-            ? "Logged. Sequence complete. Decide the next step."
-            : "Logged. Next follow-up suggested for \(CalendarCRM.display(draft.nextFollowUp))."
+private struct ResendSendSheet: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var sending = false
+    let preview: ResendSendPreview
+    let onSent: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Review one Resend message").font(.title2.bold())
+            Text("From: \(ResendPolicy.sender)")
+            Text("To: \(preview.recipient)").textSelection(.enabled)
+            Text("Subject: \(preview.subject)").font(.headline).textSelection(.enabled)
+            ScrollView { Text(preview.body).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(12) }
+                .background(.background, in: RoundedRectangle(cornerRadius: 8))
+            if store.workspace.resendDispatches.contains(where: { $0.id == preview.id }) {
+                Text("This is an exact retry of the earlier request, using its original idempotency key. Check Resend for the earlier outcome first.")
+                    .font(.caption).foregroundStyle(CRMTheme.rust)
+            }
+            if store.isReviewMode {
+                Text("Sending is disabled in this isolated review workspace.").font(.caption)
+            } else if !store.hasKey(.resend), !store.keyAccessNeeded.contains(.resend) {
+                Text("Save a sending-only key for pharos-ai.ca in Settings → API keys → Resend. Use the existing martinlepage26@me.com account.").font(.caption)
+            }
+            if let error = store.resendFailure { Text(error).font(.callout).foregroundStyle(CRMTheme.rust).textSelection(.enabled) }
+            Text("Confirming sends this message now. Acceptance does not confirm delivery, a reply or a sale.").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Cancel") { store.cancelResendPreview(); dismiss() }.disabled(sending)
+                Spacer()
+                Button(sending ? "Sending…" : "Send this message") {
+                    sending = true
+                    Task {
+                        let saved = await store.sendResend(preview)
+                        sending = false
+                        if saved { onSent(); dismiss() }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(sending || store.isReviewMode || (!store.hasKey(.resend) && !store.keyAccessNeeded.contains(.resend)) || store.resendPreview != preview)
+            }
+        }
+        .padding(24).frame(width: 660, height: 650)
+        .interactiveDismissDisabled(sending)
+        .onDisappear { store.cancelResendPreview() }
     }
 }
