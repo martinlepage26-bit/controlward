@@ -43,6 +43,26 @@ struct FollowUpEvent: Codable, Identifiable, Equatable, Sendable {
     var date: String
     var action = "followup_sent"
     var message: String
+    var provider: String?
+    var providerMessageID: String?
+    var recipient: String?
+    var subject: String?
+    var sender: String?
+}
+
+/// An approved request is saved before HTTP. Unknown outcomes retain their original idempotency key.
+struct ResendDispatch: Codable, Identifiable, Equatable, Sendable {
+    enum State: String, Codable, Sendable { case queued, unknown, rejected, accepted }
+    var id: UUID
+    var leadID: UUID
+    var recipient: String
+    var subject: String
+    var body: String
+    var contentHash: String
+    var createdAt: String
+    var state: State = .queued
+    var providerMessageID: String?
+    var acceptedAt: String?
 }
 
 struct Lead: Codable, Identifiable, Equatable, Sendable {
@@ -88,6 +108,7 @@ struct Lead: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct PersistentWorkspace: Codable, Equatable, Sendable {
+    var resendDispatches: [ResendDispatch] = []
     var websiteResearch = WebsiteResearchCache()
     var researchMigrationComplete = true
     var researchGeneration = UUID()
@@ -130,6 +151,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        resendDispatches = try container.decodeIfPresent([ResendDispatch].self, forKey: .resendDispatches) ?? []
         websiteResearch = try container.decodeIfPresent(WebsiteResearchCache.self, forKey: .websiteResearch) ?? WebsiteResearchCache()
         researchMigrationComplete = try container.decodeIfPresent(Bool.self, forKey: .researchMigrationComplete) ?? false
         researchGeneration = try container.decodeIfPresent(UUID.self, forKey: .researchGeneration) ?? UUID()
@@ -173,6 +195,7 @@ struct PersistentWorkspace: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case resendDispatches
         case websiteResearch, researchMigrationComplete, researchGeneration, consumedResearchRecovery, restoredSuppressionEntries
         case controlWard
         case accountIntelligence
@@ -201,7 +224,7 @@ struct WorkspaceExchange: Codable, Equatable, Sendable {
 }
 
 enum SyncTarget: String, Codable, CaseIterable, Identifiable, Sendable {
-    case twenty, leadgen, pharos, gaps, kairos
+    case twenty, leadgen, pharos, gaps, kairos, resend
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -210,10 +233,11 @@ enum SyncTarget: String, Codable, CaseIterable, Identifiable, Sendable {
         case .pharos: "PHAROS backend"
         case .gaps: "Gap analysis"
         case .kairos: "Kairos"
+        case .resend: "Resend"
         }
     }
     /// Targets whose API key is stored in the Keychain.
-    static let keyed: [SyncTarget] = [.twenty, .pharos, .gaps, .kairos]
+    static let keyed: [SyncTarget] = [.twenty, .pharos, .gaps, .kairos, .resend]
     /// Targets that receive exchange snapshots through the sync queue (gap analysis is read-only).
     static let exchangeTargets: [SyncTarget] = [.twenty, .leadgen, .pharos]
 }

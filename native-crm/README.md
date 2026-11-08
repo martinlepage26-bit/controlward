@@ -3,7 +3,8 @@
 This is the native, persistent macOS workspace for ControlWard, the PHAROS
 relationship and operations system. It uses SwiftUI/AppKit, stores its JSON data in
 an owner-only folder (see Data location), and opens without Docker or a localhost
-server. Explicit Email actions can open a mail application or Gmail in the browser.
+server. Outreach uses Resend from `ml@pharos-ai.ca`, with an exact-message preview
+and explicit confirmation before every send.
 
 The workspace now includes separate Contacts, Companies, Opportunities, Tasks,
 Notes, LeadGen Signals, Lantern bilingual audits, local automation rules, and an
@@ -48,7 +49,9 @@ AI-use evidence, retains unknowns, and saves only eligible unsent 99 CAD Quick S
 drafts in Pipeline. No manual URL paste is required. See the bundled
 [agent workflow](Sources/FollowUpOSNative/Resources/Agent/README.md).
 The desktop app still depends on that external agent for general web discovery.
-It does not include an independent general search provider or send outreach.
+It does not include an independent general search provider. The native Resend
+sending path is documented in [reviewed Resend outreach](../docs/resend-outreach.md);
+background research never sends outreach.
 
 ```bash
 ./bin/test-native-app

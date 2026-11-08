@@ -14,6 +14,10 @@ enum SmokeTestFailure: Error, CustomStringConvertible {
 @MainActor
 struct NativeSmokeTests {
     static func main() async throws {
+        if CommandLine.arguments.dropFirst() == ["--resend"] {
+            guard await ResendTests.run() else { throw SmokeTestFailure.failed("Resend tests failed") }; return
+        }
+        guard await ResendTests.run() else { throw SmokeTestFailure.failed("Resend tests failed") }
         if CommandLine.arguments.dropFirst() == ["--credential-access"] {
             guard await CredentialAccessTests.run() else { throw SmokeTestFailure.failed("Credential access tests failed") }
             return
