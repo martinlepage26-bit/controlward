@@ -4,9 +4,9 @@ The objective is a usable lead generation, follow-up, CRM and operations applica
 
 Requirements were checked against `PRODUCT.md`, `docs/controlward.md`, `native-crm/README.md`, `native-crm/FEATURE-PARITY.md` and `docs/operator-workflow.md`. The October and November 5 reports are historical. [The historical209 audit](requirement-audit-20261107.md) records its checks and limits; the linked earlier Mac acceptance records remain evidence for unchanged workflows.
 
-## Current installed release and evidence scope
+## Recorded261 release checkpoint and evidence scope
 
-Build **261** is installed at `/Applications/ControlWard.app`, clean app source
+Build **261** was installed at `/Applications/ControlWard.app` for this checkpoint, clean app source
 `d6a4b5ab0085c7a597bad0df98e25084f802d2bc`, merged through
 [PR56](https://github.com/martinlepage26-bit/controlward/pull/56) as
 `15ddeaf8cfc835240b723288dca6db50f3990ae6`. The reviewed archive
@@ -45,7 +45,10 @@ witnesses below retain their own build and scope.
 
 The [current release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research)
 and [workspace receipt](https://pharos-ai.ca/artifacts/controlward/unified-desktop)
-identify current app and documentation revisions separately.
+identify the latest app, documentation and live-account observations separately.
+This versioned ledger retains dated checkpoints; the published receipt records
+later releases and checks. The [global project-search repair](global-project-search-20261108.md)
+also distinguishes existing native CRM/mail search from the missing project coverage.
 
 ## Earlier installed256 checkpoint
 

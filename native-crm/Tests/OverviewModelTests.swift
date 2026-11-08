@@ -67,6 +67,39 @@ enum OverviewModelTests {
             try expect(OverviewSnapshot.middleRowSplit == 0.45, "middle row split is 45/55")
             let single = OverviewSnapshot.make(opportunities: [Opportunity(name: "One", amount: 10, stage: .lead)], tasks: [], leads: [], companies: [], today: today, now: now)
             try expect(single.openOpportunities.trend.isEmpty && single.estimatedValue.trend.isEmpty, "fewer than 2 records draws a flat sparkline, not a trend")
+
+            let native = [
+                WorkspaceRecord(recordID: UUID(), kind: "leads", title: "Cèdre lead", detail: "Business route"),
+                WorkspaceRecord(recordID: UUID(), kind: "mail", title: "Cèdre enquiry", detail: "Mail metadata"),
+                WorkspaceRecord(recordID: UUID(), kind: "notes", title: "Unrelated", detail: "Retained note"),
+            ]
+            let projectRows = [
+                ProjectModuleRecord(id: "build", title: "Cèdre build", status: "planning", workspace: "Québec"),
+                ProjectModuleRecord(id: "audit", title: "Cèdre audit", status: "active", workspace: "Montréal"),
+            ]
+            let connected = ProjectModuleSnapshot(connected: true, online: true, register: "https://register.example.test", pulledAt: nil, projects: projectRows)
+            let global = OverviewSearchSnapshot.make(records: native, projectSnapshot: connected, query: "CEDRE", today: today)
+            try expect(global.count == 4 && global.projects.map(\.id) == ["audit", "build"], "global search includes loaded projects alongside CRM and mail, with case/diacritic matching")
+            let original = WorkspaceRecord.query(native, search: "CEDRE", filter: .all, sort: .name, today: today)
+            try expect(global.records == original, "global project search preserves the existing native-record results")
+            let words = OverviewSearchSnapshot.make(records: [], projectSnapshot: connected, query: "  ACTIVE\ncedre Montreal ", today: today)
+            try expect(words.projects.map(\.id) == ["audit"], "every project query word may match title, workspace or status")
+            try expect(global.projectRegister == connected.register && !global.projectsOffline, "project results retain their exact register identity")
+            let unloaded = OverviewSearchSnapshot.make(records: native, projectSnapshot: nil, query: "cedre", today: today)
+            try expect(unloaded.records == original && unloaded.projects.isEmpty && unloaded.projectRegister == nil, "an unloaded project module leaves native matches usable and project coverage unavailable")
+            var disconnected = connected; disconnected.connected = false
+            let unavailable = OverviewSearchSnapshot.make(records: native, projectSnapshot: disconnected, query: "cedre", today: today)
+            try expect(unavailable.projects.isEmpty && unavailable.projectRegister == nil && unavailable.records == original, "a disconnected register cannot supply stale global project results")
+            var offline = connected; offline.online = false
+            let cached = OverviewSearchSnapshot.make(records: [], projectSnapshot: offline, query: "cedre", today: today)
+            try expect(cached.projects.count == 2 && cached.projectsOffline, "a connected offline cache remains searchable with an explicit offline state")
+            try expect(OverviewSearchSnapshot.make(records: native, projectSnapshot: connected, query: " \n\t", today: today).count == 0, "a blank global query does not expose all records as matches")
+            var many = connected
+            many.projects = (0..<20).map { ProjectModuleRecord(id: "p\($0)", title: "Cèdre project", status: "active", workspace: "Montréal") }
+            let all = OverviewSearchSnapshot.make(records: native, projectSnapshot: many, query: "cedre", today: today)
+            try expect(all.count == 22 && all.projects.count > OverviewSearchSnapshot.visibleLimit, "search retains complete counts while the view limits visible rows")
+            let none = OverviewSearchSnapshot.make(records: native, projectSnapshot: connected, query: "absent phrase", today: today)
+            try expect(none.count == 0 && none.projectRegister == connected.register, "no matches in a loaded register stays distinct from unavailable project coverage")
             print("Overview model tests: \(count)/\(count) passed")
             return true
         } catch {
