@@ -4,7 +4,60 @@ The objective is a usable lead generation, follow-up, CRM and operations applica
 
 Requirements were checked against `PRODUCT.md`, `docs/controlward.md`, `native-crm/README.md`, `native-crm/FEATURE-PARITY.md` and `docs/operator-workflow.md`. The October and November 5 reports are historical. [The historical209 audit](requirement-audit-20261107.md) records its checks and limits; the linked earlier Mac acceptance records remain evidence for unchanged workflows.
 
-## Recorded261 release checkpoint and evidence scope
+## Installed270 checkpoint — 8 November, 20:19 UTC
+
+Build **270** is installed at `/Applications/ControlWard.app`, clean app source
+`0e8f1e7c4d818f13281b92150fef183b6037a860`, merged through
+[PR59](https://github.com/martinlepage26-bit/controlward/pull/59) as
+`30f6cb0f42ab713a8c42cbff5cf9e48ed7049e96`. The implementation trees match.
+The reviewed archive `ControlWard-1.1.1-270-0e8f1e7-macOS.zip` has SHA256
+`286d51a380101b08660041e3bdb67b5ae6910dd85cfe55b5829d6dafd7889967`.
+The installed executable matches the tested package, and strict signature
+verification passes. Full local native tests, including Resend27/27, WebKit13
+assertions and SwiftUI release compilation pass. Exact-source CI42511854884
+and macOS packaging42511854781 passed every job and executed step. This ledger
+update changes documentation only; it does not rebuild or replace270.
+
+The normal266 process was absent before replacement at20:03:34Z. The fresh,
+immediately-before-install owner workspace stayed byte-for-byte identical.
+Build266 is retained for app rollback; no older owner data was restored.
+The package is ad-hoc signed and not notarized. At20:17:57Z the installed270
+process and a scoped `capabilities --live` response confirmed normal mode,
+the expected owner-workspace generation and automatic sending off. The normal
+research inbox uses its established sibling ControlWard product directory;
+the CRM data remains in Contextward. A review-mode response was not counted as
+normal startup.
+
+The20:19 comparison retains all eight core CRM collections and the dispatch
+ledger exactly. All1351 pre-install mail metadata rows remain exact, with14
+additional rows. Later changes include activity, connector jobs, mail and the
+business profile; those updates were preserved, not restored from the install
+snapshot. **The visual normal-workspace check remains unverified** because app
+control is unavailable and the owner has not reported that screen's result.
+
+Settings now includes a readable assessment draft and an explicit
+[recipient-policy decision](owner-outreach-ruling-20261108.md). The packaged
+policy remains closed and the normal owner decision is absent. In the running
+isolated review, a synthetic approval saved at19:58:35Z, the owner reported the
+restriction notice, and an owner-only decision saved at20:01:54Z. That sidecar
+is mode600. This verifies the saved approval/restriction endpoints; the complete
+visual checkbox/cancel/reopen sequence remains unverified because native app
+control cannot initialize its pipe. A test-local decision supplies no real
+owner ruling. No new message, production capture or collector activation occurred.
+
+Later normal261 and266 live reads supersede the earlier261 authentication
+failure as the latest successful account observations. Gmail refresh/body and
+Reply-cancel succeeded;266 repeated successful zero-new refreshes. KAIROS
+authenticated import/context succeeded with no enquiries or strategy and all
+six collectors paused. PHAROS verification and an empty inbox pull succeeded,
+with zero acknowledgements and no exchange push. Installed266 read174 projects
+at17:02:40.725Z; its17:22 global-search result opened the matching project drawer.
+These retain their actual build/date scope and were not repeated on270.
+GAP's configured hostname still failed DNS resolution at17:23Z, and Twenty
+remained Needs setup. Nonempty intake, a genuine prospect reply and separately
+authorized production writes remain open. Notifications remain owner-deferred.
+
+## Earlier261 release checkpoint and evidence scope
 
 Build **261** was installed at `/Applications/ControlWard.app` for this checkpoint, clean app source
 `d6a4b5ab0085c7a597bad0df98e25084f802d2bc`, merged through
@@ -146,20 +199,20 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 
 | ID | Requirement | Evidence and current disposition |
 |---|---|---|
-| R01 | Recover Claude work and preserve owner state | Published64cca37 is integrated; unpublished cloud-only changes remain unavailable.261 preserves exact owner CRM/research/dispatch data and preferences through update and credential-failure checks;256 supplies the earlier research/restart witness. No older data snapshot was restored. |
-| R02 | Reproducible usable native app | Installed261 source/archive/executable/signature and exact-source CI are verified above. Local packaging re-runs native, WebKit and SwiftUI gates. Ad-hoc signing and absence of notarization are explicit. |
+| R01 | Recover Claude work and preserve owner state | Published64cca37 is integrated; unpublished cloud-only changes remain unavailable.270 installation preserves the exact fresh owner-workspace bytes;266 is retained for app rollback.261/256 retain their earlier credential-failure/research/restart witnesses. No older data snapshot was restored. |
+| R02 | Reproducible usable native app | Installed270 source/archive/executable/signature and exact-source CI are verified above. Packaging re-runs native, WebKit and SwiftUI gates. Normal-mode runtime and owner-workspace generation are verified; the visual normal-workspace check remains pending. Ad-hoc signing and absence of notarization are explicit. |
 | R03 | Onboarding and business settings | Native228 onboarding created an isolated Consulting workspace; earlier202 settings/save/retry/persistence.256 passes21 save cases and the full native suite; this onboarding UI was not repeated on256. |
 | R04 | CRM CRUD and relationship links | Actual202/203 create/edit, keyboard opening, validation, five confirmed deletes, private recovery and restore/reopen.256 retains save/deletion regressions and verifies the existing real linked graphs. [Record-action scope](record-actions-acceptance-20261107.md). |
 | R05 | Manual/CSV intake and provenance | Actual202 CSV import and duplicate replay;256 CSV57/57 and save cases pass. No buyer need or value is inferred from imported public data. |
 | R06 | LeadGen file and PHAROS inbox intake | Actual209 file chooser/import/replay/restart;256 inbox17/17 and file5/5 pass. Native-to-real disposable Worker/D1 acceptance covers saved pull/ack, retractions, epochs, failure/retry and dedup. Production nonempty intake remains separate; no new pull was fabricated. [Durability contract](pharos-inbox-durability-20261107.md). |
 | R07 | Discovery, sourced contacts and explicit AI-use evidence |256 research26/26, agent12/12 and original-behavior regressions pass. Fresh normal-app checks of three retained prospects found published contacts and own-business AI-use claims; exact unsent work survived. Partial/fictitious phones and superseded positive findings cannot establish readiness. General web discovery remains agent-assisted. Publication does not authenticate internal AI use, delivery or buyer intent. [Freshness rules](discovery-contact-freshness-20261108.md). |
 | R08 | Explainable priority and truthful Overview |256 Overview33/33 and prospecting7/7 pass. Earlier228/233 native witnesses cover deduplicated research, readiness, separate fit/interest/contactability and saved sources;256 isolated restart retained its refreshed ready count. A score is not buying intent or revenue. |
-| R09 | Qualification, suppression, source age, conflicts and RBQ |256 pipeline94/94, planted reds74/7/5/3 and current research gates pass. Native corrupt-policy handoff refusal was previously verified. The packaged privacy gate remains closed to prospect sends; eligible research does not override it. |
+| R09 | Qualification, suppression, source age, conflicts and RBQ |270 retains the complete native pipeline/research regression gate; the dated256 pipeline94/94 and planted-red witnesses remain below their own scope. The packaged recipient policy remains closed;270 permits an explicit native owner ruling bound to workspace/generation/configuration and draft version. The normal ruling is absent. Isolated save/restriction endpoints are observed; the full visual sequence is pending. Research readiness supplies no ruling. |
 | R10 | Confirmed idempotent conversion | Actual228 full preview/confirmation/replay creates one linked graph without invented person/value;250 prepared three real review graphs.256 CRM27/27 and preservation/restart verify their identities and exact owner fields. |
 | R11 | Stages, cadence, linked next action and totals | Actual203 stage/outcome/cadence and228 bidirectional lead/task dates;252 repeats both date directions with reviewed mail.256 CRM27/27 and reminder-control6/6 pass. Won value is owner-entered data. |
-| R12 | Grounded drafts, retention, Copy and reviewed outreach | Actual203 on-device/manual drafting and209 exact Copy→native paste;256 retains current grounded/sourced drafting. Lead outreach now uses only reviewed Resend from ml@pharos-ai.ca.248 owner-address acceptance/delivery and duplicate/restart proof are separately scoped;256 Resend18/18 pass. Gmail/default-mail lead fallback and manual Mark as sent were removed. [Sender contract](resend-outreach.md). |
+| R12 | Grounded drafts, retention, Copy and reviewed outreach | Actual203 on-device/manual drafting and209 exact Copy→native paste retain their dated scope. Lead outreach uses reviewed Resend from ml@pharos-ai.ca.270 Resend27/27 pass, including a researched99CAD offer starting closed, explicit synthetic ruling, exact-message confirmation and synthetic provider receipt.248 owner-address acceptance/delivery and duplicate/restart proof are separate live evidence; no new message was sent. Gmail/default-mail lead fallback and manual Mark as sent remain removed. [Sender contract](resend-outreach.md). |
 | R13 | Due work and OS notifications | Native visible lead/task dates and closure control are verified, including252/256 retained tasks. OS notification delivery/cancellation is expressly owner-deferred; it is not claimed complete. |
-| R14 | Projects and source-to-register capture | Actual connected WebKit→Worker/D1:13 total assertions =8 base +5 real connected checks, using disposable data. Destination identity, changed-register refusal, duplicates and escaped source text are covered.256 passes eight base WebKit assertions. On November8 the installed app refreshed the existing production register and read165 projects, confirmed pull07:18:03.769Z; the refresh resolves only after its GET /api/state succeeds. The real task capture preview showed the matching register and selected local_id/record_type; Cancel retained the exact native workspace. No production capture/write was performed. |
+| R14 | Projects and source-to-register capture | Earlier connected WebKit→Worker/D1:13 assertions =8 base +5 connected checks, with disposable data.270 passes13 base WebKit assertions, including the later project-search guards; these are different counts/scopes.266 read the existing174-project register at17:02:40.725Z and opened the matching project drawer from global search at17:22. Earlier261 capture preview showed the matching register and selected local_id/record_type; Cancel retained the exact workspace. No production capture/write occurred. |
 | R15 | Mail intake, body/action state and CRM review | Native228 live Gmail refresh/read/Reply-cancel;252 synthetic complete Email→reviewed lead→existing next action and restart;254 native Resend-only send-route guard.256 intake17/17, mailbox9/9, control10/10 and76 workflow assertions pass. Ordinary mailbox writes remain distinct from lead Resend sends; no extra live send, Trash or archive operation is implied. Hosted Email Aggregator remains a prototype. [Mail review](inbox-lead-review-20261108.md). |
 | R16 | Signals, retired filtering and local routing | Actual209 search/retired toggle/disabled capture and idempotent local automation/restart.256 workflow and module regressions pass. Production project capture remains destination-dependent. |
 | R17 | Lantern FR/EN imports and evidence | Actual205 import failure/retry/replay and207 weighted fractional rollup, missing-language Unscored, review withholding and exact restore/restart.256 full native suite retains the57 workflow assertions and nine scorer regressions. [Acceptance scope](lantern-rollup-acceptance-20261107.md). |
@@ -168,9 +221,9 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 | R20 | Activity search/export and capture receipts | Actual203 filtered private export contains exactly one conversion event; current receipt/metadata tests pass. Not every arbitrary field edit is audited. |
 | R21 | Security review and task dedup | Actual198 scan/task/re-scan preserves identity and links; native high-only/resolved/restart checks.256 security27/27 pass. No credential inspection is part of this acceptance. |
 | R22 | Private backup, reviewed restore and rollback | Actual209 invalid-identity refusal, retained error, valid retry, all compared collections and fractional data through restart.256 backup36/36 and recovery7/7 pass. Native backups exclude Keychain, WebKit and external registers. App rollback does not roll back owner data. [Backup contract](backup-validation-acceptance-20261107.md). |
-| R23 | PHAROS/GAP/Twenty/KAIROS integration boundaries |256 integration20/20, GAP13/13, KAIROS6/6 and connected PHAROS CI pass. Separate real disposable backend acceptance: Twenty12 assertions; KAIROS Discovery23/11GETs; GAP35/19GETs including official Envoy.228/240 KAIROS live reads returned no enquiries and no strategy, with six platforms paused. The installed261 November8 native import ended after31s with a credential-timeout result. This verifies failure handling, not a fresh account response. Owner Twenty setup, GAP destination/access, nonempty KAIROS, production PHAROS and Project Control capture writes remain explicit configured dependencies; current Project Control register reading is verified in R14. |
-| R24 | Failure handling, private storage and compatibility |256 save21/21, recovery7/7, backup36/36 and native failures pass. Actual blocked-write import/retry and complete restore witnesses are retained. 261 adds bounded credential wait/cancellation, held-lookup dedup and post-await connection/Stop checks. Native failure UI and preserved owner state are verified above. Credentials stay outside workspace data; unavailable access is not reported as a successful HTTP check. |
-| R25 | Guidance matches installed behavior and evidence | The November8 guide matches Resend review, mail task reuse and current research freshness. This261 ledger update replaces stale pending-operation claims with terminal credential-failure evidence and documents retry/current-connection behavior. Dated UI witnesses and live dependencies remain separate; published receipts identify app and documentation revisions. |
+| R23 | PHAROS/GAP/Twenty/KAIROS integration boundaries |270 retains the full native/connected-PHAROS gate. Separate disposable backend acceptance remains Twenty12 assertions, KAIROS Discovery23/11GETs and GAP35/19GETs including official Envoy. Later normal261 KAIROS authenticated reads and PHAROS empty pull succeeded after the historical credential timeout; no enquiries/strategy or nonempty PHAROS intake was returned. Six collectors stayed paused. GAP DNS failure, Twenty setup, nonempty intake and production writes remain dependencies. Live reads are dated above; none is a new270 witness. |
+| R24 | Failure handling, private storage and compatibility | Earlier256 save21/21, recovery7/7, backup36/36 and actual import/restore failure UI retain their scope.270 retains the full gate,261 bounded credential wait/cancellation and post-await connection checks, and adds recipient-decision failed-save/retry, mismatch, restore/reset and cross-instance regressions. Fresh owner bytes survived270 installation. Credentials remain outside workspace data. No Keychain or stored sign-in secret was inspected, and no access setting changed. An owner-provided Resend export was classified from its metadata and truncated token; no usable key was copied or connection changed. |
+| R25 | Guidance matches installed behavior and evidence | This documentation checkpoint records installed270, partial isolated native save/restriction evidence and normal-runtime/visual limits. It separates the recovered261/266 live reads from the historical credential timeout, retains all25 requirements and links the explicit recipient-decision workflow. Dated earlier UI journeys are not relabelled270. Published receipts identify app and documentation revisions. |
 
 ## Complete installed228 workflow — 7 November
 
@@ -211,11 +264,12 @@ or authorization to contact them.
 
 ## Remaining acceptance and boundaries
 
-- **Native credential access:** installed261 now reaches a terminal credential-timeout result, releases busy controls and retains local work and sign-ins. The earlier256 import stayed pending inside macOS; it ended when256 was quit for the verified261 update. Current authentication remains unavailable, and the owner-local prompt question is unanswered. No credential content or permission was inspected or changed. A timeout is not proof of an HTTP response or successful access.
+- **Current270 native acceptance:** installation and exact fresh owner-workspace preservation pass. The installed normal270 process and matching owner-workspace generation were verified at20:17:57Z; its visual workspace check remains pending. The isolated approval and owner-only restriction were saved, with an owner-reported restriction notice. The complete visual checkbox/cancel/reopen sequence remains unverified because app control cannot initialize its native pipe. The normal recipient ruling is absent. No real assessment decision is inferred from the synthetic test or installation.
+- **Native credential access:** the earlier261 timeout remains a failure-handling witness. Later normal261 Gmail, KAIROS and PHAROS reads succeeded;266 repeated successful Gmail refreshes. Their actual observations are recorded above. These do not prove new270 account checks, nonempty intake or write acceptance. No Keychain or stored sign-in secret was inspected, and no access setting changed. The owner-provided Resend export was classified from metadata and a truncated token; no usable key was copied or connection changed.
 - **KAIROS data:** the verified live customer-account reads were empty; six collection platforms were paused and no strategy was recorded. Nonempty live mapping, fresh collection and strategy-informed targeting are not established by disposable fixtures. ControlWard does not activate collection or import an operator browser session.
-- **Other configured destinations:** owner Twenty setup/service, current GAP authenticated import, nonempty production PHAROS intake/exchange and production Project Control capture writes remain separate from controlled backend acceptance. The installed app did freshly read165 projects from its existing register. Anonymous checks of the saved PHAROS and inferred Project Control workers.dev health URLs returned403; these do not establish authenticated service failure or identify the active Project Control register. The saved GAP hostname did not resolve and the local Twenty URL was unavailable on November8. No substitute endpoint, credential or production record is invented.
+- **Other configured destinations:** Twenty setup/service, current GAP authenticated import, nonempty production PHAROS intake/exchange and production Project Control capture writes remain separate from controlled backend acceptance.266 read174 projects from the existing register. Earlier anonymous403 checks do not contradict the later authenticated PHAROS/Project Control reads or identify a different active register. GAP's configured hostname failed DNS resolution at17:23Z, and Twenty remained Needs setup. No substitute endpoint, credential or production record is invented.
 - **Mail:** lead sending is Resend-only. The owner-address Resend acceptance/delivery checkpoint is verified on248. A real incoming prospect reply and its live reviewed follow-up are still unobserved. Ordinary native mailbox write capabilities retain fixture evidence and require separately scoped live acceptance; the retired Gmail/default-mail lead flow is not a completion requirement.
-- **Owner-deferred/outside distribution scope:** notification delivery remains expressly deferred.261 is ad-hoc signed and not notarized. No collection activation, new outreach, production deployment/migration or generated revenue is claimed. Won value is owner-entered CRM data, not a payment receipt.
+- **Owner-deferred/outside distribution scope:** notification delivery remains expressly deferred.270 is ad-hoc signed and not notarized. No collection activation, new outreach, production deployment/migration or generated revenue is claimed. Won value is owner-entered CRM data, not a payment receipt.
 
 The full hosted task remains in progress. External dependencies do not erase the verified local workflows, and verified local workflows do not prove those live dependencies.
 
