@@ -7,8 +7,17 @@ Start in **Pipeline**. Import an existing lead CSV, add a lead by hand, or use *
 If a connection says **Access needed**, use its **Verify** or **Check access**
 action and handle any macOS dialog locally. Automatic refreshes pause until the
 credential is accessible; the saved sign-in and Auto-Pilot choice are retained.
-You can continue local CRM work while access is pending. See the
-[startup access policy and test scope](credential-startup-acceptance-20261107.md).
+Credential checks and reads use a30-second application-wait deadline. If the
+wait expires, the app releases its busy controls and retains your saved
+connection. A synchronous macOS lookup may still be running; another lookup for
+that item is refused until it returns. Handle any local access prompt before
+retrying. You can continue local CRM work. See the
+[deadline behavior and test scope](credential-wait-acceptance-20261108.md).
+
+Changing a connection or stopping automatic intake prevents a pending read from
+importing into the replacement connection. A PHAROS snapshot edited during
+credential access needs a fresh preview. A write already issued to a provider
+retains its observed outcome; stopping does not undo it.
 
 **Find prospects** researches the selected businesses' websites for public contact routes, named people and explicit AI-use evidence. Expand **Research websites from a search or agent** to give it business websites from another discovery source; ControlWard obtains the evidence itself. Sources, timestamps and unknowns are retained when the search sheet or app closes. Use **Add researched lead** to save a finding and any eligible 99 CAD Quick Scan draft into Pipeline for review. Published business contact details are not proof of a person's private inbox or mailbox deliverability. Map coverage can be sparse; a missing result does not establish that no suitable business exists.
 
