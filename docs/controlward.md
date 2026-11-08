@@ -87,6 +87,15 @@ and draft** opens Pipeline editing, including date changes that keep the next
 action in sync. Linked metadata is visible in that lead's editor; message bodies
 remain in the mailbox. Import refresh and normal reopen retain the association.
 
+Lead-related Reply, Reply all and Forward use the lead editor's Resend path,
+from ml@pharos-ai.ca. The mailbox buttons show this route instead of offering a
+Gmail send. The action-time guard also checks the current association and To/Cc
+addresses, so an older compose window cannot bypass a later CRM match. A refusal
+is audited before any mailbox HTTP. Ordinary personal-mail actions and non-send
+mailbox actions retain their existing connector behavior. Saving a lead draft
+does not send it; the Resend privacy gate, exact-message confirmation and provider
+receipt requirements remain unchanged.
+
 Example (synthetic data only):
 
 ```json

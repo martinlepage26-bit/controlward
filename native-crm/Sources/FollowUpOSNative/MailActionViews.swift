@@ -53,7 +53,7 @@ final class MailActionModel: ObservableObject {
         body = nil
         let connector = await LiveMailSession.connector(for: message, intake: intake)
         self.connector = connector
-        support = connector.supports()
+        refreshSupport(message: message, store: store)
         let sink = MemoryAuditSink()
         let read = await MailActionRunner(connector: connector, sink: sink, policy: policy).read(sourceID: message.sourceID)
         body = read.body
@@ -62,12 +62,29 @@ final class MailActionModel: ObservableObject {
         loading = false
     }
 
+    func refreshSupport(message: MailMetadata, store: AppStore) {
+        guard let connector else { return }
+        let resendOnly = store.mailRequiresResend(message)
+        support = connector.supports().map { item in
+            guard item.action.sends && resendOnly else { return item }
+            return MailActionSupport(action: item.action, enabled: false, reason: MailSendPolicy.resendRequiredReason)
+        }
+    }
+
     /// Runs a command the user already confirmed when the action requires it. Writes one CW-AUDIT line.
     /// Returns an error string and leaves the mailbox unchanged when the policy, gate or connector refuses.
     func perform(_ command: MailCommand, store: AppStore, localID: UUID) async -> String? {
         guard let connector else { return "No mailbox connector is available for this message." }
         let sink = MemoryAuditSink()
-        let runner = MailActionRunner(connector: connector, sink: sink, policy: policy)
+        guard let message = store.mail.first(where: { $0.id == localID && $0.sourceID == command.sourceID }) else {
+            let refused = MailActionRunner(connector: connector, sink: sink, policy: policy).refuse(command,
+                code: "refused:message-unavailable", reason: "This message is no longer available. Nothing was changed.")
+            store.recordAudit(sink.lines); status = refused.status
+            return refused.failure
+        }
+        var currentPolicy = policy
+        currentPolicy.outreachRequiresResend = store.mailRequiresResend(message, compose: command.compose)
+        let runner = MailActionRunner(connector: connector, sink: sink, policy: currentPolicy)
         let result: MailRunResult
         switch await runner.performRemote(command) {
         case .finished(let refused):
@@ -80,7 +97,7 @@ final class MailActionModel: ObservableObject {
             result = runner.finish(command, receipt: receipt, localError: localError)
         }
         store.recordAudit(sink.lines)
-        support = connector.supports()
+        refreshSupport(message: message, store: store)
         status = result.status
         return result.failure
     }

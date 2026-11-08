@@ -7,11 +7,14 @@ import FoundationNetworking
 // which refuses before any request and writes exactly one CW-AUDIT v1 line per action.
 // Portable: no SwiftUI, AppKit or WebKit, so bin/test-portable compiles it on Linux.
 
-/// Test-mode recipient allowlist (S1-R2, safety §5.2). Off unless CONTROLWARD_MAIL_TEST_ALLOWLIST is set.
-/// When it is set (even to an empty list), every To and Cc address of a send must be on it.
+/// Standing lead-outreach sender rule plus the test-mode recipient allowlist (S1-R2).
+/// When the allowlist is set (even empty), every To and Cc address must be on it.
 struct MailSendPolicy: Equatable, Sendable {
     /// nil means test mode is off.
     var allowlist: Set<String>?
+    /// The app derives this from the current CRM association and compose recipients at action time.
+    var outreachRequiresResend = false
+    static let resendRequiredReason = "Lead outreach uses Resend from ml@pharos-ai.ca. Save the lead association and open the lead's draft to review and send there. Nothing was sent through the mailbox."
 
     static let off = MailSendPolicy(allowlist: nil)
     static let environmentKey = "CONTROLWARD_MAIL_TEST_ALLOWLIST"
@@ -27,6 +30,7 @@ struct MailSendPolicy: Equatable, Sendable {
 
     /// Returns the refusal code, or nil when the command may proceed.
     func refusal(for command: MailCommand) -> String? {
+        if command.action.sends && outreachRequiresResend { return "refused:resend-required" }
         guard let allowlist, command.action.sends else { return nil }
         let fields = (command.compose?.to ?? []) + (command.compose?.cc ?? [])
         for field in fields {
@@ -113,13 +117,17 @@ struct MailActionRunner: Sendable {
         case accepted(MailCommandReceipt)
     }
 
+    func refuse(_ command: MailCommand, code: String, reason: String) -> MailRunResult {
+        let audit = line(command.action.rawValue, target: command.sourceID, result: code)
+        sink.write(audit)
+        return MailRunResult(status: reason, failure: reason, receipt: nil, audit: audit)
+    }
+
     func performRemote(_ command: MailCommand) async -> RemoteStep {
         let action = command.action.rawValue
         if let refusal = policy.refusal(for: command) {
-            let text = "Test mode: a recipient is not on the allowlist. Nothing was sent."
-            let audit = line(action, target: command.sourceID, result: refusal)
-            sink.write(audit)
-            return .finished(MailRunResult(status: text, failure: text, receipt: nil, audit: audit))
+            let text = refusal == "refused:resend-required" ? MailSendPolicy.resendRequiredReason : "Test mode: a recipient is not on the allowlist. Nothing was sent."
+            return .finished(refuse(command, code: refusal, reason: text))
         }
         do {
             try MailCommandGate.validate(command, support: connector.supports())
