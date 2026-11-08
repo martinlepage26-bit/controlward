@@ -2,6 +2,15 @@ import Foundation
 
 @MainActor
 enum AgentResearchTests {
+    private struct OverlapTransport: LeadTransport {
+        let inner: FakeLeadTransport
+        let beforeReturn: @MainActor @Sendable () throws -> Void
+        func send(_ request: URLRequest) async throws -> LeadHTTPResponse {
+            let response = try await inner.send(request)
+            if request.url?.path == "/intelligence-artificielle" { try await beforeReturn() }
+            return response
+        }
+    }
     static func request(now: Date, url: String = LeadKit.homePage, generation: UUID = UUID()) -> AgentResearchRequest {
         AgentResearchRequest(id: UUID(), batchID: UUID(), workspaceGeneration: generation, query: "Montréal businesses using AI", createdAt: now.addingTimeInterval(-5),
                              expiresAt: now.addingTimeInterval(300), sites: [.init(name: "Clinique Exemple Nord", url: url)])
@@ -24,6 +33,72 @@ enum AgentResearchTests {
     static func run() async -> Bool {
         let expect = PortableCheck.expect
         return await suite([
+            ("A slower positive fetch cannot promote a draft after a newer negative recheck", {
+                let now = Date(timeIntervalSince1970: floor(Date.now.timeIntervalSince1970 - 120))
+                let (researcher, inner, source) = try QuickScanResearchTests.fixture(now: now)
+                var negative = await researcher.research(source, segmentID: "clinic")
+                let directory = root(); defer { try? FileManager.default.removeItem(at: directory) }
+                let store = AppStore(storageURL: directory.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(), researchRoot: directory)
+                let job = request(now: now, generation: store.workspace.researchGeneration)
+                let candidate = try job.candidates(now: now)[0]
+                negative.record.id = "cw:" + candidate.sourceID; negative.checkedAt = now.addingTimeInterval(60); negative.aiUse = []
+                let newer = negative
+                let transport = OverlapTransport(inner: inner) { try store.recordWebsiteResearch(candidate, result: newer) }
+                let outcome = await AgentResearchCoordinator().execute(job, store: store, root: directory, config: try LeadKit.config().interactiveSearch(), output: directory.appendingPathComponent("result.json"), inner: transport, clock: FakeLeadClock(now))
+                try expect(outcome.status == "completed" && outcome.entries.first?.aiEvidenceFound == false && outcome.entries.first?.leadID == nil, "older positive observation published a false ready outcome")
+                try expect(store.leads.isEmpty && store.websiteResearch.results[candidate.sourceID] == newer, "older positive observation promoted a draft or regressed saved findings")
+            }),
+            ("Direct and recovered rechecks replace only lead evidence, preserve owner work and resist older results", {
+                let now = Date(timeIntervalSince1970: floor(Date.now.timeIntervalSince1970 - 120))
+                let (researcher, _, source) = try QuickScanResearchTests.fixture(now: now)
+                var positive = await researcher.research(source, segmentID: "clinic")
+                let candidate = try WebsiteResearchQueue.parse("Clinique Exemple Nord | \(LeadKit.homePage)")[0]
+                positive.record.id = "cw:" + candidate.sourceID
+                let directory = root(); defer { try? FileManager.default.removeItem(at: directory) }
+                let store = AppStore(storageURL: directory.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(), researchRoot: directory)
+                try store.recordWebsiteResearch(candidate, result: positive)
+                var lead = Lead.blank(); lead.sourceID = candidate.sourceID; lead.email = positive.email!; lead.quickScanResearch = positive
+                lead.outreachDraft = positive.draft(config: researcher.config, suppression: SuppressionList(), now: now)!.body
+                lead.companyID = UUID(); lead.contactID = UUID(); lead.followUpTaskID = UUID()
+                lead.nextFollowUp = "2026-11-09"; lead.notes = "Owner's private notes"
+                try expect(store.add(lead), "fixture lead not saved")
+                var negative = positive; negative.checkedAt = now.addingTimeInterval(1); negative.aiUse = []
+                try store.recordWebsiteResearch(candidate, result: negative)
+                var expected = lead; expected.quickScanResearch = negative
+                try expect(store.leads == [expected], "direct recheck left stale findings or changed owner fields")
+                try expect(LeadWorkflow.emailDraftIssue(for: store.leads[0], body: lead.outreachDraft!, subject: QuickScanResearchResult.offerSubject, config: researcher.config, suppression: SuppressionList(), now: now.addingTimeInterval(1)) != nil, "negative recheck did not block old draft")
+                try store.recordWebsiteResearch(candidate, result: positive)
+                try expect(store.leads == [expected], "older overlapping result regressed the current lead evidence")
+                negative.checkedAt = now.addingTimeInterval(2); negative.issues = ["Recovered recheck"]
+                var delta = WebsiteResearchCache(); delta.merge(candidate, result: negative)
+                try delta.save(directory.appendingPathComponent("research-recovery.json"))
+                let reopened = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore(), researchRoot: directory)
+                expected.quickScanResearch = negative
+                try expect(reopened.leads == [expected] && reopened.researchFailure == nil, "recovered negative finding did not govern the reopened lead")
+                let again = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore(), researchRoot: directory)
+                try expect(again.leads == [expected], "negative evidence or exact owner work lost on another reopen")
+            }),
+            ("A changed page is fetched and fresh negative findings invalidate an older unsent draft", {
+                let now = Date(timeIntervalSince1970: floor(Date.now.timeIntervalSince1970 - 120))
+                let (_, inner, _) = try QuickScanResearchTests.fixture(now: now)
+                let config = try LeadKit.config().interactiveSearch()
+                let directory = root(); defer { try? FileManager.default.removeItem(at: directory) }
+                let store = AppStore(storageURL: directory.appendingPathComponent("workspace.json"), secrets: InMemorySecretStore(), researchRoot: directory)
+                let coordinator = AgentResearchCoordinator()
+                let first = await coordinator.execute(request(now: now, generation: store.workspace.researchGeneration), store: store, root: directory, config: config, output: directory.appendingPathComponent("first.json"), inner: inner, clock: FakeLeadClock(now))
+                try expect(first.entries.first?.leadID != nil, "baseline draft absent")
+                let original = store.leads[0], count = inner.urls.count
+                let changed = "https://www.clinique-exemple.test/privacy"
+                let html = "<h1>Clinique Exemple Nord</h1><p>Alex Fictif, directrice générale</p><address>\(LeadKit.clinicAddress)</address><a href=\"mailto:info@clinique-exemple.test\">Contact</a><p>We do not use AI.</p>"
+                for url in [changed, LeadKit.homePage, "https://www.clinique-exemple.test/intelligence-artificielle"] { inner.respond(url, body: html) }
+                let second = await coordinator.execute(request(now: now.addingTimeInterval(1), url: changed, generation: store.workspace.researchGeneration), store: store, root: directory, config: config, output: directory.appendingPathComponent("second.json"), inner: inner, clock: FakeLeadClock(now.addingTimeInterval(1)))
+                try expect(inner.urls.count > count && inner.urls.contains(changed), "changed input URL reused the previous cached page")
+                try expect(second.entries.first?.aiEvidenceFound == false && second.entries.first?.leadID == nil, "negative recheck was reported draft ready")
+                let refreshed = store.leads[0]
+                try expect(refreshed.id == original.id && store.leads.count == 1 && refreshed.outreachDraft == original.outreachDraft && refreshed.history == original.history && refreshed.nextFollowUp == original.nextFollowUp, "recheck discarded owner work or duplicated the lead")
+                try expect(refreshed.quickScanResearch?.hasAIUseEvidence == false, "fresh negative findings did not reach the existing lead")
+                try expect(LeadWorkflow.emailDraftIssue(for: refreshed, body: original.outreachDraft!, subject: QuickScanResearchResult.offerSubject, config: config, suppression: SuppressionList(), now: now.addingTimeInterval(1)) != nil, "old ready draft remained usable after a negative recheck")
+            }),
             ("Names and URLs produce sourced unsent CRM drafts; replay reuses research without duplicates", {
                 // Force an ISO round-up so cache reuse does not depend on sub-millisecond timing.
                 let now = Date(timeIntervalSince1970: floor(Date.now.timeIntervalSince1970 - 120) + 0.0006)
@@ -42,6 +117,7 @@ enum AgentResearchTests {
                 let count = inner.urls.count
                 let second = await coordinator.execute(job, store: store, root: directory, config: config, output: output, inner: inner, clock: FakeLeadClock(now))
                 try expect(second.status == "completed" && store.leads.count == 1 && inner.urls.count == count, "cached replay is idempotent")
+                try expect(first.entries.first?.reusedResearch == false && second.entries.first?.reusedResearch == true, "fresh and reused findings lack accurate provenance")
                 let reopened = AppStore(storageURL: store.storageURL, secrets: InMemorySecretStore(), researchRoot: directory)
                 try expect(reopened.leads[0].outreachDraft == store.leads[0].outreachDraft, "saved draft survives reload")
                 let permissions = try FileManager.default.attributesOfItem(atPath: output.path)[.posixPermissions] as? NSNumber

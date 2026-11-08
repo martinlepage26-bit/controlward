@@ -26,6 +26,71 @@ enum QuickScanResearchTests {
     static func run() async -> Bool {
         let expect = PortableCheck.expect
         return await PortableCheck.suite("Quick Scan research", [
+            ("Phone shape checks preserve literal formats and extensions without claiming assignment", {
+                for invalid in ["+1", "123", "+15145550100", "418-555-0199", "114-271-3824", "514-171-3824", "+0123456789", "5145713824;ext=abc"] {
+                    try expect(PublishedPhoneRules.key(invalid) == nil, "invalid phone accepted: \(invalid)")
+                }
+                try expect(PublishedPhoneRules.key("(514) 571-3824") == PublishedPhoneRules.key("+1 514 571 3824"), "NANP formatting should share one key")
+                try expect(PublishedPhoneRules.key("+15145713824;ext=123") == "+15145713824;ext=123", "extension lost")
+                try expect(PublishedPhoneRules.key("+15145713824;ext=124") != PublishedPhoneRules.key("+15145713824;ext=123"), "distinct extensions merged")
+                try expect(PublishedPhoneRules.key("514 555-1212") != nil && PublishedPhoneRules.key("514 555-0200") != nil, "non-fictional 555 ranges were blanket rejected")
+            }),
+            ("Cache reuse requires the same requested page, business, current parser and recent complete findings", {
+                let (researcher, _, candidate) = try fixture()
+                var result = await researcher.research(candidate, segmentID: "clinic")
+                let now = ISODates.date("2026-11-08T12:00:00Z")!
+                result.checkedAt = now
+                var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+                try expect(result.canReuse(for: "https://WWW.clinique-exemple.test:443/#contact", organisation: candidate.name, now: now, calendar: calendar), "equivalent URL did not reuse")
+                for url in ["https://www.clinique-exemple.test/privacy", "http://www.clinique-exemple.test/", "https://www.clinique-exemple.test/?page=contact", "https://other.test/", "https://user@www.clinique-exemple.test/"] {
+                    try expect(!result.canReuse(for: url, now: now, calendar: calendar), "changed request reused: \(url)")
+                }
+                try expect(!result.canReuse(for: LeadKit.homePage, organisation: "Another business", now: now, calendar: calendar), "changed business name reused")
+                try expect(result.canReuse(for: LeadKit.homePage, now: now.addingTimeInterval(3599), calendar: calendar), "fresh same-day result rejected")
+                try expect(!result.canReuse(for: LeadKit.homePage, now: now.addingTimeInterval(3600), calendar: calendar), "hour-old result reused")
+                try expect(!result.canReuse(for: LeadKit.homePage, now: now.addingTimeInterval(-1), calendar: calendar), "future finding reused")
+                result.requestedURL = nil
+                try expect(!result.canReuse(for: LeadKit.homePage, now: now, calendar: calendar), "missing requested URL assumed")
+                result.requestedURL = LeadKit.homePage; result.complete = false
+                try expect(!result.canReuse(for: LeadKit.homePage, now: now, calendar: calendar), "incomplete finding reused")
+                result.complete = true; result.researchVersion = QuickScanResearcher.version - 1
+                try expect(!result.canReuse(for: LeadKit.homePage, now: now, calendar: calendar), "old parser finding reused")
+                try expect(result.draft(config: researcher.config, suppression: SuppressionList(), now: now) == nil, "old parser draft allowed")
+            }),
+            ("Recent findings across a local midnight are rechecked in eastern and western timezones", {
+                let (researcher, _, candidate) = try fixture()
+                var result = await researcher.research(candidate, segmentID: "clinic")
+                for offset in [14 * 3600, -11 * 3600] {
+                    var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: offset)!
+                    let day = calendar.date(from: DateComponents(year: 2026, month: 11, day: 8))!
+                    result.checkedAt = day.addingTimeInterval(-30)
+                    try expect(!result.canReuse(for: LeadKit.homePage, now: day.addingTimeInterval(30), calendar: calendar), "previous local-day evidence reused")
+                }
+            }),
+            ("Partial and fictional phone candidates are withheld while complete literal routes remain", {
+                let page = SiteExtractor.read(html: """
+                <p>Call (514) 571-3824.</p><a href="tel:+15145713824">Phone</a>
+                <a href="tel:+1">Incomplete link</a><a href="tel:123">Extension only</a>
+                <p>CRM examples: 514 555-0142, 418 555-0198, 581 555-0177.</p>
+                <a href="tel:+15145550142">Fictional example</a>
+                <a href="tel:+33123456789">International published route</a>
+                """, url: URL(string: LeadKit.homePage)!, fetchedAt: LeadKit.now)
+                try expect(page.phones.contains("+15145713824") && page.phones.contains("+33123456789"), "complete literal routes lost")
+                try expect(!page.phones.contains("+1") && !page.phones.contains("123") && !page.phones.contains { $0.contains("555") }, "partial or fictional phone presented as usable")
+                let routes = QuickScanResearcher.contacts(in: [page], domain: "clinique-exemple.test").filter { $0.kind == .phone }
+                try expect(routes.count == 2, "equivalent NANP formats duplicated the contact route")
+            }),
+            ("Older cached phone candidates cannot appear as supported contactability", {
+                let (researcher, _, candidate) = try fixture()
+                var result = await researcher.research(candidate, segmentID: "clinic")
+                let literal = "Sample contact: 514 555-0142"
+                result.record.snapshots[0].text += "\n" + literal
+                let invalid = PublishedContactEvidence(kind: .phone, value: "514 555-0142", evidence: FactEvidence(url: LeadKit.homePage, excerpt: literal))
+                result.contacts.append(invalid)
+                try expect(!invalid.isSupported(in: result.record), "cached fiction range is still a supported phone")
+                try expect(!result.lines.contains { $0.hasPrefix("Published phone: 514 555") }, "cached candidate still labelled a published usable route")
+                try expect(result.contacts.contains(invalid) && result.record.snapshots[0].text.contains(literal), "original cached evidence was destructively removed")
+            }),
             ("Discovery website becomes a sourced contact, AI-use claim and gated 99 CAD draft", {
                 let (researcher, inner, candidate) = try fixture()
                 let result = await researcher.research(candidate, segmentID: "clinic")

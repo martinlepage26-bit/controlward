@@ -1,5 +1,38 @@
 import Foundation
 
+/// A structural check, not a subscriber lookup or proof that a business owns a number.
+/// NANP format and fictional range: https://nanpa.com/about and
+/// https://www.nanpa.com/numbering/555-line-numbers (checked 2026-11-08).
+enum PublishedPhoneRules {
+    static func key(_ raw: String) -> String? {
+        guard raw.utf8.count <= 160 else { return nil }
+        let parts = raw.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: ";")
+        guard let first = parts.first, first.range(of: #"^\+?[0-9() .\-\x{00A0}]+$"#, options: .regularExpression) != nil else { return nil }
+        let digits = first.filter(\.isNumber)
+        var extensionSuffix = ""
+        if parts.count > 1 {
+            guard parts.count == 2, parts[1].range(of: #"(?i)^ext=[0-9]{1,8}$"#, options: .regularExpression) != nil else { return nil }
+            extensionSuffix = ";" + parts[1].lowercased()
+        }
+        let global = first.hasPrefix("+")
+        let national: String
+        if digits.count == 11 && digits.hasPrefix("1") { national = String(digits.dropFirst()) }
+        else if !global && digits.count == 10 { national = digits }
+        else {
+            // Retain other complete-looking global routes without guessing a country or checking assignment.
+            guard global, (7...15).contains(digits.count), let start = digits.first,
+                  start != "0", start != "1" else { return nil }
+            return "+" + digits + extensionSuffix
+        }
+        let characters = Array(national)
+        guard ("2"..."9").contains(characters[0]), ("2"..."9").contains(characters[3]) else { return nil }
+        // Only the administrator's explicitly fictional block is excluded here; other numbers
+        // are not asserted to be assigned, reachable or personally owned.
+        if national.dropFirst(3).hasPrefix("555"), let line = Int(national.suffix(4)), (100...199).contains(line) { return nil }
+        return "+1" + national + extensionSuffix
+    }
+}
+
 /// Reads one page from a business's own site: visible text, a verbatim street address, named people with
 /// titles, a public contact route, a consent basis and trigger signals. Nothing here makes a request.
 enum SiteExtractor {
@@ -19,6 +52,8 @@ enum SiteExtractor {
         var links: [String]
         var emails: [String]
         var phones: [String]
+        /// Raw candidates remain available for audit redaction; only structurally usable routes enter phones.
+        var phoneCandidates: [String] = []
         var address: String?
         var people: [Person]
         var linkedinURLs: [String]
@@ -36,7 +71,7 @@ enum SiteExtractor {
         var phones = links.compactMap { $0.lowercased().hasPrefix("tel:") ? String($0.dropFirst(4)).removingPercentEncoding : nil }
         phones += matches(text, "\\(?\\b[2-9][0-9]{2}\\)?[ .-][0-9]{3}[ .-][0-9]{4}\\b")
         return Page(url: url.absoluteString, fetchedAt: fetchedAt, text: text, bodyText: bodyText(html), claimText: claimText(html), links: links,
-                    emails: unique(emails.filter { !$0.isEmpty }), phones: unique(phones),
+                    emails: unique(emails.filter { !$0.isEmpty }), phones: unique(phones.filter { PublishedPhoneRules.key($0) != nil }), phoneCandidates: unique(phones),
                     address: address(in: text), people: people(in: text),
                     linkedinURLs: links.filter { URL(string: $0)?.host.map { HostMatch.belongs($0, to: "linkedin.com") } == true },
                     refusesSolicitation: refusesSolicitation(text))

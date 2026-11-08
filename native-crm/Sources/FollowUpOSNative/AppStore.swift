@@ -162,11 +162,26 @@ final class AppStore: ObservableObject {
             }
             try commitWorkspace { next in
                 next.websiteResearch = snapshot.cache
+                Self.refreshLeadResearch(in: &next)
                 next.researchMigrationComplete = true
                 next.consumedResearchRecovery = snapshot.recoveryDigest
             }
             researchFailure = nil
         } catch { researchFailure = "Saved research could not be imported. Original files were retained; restore storage access or repair the research file before retrying." }
+    }
+
+    /// Rechecks (including recovered saves) govern existing drafts too. Only the source
+    /// assessment changes; owner text, history, relationships, status and dates are retained.
+    /// Read the winning cache entry so an older overlapping fetch cannot regress evidence.
+    private static func refreshLeadResearch(in workspace: inout PersistentWorkspace) {
+        for index in workspace.leads.indices {
+            guard let previous = workspace.leads[index].quickScanResearch,
+                  previous.record.id.hasPrefix("cw:"),
+                  let latest = workspace.websiteResearch.results[String(previous.record.id.dropFirst(3))],
+                  latest.record.id == previous.record.id,
+                  latest.checkedAt >= previous.checkedAt else { continue }
+            workspace.leads[index].quickScanResearch = latest
+        }
     }
 
     func recordDiscoveryCandidates(_ candidates: [DiscoveryCandidate]) throws {
@@ -185,6 +200,7 @@ final class AppStore: ObservableObject {
             try snapshot.cache.validate()
             try commitWorkspace { next in
                 next.websiteResearch = snapshot.cache
+                Self.refreshLeadResearch(in: &next)
                 next.researchMigrationComplete = true
                 next.consumedResearchRecovery = snapshot.recoveryDigest
             }
@@ -1325,7 +1341,7 @@ final class AppStore: ObservableObject {
             lead.quickScanResearch = research
             if !existing || lead.email == (candidate.email ?? "") || lead.email.isEmpty { lead.email = research.email ?? "" }
             if !existing || lead.phone == (candidate.phone ?? "") || lead.phone.isEmpty {
-                lead.phone = research.contacts.first(where: { $0.kind == .phone })?.value ?? ""
+                lead.phone = research.supportedContacts.first(where: { $0.kind == .phone })?.value ?? ""
             }
             if lead.name == candidate.name, let person = research.record.contact { lead.name = person.name }
             if lead.outreachDraft == nil, lead.lastMessage.isEmpty, lead.email == research.email,
@@ -1342,6 +1358,7 @@ final class AppStore: ObservableObject {
             }
             if let index = next.leads.firstIndex(where: { $0.id == lead.id }) { next.leads[index] = lead }
             else { next.leads.insert(lead, at: 0) }
+            Self.refreshLeadResearch(in: &next)
 
             var signal = Signal()
             signal.title = "Public prospect: \(candidate.name)"
