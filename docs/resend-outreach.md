@@ -22,6 +22,9 @@ The existing `Resources/config/icp.json` privacy gate remains closed. It permits
 sends only to the configured Martin addresses until Martin rules on the privacy
 impact assessment. Implementing Resend does not change that gate. No new prospect
 send or diagnostic message is authorized by the standing sender preference.
+Packaged apps resolve this policy only from their own resource bundle and ignore
+the `CONTROLWARD_CONFIG_DIR` development override. Command-line/development
+configuration and the other research/proof loaders retain their existing behavior.
 
 Before HTTP, the app atomically saves the approved request and its original
 idempotency key. An accepted response must contain a Resend message UUID before

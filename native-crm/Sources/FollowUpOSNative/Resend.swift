@@ -9,22 +9,23 @@ enum ResendPolicy {
     // Leave a margin inside Resend's documented 24-hour deduplication window.
     static let retryWindow: TimeInterval = 23 * 60 * 60
 
-    static func bundledConfig(in main: Bundle = .main) -> ICPConfig? {
-        let bundle: Bundle?
+    static func bundledConfig(in main: Bundle = .main, developmentDirectory: URL? = ICPConfig.defaultDirectory()) -> ICPConfig? {
+        let directory: URL?
         // SwiftPM's generated accessor falls back to an absolute build directory.
         // A sandboxed packaged app must resolve only its signed resource bundle.
         if main.bundleURL.pathExtension == "app" {
             guard let url = main.url(forResource: "FollowUpOSNative_FollowUpOSNative", withExtension: "bundle"),
                   let resources = Bundle(url: url) else { return nil }
-            bundle = resources
+            // Do not call defaultDirectory(bundle:) here: it honors CONTROLWARD_CONFIG_DIR.
+            directory = resources.url(forResource: "config", withExtension: nil)
         } else {
 #if SWIFT_PACKAGE
-            bundle = Bundle.module
+            directory = developmentDirectory ?? Bundle.module.url(forResource: "config", withExtension: nil)
 #else
-            bundle = nil
+            directory = developmentDirectory
 #endif
         }
-        return ICPConfig.defaultDirectory(bundle: bundle).flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
+        return directory.flatMap { try? ICPConfig.load(directory: $0).interactiveSearch() }
     }
 
     static func contentHash(recipient: String, subject: String, body: String) -> String {
