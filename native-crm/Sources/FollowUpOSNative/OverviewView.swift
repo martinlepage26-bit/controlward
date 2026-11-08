@@ -163,6 +163,7 @@ struct OverviewView: View {
     @State private var projects: ProjectModuleSnapshot?
     @State private var projectError: String?
     @State private var searchProject: SearchProjectDestination?
+    @State private var searchProjectError: String?
 
     private static let toronto = TimeZone(identifier: "America/Toronto") ?? .current
     private var snapshot: OverviewSnapshot {
@@ -201,7 +202,7 @@ struct OverviewView: View {
         .sheet(item: $record) { RecordProjectSheet(record: $0) }
         .task { await loadProjects() }
         .task(id: searchProject?.id) { await openSearchProject() }
-        .onChange(of: search) { _, _ in searchProject = nil }
+        .onChange(of: search) { _, _ in searchProject = nil; searchProjectError = nil }
     }
 
     private func loadProjects() async {
@@ -217,7 +218,7 @@ struct OverviewView: View {
             try Task.checkCancellation()
             navigation.show(.projects)
         } catch is CancellationError { }
-        catch { if !Task.isCancelled { store.showNotice(error.localizedDescription) } }
+        catch { if !Task.isCancelled { searchProjectError = error.localizedDescription } }
     }
 
     private var hero: some View {
@@ -265,7 +266,10 @@ struct OverviewView: View {
                     Text(matches.projectsOffline ? "Projects · loaded register, offline" : "Projects · loaded register")
                         .font(.caption.weight(.semibold)).foregroundStyle(CWPalette.gray)
                     ForEach(matches.projects.prefix(OverviewSearchSnapshot.visibleLimit)) { project in
-                        Button { searchProject = SearchProjectDestination(projectID: project.id, register: register) } label: {
+                        Button {
+                            searchProjectError = nil
+                            searchProject = SearchProjectDestination(projectID: project.id, register: register)
+                        } label: {
                             HStack {
                                 Image(systemName: "folder")
                                 Text(project.title).fontWeight(.medium)
@@ -284,6 +288,9 @@ struct OverviewView: View {
                     Text(projectError ?? "Project search needs a loaded, connected register.").font(.caption).foregroundStyle(CWPalette.gray)
                     Button("Open Projects") { navigation.show(.projects) }.buttonStyle(.plain)
                 }
+            }
+            if let searchProjectError {
+                Text(searchProjectError).font(.caption).foregroundStyle(CWPalette.red)
             }
         }.cwCard()
     }
