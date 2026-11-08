@@ -250,18 +250,31 @@ import Foundation
             ("researched messages still require supported AI/contact evidence and an intact footer", {
                 let (researcher, _, candidate) = try QuickScanResearchTests.fixture()
                 let research = await researcher.research(candidate, segmentID: "clinic")
-                let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
+                let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false); defer { try? FileManager.default.removeItem(at: root) }
                 store.resendNow = { LeadKit.now }
                 var sourced = lead; sourced.email = research.email!; sourced.quickScanResearch = research
                 _ = store.update(sourced)
                 let config = store.resendConfig!
                 guard let message = research.draft(config: config, suppression: store.suppressionList, now: LeadKit.now) else { throw SmokeTestFailure.failed("research fixture refused") }
+                try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) == nil, "researched offer bypassed default closed recipients")
+                try expect(store.recordResendRecipientDecision(allowExternal: true, assessmentReference: "Synthetic researched-offer assessment",
+                    review: store.prepareResendRecipientReview()!, confirmed: true), "researched offer ruling failed")
                 try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) != nil, "valid researched draft refused")
                 let withoutFooter = message.body.replacingOccurrences(of: OutreachDraftBuilder.footer(config: config, language: "fr"), with: "")
                 try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: withoutFooter) == nil, "missing footer allowed")
                 sourced.quickScanResearch?.aiUse = []; _ = store.update(sourced)
                 try expect(store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) == nil, "missing AI evidence allowed")
                 try expect(await http.captured().isEmpty, "refused research reached provider")
+                sourced.quickScanResearch = research; _ = store.update(sourced)
+                guard let confirmed = store.prepareResendSend(leadID: lead.id, subject: message.subject, body: message.body) else {
+                    throw SmokeTestFailure.failed(store.resendFailure ?? "researched offer preview unavailable after ruling")
+                }
+                try expect(await store.sendResend(confirmed), "recorded owner ruling did not permit confirmed researched offer")
+                let sentCalls = await http.captured()
+                try expect(config.loi25Gate.open == false && sentCalls.count == 1
+                    && store.leads[0].history.first?.subject == message.subject
+                    && store.leads[0].history.first?.providerMessageID == providerID,
+                    "researched offer acceptance bypassed closed base policy or lost its receipt")
             }),
             ("preview, cancel and fabricated approval perform zero HTTP", {
                 let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
