@@ -6,7 +6,50 @@ Requirements were checked against `PRODUCT.md`, `docs/controlward.md`, `native-c
 
 ## Current installed release and evidence scope
 
-Build **256** is installed at `/Applications/ControlWard.app`, clean app source
+Build **261** is installed at `/Applications/ControlWard.app`, clean app source
+`d6a4b5ab0085c7a597bad0df98e25084f802d2bc`, merged through
+[PR56](https://github.com/martinlepage26-bit/controlward/pull/56) as
+`15ddeaf8cfc835240b723288dca6db50f3990ae6`. The reviewed archive
+`ControlWard-1.1.1-261-d6a4b5a-macOS.zip` has SHA256
+`092d85dfa8c74bc3fb23ba15da3db44fa39a31c59c3ea3e801abce0111746616`.
+Full local native/WebKit/SwiftUI/signature/extracted-archive gates pass;
+exact-source CI42462071915 and macOS packaging42462071935 pass every job and
+executed step. The installed executable matches that archive. It is ad-hoc
+signed, not notarized;256 is retained for app rollback. No older owner workspace
+was restored. This ledger update changes documentation only.
+
+The [credential-wait repair](credential-wait-acceptance-20261108.md) adds a
+30-second application-wait deadline, cancellation settlement, late-result
+discard and refusal to duplicate a held lookup. PHAROS rechecks the approved
+snapshot after credential access. KAIROS/GAP/PHAROS intake rechecks the current
+connection and Stop after awaited work. Credential23/23 and Resend18/18 pass;
+removing the new guards in an isolated copy causes8 credential failures.
+
+The running261 isolated review displays the retained source evidence, exact
+unsent99CAD draft, relationship graph and next-action task. Quit/reopen retains
+identical review-workspace bytes. In the normal app, KAIROS's read-only import
+started08:20:32Z and ended08:21:03Z with a credential timeout and re-enabled
+buttons. Automatic PHAROS intake similarly paused with0 imports/0 acknowledgements;
+both mail sign-ins reached Access needed. Local Tasks remained usable during
+the wait. All owner CRM/research/dispatch data and saved Auto-Pilot choices
+remained exact; only activity, connector health and sync-job logs changed.
+No new message, capture or provider write was performed.
+
+This proves bounded application behavior, not successful authentication. The
+synchronous macOS lookup may remain held. The owner-local access question is
+still unanswered; no password, key, ACL or signing identity was inspected or
+changed. Nonempty live KAIROS mapping/collection, configured provider journeys
+and a real reply-to-follow-up witness remain open. Notification delivery remains
+owner-deferred. The complete native regression gate passed on261; older UI
+witnesses below retain their own build and scope.
+
+The [current release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research)
+and [workspace receipt](https://pharos-ai.ca/artifacts/controlward/unified-desktop)
+identify current app and documentation revisions separately.
+
+## Earlier installed256 checkpoint
+
+Build **256** was installed at `/Applications/ControlWard.app`, clean app source
 `b383527716026a6b7e199587a12b08039ee905da`, merged through
 [PR54](https://github.com/martinlepage26-bit/controlward/pull/54) as
 `a9c6ff21ff1fc7e83e60e77d65a9f5d64bba8636`. The reviewed archive
@@ -17,11 +60,9 @@ CI42456630189 and macOS packaging42456630258 pass every job and step. The instal
 executable matches that archive. It is ad-hoc signed, not notarized;254 is retained
 for app rollback. No older owner workspace was restored.
 
-The [current release receipt](https://pharos-ai.ca/artifacts/controlward/automatic-prospect-research)
-and [workspace receipt](https://pharos-ai.ca/artifacts/controlward/unified-desktop)
-provide current runtime scope. Dated233/228/213 evidence below remains historical.
-This November8 guide audit changes documentation only; it does not replace the
-installed app or imply that every older running-app journey was repeated on256.
+The following256 review and earlier233/228/213 evidence retain their dated scope.
+The preceding November8 guide audit changed documentation only; it did not
+replace256 or repeat every older running-app journey.
 
 On256, isolated native review verifies cached fictional-phone withholding,
 old-parser draft refusal, a fresh public-site recheck enabling the exact retained
@@ -102,8 +143,8 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 
 | ID | Requirement | Evidence and current disposition |
 |---|---|---|
-| R01 | Recover Claude work and preserve owner state | Published64cca37 is integrated; unpublished cloud-only changes remain unavailable.256 preservation checks retain owner records through update, research and restart. No older data snapshot was restored. |
-| R02 | Reproducible usable native app | Installed256 source/archive/executable/signature and exact-source CI are verified above. Local packaging re-runs native, WebKit and SwiftUI gates. Ad-hoc signing and absence of notarization are explicit. |
+| R01 | Recover Claude work and preserve owner state | Published64cca37 is integrated; unpublished cloud-only changes remain unavailable.261 preserves exact owner CRM/research/dispatch data and preferences through update and credential-failure checks;256 supplies the earlier research/restart witness. No older data snapshot was restored. |
+| R02 | Reproducible usable native app | Installed261 source/archive/executable/signature and exact-source CI are verified above. Local packaging re-runs native, WebKit and SwiftUI gates. Ad-hoc signing and absence of notarization are explicit. |
 | R03 | Onboarding and business settings | Native228 onboarding created an isolated Consulting workspace; earlier202 settings/save/retry/persistence.256 passes21 save cases and the full native suite; this onboarding UI was not repeated on256. |
 | R04 | CRM CRUD and relationship links | Actual202/203 create/edit, keyboard opening, validation, five confirmed deletes, private recovery and restore/reopen.256 retains save/deletion regressions and verifies the existing real linked graphs. [Record-action scope](record-actions-acceptance-20261107.md). |
 | R05 | Manual/CSV intake and provenance | Actual202 CSV import and duplicate replay;256 CSV57/57 and save cases pass. No buyer need or value is inferred from imported public data. |
@@ -124,9 +165,9 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 | R20 | Activity search/export and capture receipts | Actual203 filtered private export contains exactly one conversion event; current receipt/metadata tests pass. Not every arbitrary field edit is audited. |
 | R21 | Security review and task dedup | Actual198 scan/task/re-scan preserves identity and links; native high-only/resolved/restart checks.256 security27/27 pass. No credential inspection is part of this acceptance. |
 | R22 | Private backup, reviewed restore and rollback | Actual209 invalid-identity refusal, retained error, valid retry, all compared collections and fractional data through restart.256 backup36/36 and recovery7/7 pass. Native backups exclude Keychain, WebKit and external registers. App rollback does not roll back owner data. [Backup contract](backup-validation-acceptance-20261107.md). |
-| R23 | PHAROS/GAP/Twenty/KAIROS integration boundaries |256 integration20/20, GAP13/13, KAIROS6/6 and connected PHAROS CI pass. Separate real disposable backend acceptance: Twenty12 assertions; KAIROS Discovery23/11GETs; GAP35/19GETs including official Envoy.228/240 KAIROS live reads returned no enquiries and no strategy, with six platforms paused. A November8 native import is awaiting macOS credential access; it is not a completed new live check. Owner Twenty setup, GAP destination/access, nonempty KAIROS, production PHAROS and Project Control capture writes remain explicit configured dependencies; current Project Control register reading is verified in R14. |
-| R24 | Failure handling, private storage and compatibility |256 save21/21, recovery7/7, backup36/36 and native failures pass. Actual blocked-write import/retry and complete restore witnesses are retained. Credentials stay outside workspace data; original files and owner decisions are preserved. A pending macOS credential request is not reported as a successful HTTP check. |
-| R25 | Guidance matches installed behavior and evidence | The November8 audit replaces obsolete Gmail/default-mail lead instructions with the actual Resend review path, documents reviewed mail task reuse and256 freshness, and separates this current matrix from historical UI checkpoints. Published receipts identify the installed app source and documentation revision separately. |
+| R23 | PHAROS/GAP/Twenty/KAIROS integration boundaries |256 integration20/20, GAP13/13, KAIROS6/6 and connected PHAROS CI pass. Separate real disposable backend acceptance: Twenty12 assertions; KAIROS Discovery23/11GETs; GAP35/19GETs including official Envoy.228/240 KAIROS live reads returned no enquiries and no strategy, with six platforms paused. The installed261 November8 native import ended after31s with a credential-timeout result. This verifies failure handling, not a fresh account response. Owner Twenty setup, GAP destination/access, nonempty KAIROS, production PHAROS and Project Control capture writes remain explicit configured dependencies; current Project Control register reading is verified in R14. |
+| R24 | Failure handling, private storage and compatibility |256 save21/21, recovery7/7, backup36/36 and native failures pass. Actual blocked-write import/retry and complete restore witnesses are retained. 261 adds bounded credential wait/cancellation, held-lookup dedup and post-await connection/Stop checks. Native failure UI and preserved owner state are verified above. Credentials stay outside workspace data; unavailable access is not reported as a successful HTTP check. |
+| R25 | Guidance matches installed behavior and evidence | The November8 guide matches Resend review, mail task reuse and current research freshness. This261 ledger update replaces stale pending-operation claims with terminal credential-failure evidence and documents retry/current-connection behavior. Dated UI witnesses and live dependencies remain separate; published receipts identify app and documentation revisions. |
 
 ## Complete installed228 workflow — 7 November
 
@@ -167,11 +208,11 @@ or authorization to contact them.
 
 ## Remaining acceptance and boundaries
 
-- **Native credential access:** the current November8 KAIROS import is still awaiting macOS access. The app remains responsive; its sampled waiting stack is in credential access, not proof of an HTTP response. The owner must handle any local macOS prompt. No password/key is requested, read or copied by the diagnostic, and a running operation is not restarted merely because observation times out.
+- **Native credential access:** installed261 now reaches a terminal credential-timeout result, releases busy controls and retains local work and sign-ins. The earlier256 import stayed pending inside macOS; it ended when256 was quit for the verified261 update. Current authentication remains unavailable, and the owner-local prompt question is unanswered. No credential content or permission was inspected or changed. A timeout is not proof of an HTTP response or successful access.
 - **KAIROS data:** the verified live customer-account reads were empty; six collection platforms were paused and no strategy was recorded. Nonempty live mapping, fresh collection and strategy-informed targeting are not established by disposable fixtures. ControlWard does not activate collection or import an operator browser session.
 - **Other configured destinations:** owner Twenty setup/service, current GAP authenticated import, nonempty production PHAROS intake/exchange and production Project Control capture writes remain separate from controlled backend acceptance. The installed app did freshly read165 projects from its existing register. Anonymous checks of the saved PHAROS and inferred Project Control workers.dev health URLs returned403; these do not establish authenticated service failure or identify the active Project Control register. The saved GAP hostname did not resolve and the local Twenty URL was unavailable on November8. No substitute endpoint, credential or production record is invented.
 - **Mail:** lead sending is Resend-only. The owner-address Resend acceptance/delivery checkpoint is verified on248. A real incoming prospect reply and its live reviewed follow-up are still unobserved. Ordinary native mailbox write capabilities retain fixture evidence and require separately scoped live acceptance; the retired Gmail/default-mail lead flow is not a completion requirement.
-- **Owner-deferred/outside distribution scope:** notification delivery remains expressly deferred.256 is ad-hoc signed and not notarized. No collection activation, new outreach, production deployment/migration or generated revenue is claimed. Won value is owner-entered CRM data, not a payment receipt.
+- **Owner-deferred/outside distribution scope:** notification delivery remains expressly deferred.261 is ad-hoc signed and not notarized. No collection activation, new outreach, production deployment/migration or generated revenue is claimed. Won value is owner-entered CRM data, not a payment receipt.
 
 The full hosted task remains in progress. External dependencies do not erase the verified local workflows, and verified local workflows do not prove those live dependencies.
 
