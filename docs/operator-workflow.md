@@ -63,7 +63,11 @@ A converted lead exports to Twenty through its linked opportunity, so it represe
 
 Integration Center labels LeadGen imports and Lantern audits **Local**. Imported records do not activate a provider connection. PHAROS, Twenty, GAP and KAIROS display their own setup, verification or error status; use the PHAROS status for the live lead inbox.
 
-KAIROS imports require a customer-account API key. Its current service refuses
+KAIROS imports require the customer-account API key issued by KAIROS. A Resend
+sending key, even one named KAIROS, does not authenticate this inbox connector.
+Resend sending keys are for email delivery and can be restricted to a sending
+domain; they are not interchangeable with the KAIROS customer API credential.
+Its current service refuses
 operator API keys on inbox routes; the operator's browser sign-in is separate.
 An import reads lead-intent entries from up to200 prioritized conversations.
 GAP, KAIROS and each PHAROS lead-inbox page publish imported records only after the complete local save
