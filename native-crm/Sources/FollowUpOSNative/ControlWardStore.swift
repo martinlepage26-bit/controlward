@@ -15,14 +15,42 @@ extension AppStore {
         try mergeMail(try MailMetadataImport.decode(data), activity: "Imported mail metadata")
     }
 
-    func reviewMail(_ id: UUID, reviewed: Bool, contactID: UUID?, companyID: UUID?) throws {
+    /// Exact address suggestions, never inferred from a name, domain, subject, or message body.
+    /// Multiple leads sharing a route remain separate choices. No association is saved here.
+    func mailLeadMatches(_ message: MailMetadata) -> [Lead] {
+        let senders = Set(MailComposePrefill.addresses(in: message.sender))
+        let owners = Set(MailAccount.all.map(\.email) + MailComposePrefill.addresses(in: message.accountID))
+        guard senders.count == 1, let sender = senders.first, !owners.contains(sender) else { return [] }
+        return leads.filter { lead in
+            let contactEmail = contacts.first { $0.id == lead.contactID }?.email ?? ""
+            let routes = Set(MailComposePrefill.addresses(in: lead.email) + MailComposePrefill.addresses(in: contactEmail))
+            return routes.contains(sender)
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func reviewMail(_ id: UUID, reviewed: Bool, contactID: UUID?, companyID: UUID?, leadID: UUID? = nil) throws {
         try commitWorkspace { next in
             guard let i = next.controlWard.mail.firstIndex(where: { $0.id == id }) else { throw ControlWardError.invalid("This message is no longer available.") }
-            guard contactID == nil || next.contacts.contains(where: { $0.id == contactID }),
-                  companyID == nil || next.companies.contains(where: { $0.id == companyID }) else { throw ControlWardError.invalid("Choose an existing contact or company.") }
+            let lead = next.leads.first { $0.id == leadID }
+            guard leadID == nil || lead != nil else { throw ControlWardError.invalid("This lead is no longer available. Review the current records.") }
+            if let lead {
+                guard contactID == nil || contactID == lead.contactID,
+                      companyID == nil || companyID == lead.companyID else {
+                    throw ControlWardError.invalid("The selected contact or company conflicts with this lead. Use its existing relationships, or edit the lead first.")
+                }
+                if let taskID = next.controlWard.mail[i].taskID,
+                   let task = next.tasks.first(where: { $0.id == taskID }), task.leadID != lead.id {
+                    throw ControlWardError.invalid("This message already has a separate review task. Review its relationships in Tasks before associating another lead.")
+                }
+            }
+            let selectedContact = lead?.contactID ?? contactID
+            let selectedCompany = lead?.companyID ?? companyID
+            guard selectedContact == nil || next.contacts.contains(where: { $0.id == selectedContact }),
+                  selectedCompany == nil || next.companies.contains(where: { $0.id == selectedCompany }) else { throw ControlWardError.invalid("Choose an existing contact or company.") }
             next.controlWard.mail[i].reviewed = reviewed
-            next.controlWard.mail[i].contactID = contactID
-            next.controlWard.mail[i].companyID = companyID
+            next.controlWard.mail[i].contactID = selectedContact
+            next.controlWard.mail[i].companyID = selectedCompany
+            next.controlWard.mail[i].leadID = leadID
         }
     }
 
@@ -32,10 +60,38 @@ extension AppStore {
         try commitWorkspace { next in
             guard let i = next.controlWard.mail.firstIndex(where: { $0.id == id }) else { throw ControlWardError.invalid("This message is no longer available.") }
             if let existing = next.controlWard.mail[i].taskID {
-                guard next.tasks.contains(where: { $0.id == existing }) else { throw ControlWardError.invalid("The linked task was deleted. Its receipt is retained; add a new task explicitly if needed.") }
+                guard let task = next.tasks.first(where: { $0.id == existing }) else { throw ControlWardError.invalid("The linked task was deleted. Its receipt is retained; add a new task explicitly if needed.") }
+                guard next.controlWard.mail[i].leadID == nil || task.leadID == next.controlWard.mail[i].leadID else {
+                    throw ControlWardError.invalid("The linked task belongs to different work. Review its relationships in Tasks first.")
+                }
                 taskID = existing; return
             }
             let message = next.controlWard.mail[i]
+            if let leadID = message.leadID {
+                guard let leadIndex = next.leads.firstIndex(where: { $0.id == leadID }) else { throw ControlWardError.invalid("The associated lead no longer exists.") }
+                let lead = next.leads[leadIndex]
+                if let existing = lead.followUpTaskID {
+                    guard let task = next.tasks.first(where: { $0.id == existing }), task.leadID == lead.id else {
+                        throw ControlWardError.invalid("The lead's next-action task was deleted or relinked. Review it in Pipeline before creating more work.")
+                    }
+                    next.controlWard.mail[i].taskID = existing; taskID = existing; return
+                }
+                guard lead.status.isOpen else { throw ControlWardError.invalid("This lead is closed. Review the record before creating a new next action.") }
+                // Do not duplicate an existing lead task whose role is unclear.
+                guard !next.tasks.contains(where: { $0.leadID == lead.id && $0.status != .done }) else {
+                    throw ControlWardError.invalid("This lead already has open tasks. Choose its next action in Pipeline or Tasks first.")
+                }
+                var task = CRMTask(); task.title = "Review email: \(message.subject)"
+                task.details = "Review the linked email and decide the next action. The association alone does not establish a reply, buying interest or a sent message."
+                task.leadID = lead.id; task.contactID = lead.contactID; task.companyID = lead.companyID
+                task.dueDate = lead.nextFollowUp
+                let opportunities = next.opportunities.filter { $0.leadID == lead.id }
+                if opportunities.count == 1 { task.opportunityID = opportunities[0].id }
+                next.tasks.insert(task, at: 0); next.leads[leadIndex].followUpTaskID = task.id
+                next.controlWard.mail[i].taskID = task.id; taskID = task.id
+                next.activity.insert(ActivityEvent(kind: "mail_task", message: "Linked one mail review to a lead next action."), at: 0)
+                return
+            }
             var task = CRMTask(); task.title = "Review email: \(message.subject)"
             task.details = "Imported email metadata. Review the original message before acting."
             task.contactID = message.contactID; task.companyID = message.companyID

@@ -48,6 +48,10 @@ enum QuickScanResearchTests {
                 }
             }),
             ("An explicit executive statement retains the named person and literal own-site source", {
+                for title in ["présidente fondatrice", "président-directeur général", "cofondateur", "CEO and founder", "président et fondateur"] {
+                    let declaration = "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, \(title)."
+                    try expect(SiteExtractor.declaredExecutives(in: declaration, organisation: "Clinique Exemple Nord").first?.title == title, "affirmative title was lost: \(title)")
+                }
                 let statement = "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, présidente fondatrice. Pour toute question, écrivez-nous."
                 let (researcher, _, candidate) = try fixture("""
                 <h1>Clinique Exemple Nord</h1><p>\(statement)</p>
@@ -70,6 +74,12 @@ enum QuickScanResearchTests {
                     "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord n’est pas Alex Fictif, présidente fondatrice.",
                     "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, déléguée à la confidentialité.",
                     "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, ancienne présidente fondatrice.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, not CEO.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, future CEO.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, pas présidente.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, candidate au poste de présidente.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, CEO starting next year.",
+                    "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, CEOCEO.",
                     "Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est notre équipe.",
                     "Notre client dit : Le responsable de la protection des renseignements personnels chez Clinique Exemple Nord est Alex Fictif, présidente fondatrice."
                 ] {

@@ -253,11 +253,13 @@ private struct MailReviewDetail: View {
     @StateObject private var actions = MailActionModel()
     @State private var contactID: UUID?
     @State private var companyID: UUID?
+    @State private var leadID: UUID?
     @State private var reviewed = false
     @State private var message: String?
     @State private var showCapture = false
     @State private var compose: MailComposeRequest?
     @State private var confirmTrash = false
+    @State private var editingLead: Lead?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -276,18 +278,42 @@ private struct MailReviewDetail: View {
                 MailActionBar(support: actions.support, run: handle)
                 if let status = actions.status { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                 Divider()
+                Text("Lead association").font(.headline)
+                Text("Associate this message after reviewing it. A matching address does not authenticate the sender, prove a reply or establish buying interest. No lead status, draft, send history or follow-up date changes here.")
+                    .font(.caption).foregroundStyle(.secondary)
+                let matches = store.mailLeadMatches(mail)
+                if !matches.isEmpty {
+                    Text(matches.count == 1 ? "Exact sender-address match for review:" : "This sender route matches several leads. Choose the correct record after review.")
+                        .font(.caption)
+                    ForEach(matches) { match in
+                        Button("Use match: \(match.name) · \(match.company)") { leadID = match.id }
+                    }
+                }
+                Picker("Lead", selection: $leadID) {
+                    Text("Unlinked").tag(UUID?.none)
+                    ForEach(store.leads) { Text("\($0.name) · \($0.company) · \($0.email)").tag(Optional($0.id)) }
+                }
+                if let leadID, let lead = store.leads.first(where: { $0.id == leadID }) {
+                    Text("Next follow-up: \(lead.nextFollowUp ?? "No date set"). Existing next-action work is reused; completed or deleted tasks are not recreated.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open lead and draft") { editingLead = lead }.disabled(leadID != mail.leadID)
+                }
                 Picker("Contact", selection: $contactID) { Text("Unlinked").tag(UUID?.none); ForEach(store.contacts) { Text($0.displayName).tag(Optional($0.id)) } }
                 Picker("Company", selection: $companyID) { Text("Unlinked").tag(UUID?.none); ForEach(store.companies) { Text($0.name).tag(Optional($0.id)) } }
                 Toggle("Reviewed", isOn: $reviewed)
-                Button("Save review") { perform { try store.reviewMail(mail.id, reviewed: reviewed, contactID: contactID, companyID: companyID); return "Review saved." } }
-                Button(mail.taskID == nil ? "Create review task" : (store.tasks.contains { $0.id == mail.taskID } ? "Linked task saved" : "Linked task deleted")) {
-                    perform { _ = try store.createMailTask(mail.id); return "Task saved in Tasks. This message keeps the same linked task." }
-                }
+                Button("Save review") { perform { try store.reviewMail(mail.id, reviewed: reviewed, contactID: contactID, companyID: companyID, leadID: leadID); return "Review and lead association saved. No message sent." } }
+                Button(mail.taskID == nil ? (mail.leadID == nil ? "Create review task" : "Use lead next action") : (store.tasks.contains { $0.id == mail.taskID } ? "Linked task saved" : "Linked task deleted")) {
+                    perform { _ = try store.createMailTask(mail.id); return "Task association saved. Existing work, dates and completion are retained. No message sent." }
+                }.disabled(leadID != mail.leadID || contactID != mail.contactID || companyID != mail.companyID)
                 Button("Preview project capture") { showCapture = true }.buttonStyle(.borderedProminent)
                 if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
             }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-        }.onAppear { contactID = mail.contactID; companyID = mail.companyID; reviewed = mail.reviewed }
+        }.onAppear { contactID = mail.contactID; companyID = mail.companyID; leadID = mail.leadID; reviewed = mail.reviewed }
+            .onChange(of: leadID) { _, id in
+                if let lead = store.leads.first(where: { $0.id == id }) { contactID = lead.contactID; companyID = lead.companyID }
+            }
             .task(id: mail.id) { await actions.load(message: mail, intake: intake, store: store) }
+            .sheet(item: $editingLead) { lead in LeadEditorView(lead: lead, isNew: false) }
             .sheet(isPresented: $showCapture) { CaptureReviewSheet(recordKey: "mail:\(mail.id.uuidString.lowercased())", initial: mail.capture) }
             .sheet(item: $compose) { request in
                 MailComposeSheet(action: request.action, initial: request.draft, onCancel: { compose = nil }, onSave: { draft in
@@ -365,6 +391,30 @@ private struct MailReviewDetail: View {
         }
         guard let command else { return nil }
         return await actions.perform(command, store: store, localID: mail.id)
+    }
+}
+
+/// Only explicit lead associations appear here. A shared company or an empty relationship is not a match.
+struct LeadMailContextView: View {
+    @EnvironmentObject private var store: AppStore
+    let leadID: UUID
+    private var messages: [MailMetadata] { store.mail.filter { $0.leadID == leadID } }
+    var body: some View {
+        if !messages.isEmpty {
+            DisclosureGroup("Linked email metadata (\(messages.count))") {
+                Text("Reviewed associations from Email. Message bodies stay in the mailbox. These links alone do not establish a reply or buying interest.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(Array(messages.prefix(20))) { mail in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(mail.subject).font(.callout.weight(.semibold))
+                        Text("\(mail.sender) · \(mail.receivedAt)").font(.caption).textSelection(.enabled)
+                        if mail.synthetic { Text("Synthetic fixture").font(.caption2) }
+                        if let url = URL(string: mail.link), ["https", "http"].contains(url.scheme?.lowercased() ?? "") { Link("Open original email", destination: url) }
+                    }.padding(.vertical, 4)
+                }
+                if messages.count > 20 { Text("More associated messages are available in Email.").font(.caption) }
+            }
+        }
     }
 }
 

@@ -83,6 +83,7 @@ enum RecordDeletion {
             for i in w.tasks.indices where w.tasks[i].leadID == id { w.tasks[i].leadID = nil }
             for i in w.signals.indices where w.signals[i].leadID == id { w.signals[i].leadID = nil }
             for i in w.audits.indices where w.audits[i].leadID == id { w.audits[i].leadID = nil }
+            for i in w.controlWard.mail.indices where w.controlWard.mail[i].leadID == id { w.controlWard.mail[i].leadID = nil }
             if let source = lead.sourceID, source.hasPrefix("leadgen:") || source.hasPrefix("kairos:"), !w.dismissedLeadSources.contains(source) {
                 w.dismissedLeadSources.append(source)
             }
