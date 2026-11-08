@@ -55,6 +55,19 @@ import Foundation
 
     static func run() async -> Bool {
         let cases: [(String, () async throws -> Void)] = [
+            ("packaged configuration uses Contents/Resources and fails closed when missing", {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-resend-bundle-\(UUID())")
+                defer { try? FileManager.default.removeItem(at: root) }
+                let app = root.appendingPathComponent("Fixture.app")
+                let resources = app.appendingPathComponent("Contents/Resources/FollowUpOSNative_FollowUpOSNative.bundle")
+                try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+                let plist: [String: Any] = ["CFBundleIdentifier": "test.controlward.resend.resources", "CFBundlePackageType": "APPL", "CFBundleExecutable": "Fixture"]
+                try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
+                guard let main = Bundle(url: app) else { throw SmokeTestFailure.failed("fixture app bundle missing") }
+                try expect(ResendPolicy.bundledConfig(in: main) == nil, "missing config did not fail closed")
+                try FileManager.default.copyItem(at: LeadKit.configDirectory, to: resources.appendingPathComponent("config"))
+                try expect(ResendPolicy.bundledConfig(in: main)?.sender.from == ResendPolicy.sender, "signed app resource path was not used")
+            }),
             ("the configured privacy gate refuses external recipients and permits owner-only review", {
                 let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false); defer { try? FileManager.default.removeItem(at: root) }
                 try expect(store.prepareResendSend(leadID: lead.id, subject: subject, body: body) == nil, "closed privacy gate bypassed")
