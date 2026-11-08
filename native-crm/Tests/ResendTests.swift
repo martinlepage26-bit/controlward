@@ -55,9 +55,15 @@ import Foundation
 
     static func run() async -> Bool {
         let cases: [(String, () async throws -> Void)] = [
-            ("packaged configuration uses Contents/Resources and fails closed when missing", {
+            ("packaged policy ignores an external open development policy and fails closed when missing", {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("controlward-resend-bundle-\(UUID())")
                 defer { try? FileManager.default.removeItem(at: root) }
+                func setGate(_ directory: URL, open: Bool) throws {
+                    let file = directory.appendingPathComponent("icp.json")
+                    var config = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+                    var gate = config["loi25_gate"] as! [String: Any]; gate["open"] = open; config["loi25_gate"] = gate
+                    try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]).write(to: file)
+                }
                 func fixtureBundle(_ name: String, withConfig: Bool) throws -> Bundle {
                     let app = root.appendingPathComponent(name + ".app")
                     let resources = app.appendingPathComponent("Contents/Resources/FollowUpOSNative_FollowUpOSNative.bundle")
@@ -65,12 +71,30 @@ import Foundation
                     let plist: [String: Any] = ["CFBundleIdentifier": "test.controlward.resend." + name, "CFBundlePackageType": "APPL", "CFBundleExecutable": "Fixture"]
                     try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
                     // Bundle caches resource lookups: complete each fixture before constructing it.
-                    if withConfig { try FileManager.default.copyItem(at: LeadKit.configDirectory, to: resources.appendingPathComponent("config")) }
+                    if withConfig {
+                        let directory = resources.appendingPathComponent("config")
+                        try FileManager.default.copyItem(at: LeadKit.configDirectory, to: directory)
+                        try setGate(directory, open: false)
+                    }
                     guard let main = Bundle(url: app) else { throw SmokeTestFailure.failed("fixture app bundle missing") }
                     return main
                 }
-                try expect(ResendPolicy.bundledConfig(in: fixtureBundle("Present", withConfig: true))?.sender.from == ResendPolicy.sender, "signed app resource path was not used")
-                try expect(ResendPolicy.bundledConfig(in: fixtureBundle("Missing", withConfig: false)) == nil, "missing config did not fail closed")
+                let present = try fixtureBundle("Present", withConfig: true)
+                let missing = try fixtureBundle("Missing", withConfig: false)
+                let external = root.appendingPathComponent("ExternalOpen")
+                try FileManager.default.copyItem(at: LeadKit.configDirectory, to: external); try setGate(external, open: true)
+                try expect(try ICPConfig.load(directory: external).loi25Gate.open, "external open-policy fixture is invalid")
+                let oldOverride = ProcessInfo.processInfo.environment["CONTROLWARD_CONFIG_DIR"]
+                guard setenv("CONTROLWARD_CONFIG_DIR", external.path, 1) == 0 else { throw SmokeTestFailure.failed("cannot set synthetic development override") }
+                defer {
+                    if let oldOverride { setenv("CONTROLWARD_CONFIG_DIR", oldOverride, 1) }
+                    else { unsetenv("CONTROLWARD_CONFIG_DIR") }
+                }
+                try expect(ICPConfig.defaultDirectory()?.standardizedFileURL == external.standardizedFileURL, "environment override fixture was not selected")
+                let packaged = ResendPolicy.bundledConfig(in: present)
+                try expect(packaged?.sender.from == ResendPolicy.sender && packaged?.loi25Gate.open == false, "development policy replaced packaged policy")
+                try expect(ResendPolicy.bundledConfig(in: missing) == nil, "missing packaged config fell back to external policy")
+                try expect(ResendPolicy.bundledConfig(in: .main)?.loi25Gate.open == true, "non-app development override changed")
             }),
             ("the configured privacy gate refuses external recipients and permits owner-only review", {
                 let http = FakeHTTP(); let (store, lead, root) = try fixture(http, privacyOpen: false); defer { try? FileManager.default.removeItem(at: root) }
