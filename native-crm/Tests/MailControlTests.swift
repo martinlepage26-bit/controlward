@@ -90,6 +90,21 @@ enum MailControlTests {
                 try expect(MailSendPolicy.fromEnvironment([MailSendPolicy.environmentKey: "a@example.test, b@example.test"]).allowlist == ["a@example.test", "b@example.test"], "environment allowlist did not parse")
                 try expect(MailSendPolicy.fromEnvironment([MailSendPolicy.environmentKey: ""]).allowlist == [], "an empty allowlist must refuse everything, not turn test mode off")
             }),
+            ("Mail send: complete recipient addresses cannot collide with an allowlisted suffix", {
+                let policy = MailSendPolicy.testMode(["connor@example.test"])
+                for address in ["o'connor@example.test", "!connor@example.test", "éconnor@example.test", "connor@example.test_extra"] {
+                    let http = CountingMailHTTP(); let sink = MemoryAuditSink()
+                    let result = await MailControlKit.runner(MailControlKit.gmail(http), sink: sink, policy: policy)
+                        .perform(MailFixture.command(.reply, compose: MailFixture.compose(to: [address]))) {}
+                    try expect(result.audit.result == "refused:recipient-not-allowlisted" && http.count == 0,
+                               "a different full recipient bypassed the allowlist: \(address)")
+                }
+                let http = CountingMailHTTP()
+                let exact = MailSendPolicy.testMode(["o'connor@example.test"])
+                let result = await MailControlKit.runner(MailControlKit.gmail(http), sink: MemoryAuditSink(), policy: exact)
+                    .perform(MailFixture.command(.reply, compose: MailFixture.compose(to: ["O'Connor <O'CONNOR@example.test>"]))) {}
+                try expect(result.audit.result == "ok" && result.receipt?.messageID == "sent7f3a", "an exact allowlisted apostrophe address was refused")
+            }),
             ("Mail trash: a local-row failure audits partial:local-row", {
                 let sink = MemoryAuditSink()
                 let result = await MailControlKit.runner(MailControlKit.gmail(CountingMailHTTP()), sink: sink).perform(MailFixture.command(.trash)) { throw LocalRowError() }

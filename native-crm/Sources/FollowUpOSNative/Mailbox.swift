@@ -200,7 +200,10 @@ enum MailComposePrefill {
     }
 
     static func addresses(in header: String) -> [String] {
-        guard let pattern = try? NSRegularExpression(pattern: "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}") else { return [] }
+        // Keep complete unquoted addresses, including apostrophes. Header boundaries
+        // prevent an unsupported token from becoming another person's address suffix.
+        let address = #"(?<![^\s<,;])[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,63}(?=$|[\s>,;])"#
+        guard let pattern = try? NSRegularExpression(pattern: address, options: .caseInsensitive) else { return [] }
         let range = NSRange(header.startIndex..., in: header)
         return pattern.matches(in: header, range: range).compactMap { match in
             Range(match.range, in: header).map { header[$0].lowercased() }
