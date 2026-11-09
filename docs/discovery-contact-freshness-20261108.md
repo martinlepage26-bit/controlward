@@ -17,7 +17,20 @@ audit redaction and existing snapshots are retained.
 Sources: [NANPA numbering plan](https://nanpa.com/about),
 [NANPA fictional-number range](https://www.nanpa.com/numbering/555-line-numbers).
 
-Research version 4 records the actual requested page. Reuse requires that page,
+Research version 5 adds complete email identity and source-evidence checks.
+The extractor preserves supported address punctuation and decodes published
+HTML entities and `mailto:` escapes before checking the complete token.
+Unsupported Unicode and extracted ASCII suffixes cannot become a different
+published address. Email evidence must identify the complete route in the
+original snapshot line or stored `mailto:` link; a matching substring alone is
+insufficient. A cached contact is checked with the same source rule.
+
+The native Resend preview also checks the original single supported recipient
+before normalizing it, so an unsupported address cannot turn into another
+ASCII destination. This does not authorize a message or prove deliverability.
+
+Version 5 retains the requested-page and freshness rules introduced by version 4.
+Research records the actual requested page. Reuse requires that page,
 the same business name, the current parser, a complete result less than one hour
 old and the same local calendar day. Missing older provenance causes a recheck.
 The output distinguishes fresh attempts from cached reuse; neither label asserts
@@ -38,7 +51,8 @@ bin/test-native-app --quickscan-research
 bin/test-native-app --agent-research
 ```
 
-The cases exercise fresh and cached rejected phones, literal format/extension
+The cases exercise complete published email routes, suffix-only and encoded
+source evidence, raw recipient normalization, fresh and cached rejected phones, literal format/extension
 handling, requested page and business identity, parser provenance, hour/future
 boundaries, local midnight in UTC+14 and UTC-11, direct and recovered negative
 rechecks, overlap ordering, exact owner-field retention and reopen persistence.
