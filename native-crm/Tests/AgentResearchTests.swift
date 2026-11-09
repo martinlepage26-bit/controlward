@@ -62,7 +62,8 @@ enum AgentResearchTests {
                 lead.companyID = UUID(); lead.contactID = UUID(); lead.followUpTaskID = UUID()
                 lead.nextFollowUp = "2026-11-09"; lead.notes = "Owner's private notes"
                 try expect(store.add(lead), "fixture lead not saved")
-                var negative = positive; negative.checkedAt = now.addingTimeInterval(1); negative.aiUse = []
+                var negative = positive; negative.checkedAt = now.addingTimeInterval(1)
+                negative.contacts = []; negative.record.email = nil; negative.record.route = nil
                 try store.recordWebsiteResearch(candidate, result: negative)
                 var expected = lead; expected.quickScanResearch = negative
                 try expect(store.leads == [expected], "direct recheck left stale findings or changed owner fields")

@@ -180,6 +180,8 @@ enum MailActionResolver {
 }
 
 enum MailComposePrefill {
+    private static let addressPattern = #"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,63}"#
+
     static func draft(action: MailboxAction, sender: String, recipient: String, subject: String, body: String, account: String) -> MailCompose {
         let quoted = body.isEmpty ? "" : "\n\n---\n\(body)"
         switch action {
@@ -200,11 +202,36 @@ enum MailComposePrefill {
     }
 
     static func addresses(in header: String) -> [String] {
-        guard let pattern = try? NSRegularExpression(pattern: "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}") else { return [] }
+        // Keep complete unquoted addresses, including apostrophes. Header boundaries
+        // prevent an unsupported token from becoming another person's address suffix.
+        let address = #"(?<![^\s<,;])"# + addressPattern + #"(?=$|[\s>,;])"#
+        guard let pattern = try? NSRegularExpression(pattern: address) else { return [] }
         let range = NSRange(header.startIndex..., in: header)
         return pattern.matches(in: header, range: range).compactMap { match in
             Range(match.range, in: header).map { header[$0].lowercased() }
         }
+    }
+
+    /// Conservative sending grammar: bare ASCII addresses or display names in angle
+    /// brackets, separated by commas. Any unsupported text refuses the whole header.
+    static func completeAddresses(in header: String) -> [String]? {
+        let displayName = #"(?:"(?:[^"\\\x00-\x1F\x7F]|\\["\\])*"|[^"\\<>,;@\x00-\x1F\x7F]+)"#
+        let mailbox = "[ \\t]*(?:(" + addressPattern + ")|(?:" + displayName + ")?[ \\t]*<(" + addressPattern + ")>)[ \\t]*"
+        guard let pattern = try? NSRegularExpression(pattern: mailbox) else { return nil }
+        let text = header as NSString
+        var cursor = 0, result: [String] = []
+        while cursor < text.length {
+            guard let match = pattern.firstMatch(in: header, options: .anchored,
+                range: NSRange(location: cursor, length: text.length - cursor)) else { return nil }
+            let bare = match.range(at: 1)
+            let address = bare.location == NSNotFound ? match.range(at: 2) : bare
+            result.append(text.substring(with: address).lowercased())
+            cursor = NSMaxRange(match.range)
+            if cursor == text.length { return result }
+            guard text.character(at: cursor) == 44 else { return nil } // comma
+            cursor += 1
+        }
+        return nil // Empty header or a trailing separator.
     }
 
     private static func prefixed(_ prefix: String, _ subject: String) -> String {

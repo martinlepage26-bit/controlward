@@ -164,6 +164,25 @@ enum ControlWardTests {
             var candidate = mail; candidate.sender = sender
             try expect(store.mailLeadMatches(candidate).isEmpty, "unsafe, owner or nonmatching sender suggestion: \(sender)")
         }
+        for sender in ["o'studio@example.test", "!studio@example.test", "éstudio@example.test", "studio@example.test_extra"] {
+            var candidate = mail; candidate.sender = sender
+            try expect(store.mailLeadMatches(candidate).isEmpty, "partial sender address suggested another lead: \(sender)")
+            try expect(!store.mailRequiresResend(candidate), "partial sender address was treated as an exact lead route: \(sender)")
+        }
+        var punctuated = shared; punctuated.email = "o'connor@example.test"; _ = store.update(punctuated)
+        var punctuatedMail = mail; punctuatedMail.sender = "O'Connor <O'CONNOR@example.test>"
+        try expect(store.mailLeadMatches(punctuatedMail).map(\.id) == [punctuated.id], "complete apostrophe address lost its exact lead match")
+        try expect(store.mailRequiresResend(punctuatedMail), "complete apostrophe lead address bypassed Resend routing")
+        try expect(store.mailRequiresResend(personal, compose: MailCompose(draftID: nil, to: [punctuated.email], cc: [], subject: "Synthetic", body: "Synthetic")), "complete apostrophe compose recipient bypassed Resend routing")
+        var asciiLead = shared; asciiLead.email = "konnor@ekample.test"; _ = store.update(asciiLead)
+        for sender in ["Konnor@ekample.test", "konnor@eKample.test"] {
+            var candidate = mail; candidate.sender = sender
+            try expect(store.mailLeadMatches(candidate).isEmpty, "Unicode case folding suggested an ASCII lead: \(sender)")
+            try expect(!store.mailRequiresResend(candidate), "Unicode case folding created an exact lead route: \(sender)")
+        }
+        var asciiMail = mail; asciiMail.sender = "KONNOR@EKAMPLE.TEST"
+        try expect(store.mailLeadMatches(asciiMail).map(\.id) == [asciiLead.id] && store.mailRequiresResend(asciiMail), "ASCII uppercase exact address lost its lead route")
+        _ = store.update(shared)
         let beforeInvalid = store.workspace
         try rejects("missing lead accepted") { try store.reviewMail(mail.id, reviewed: true, contactID: nil, companyID: nil, leadID: UUID()) }
         try rejects("conflicting contact accepted") { try store.reviewMail(mail.id, reviewed: true, contactID: UUID(), companyID: nil, leadID: lead.id) }

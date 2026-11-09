@@ -137,6 +137,19 @@ enum ProspectResearcher {
         return snapshots.contains { $0.url == evidence.url && ($0.text.contains(evidence.excerpt) || ($0.links ?? []).contains(evidence.excerpt)) }
     }
 
+    /// Email proof must be an original complete snapshot line or an exact stored
+    /// mailto link. A suffix excerpt of another address is never publication proof.
+    static func isPublishedEmail(_ value: String, evidence: FactEvidence, in snapshots: [SiteSnapshot]) -> Bool {
+        guard let email = PublishedEmailRules.key(value) else { return false }
+        return snapshots.contains { snapshot in
+            guard snapshot.url == evidence.url else { return false }
+            if (snapshot.links ?? []).contains(evidence.excerpt), PublishedEmailRules.mailto(evidence.excerpt) == email { return true }
+            return snapshot.text.components(separatedBy: .newlines).contains { line in
+                line == evidence.excerpt && PublishedEmailRules.addresses(in: line).contains(email)
+            }
+        }
+    }
+
     /// Everything a draft is allowed to quote: evidenced observed facts and evidenced supporting evidence.
     static func citable(_ record: ProspectRecord) -> [FactEvidence] {
         guard let research = record.research else { return [] }
