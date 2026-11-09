@@ -32,10 +32,12 @@ struct MailSendPolicy: Equatable, Sendable {
     func refusal(for command: MailCommand) -> String? {
         if command.action.sends && outreachRequiresResend { return "refused:resend-required" }
         guard let allowlist, command.action.sends else { return nil }
-        let fields = (command.compose?.to ?? []) + (command.compose?.cc ?? [])
-        for field in fields {
-            let addresses = MailComposePrefill.addresses(in: field)
-            if addresses.isEmpty || addresses.contains(where: { !allowlist.contains($0.lowercased()) }) {
+        // Match the exact header serialization, including quoted display names split
+        // by the compose UI. No unparsed recipient text may escape the allowlist.
+        let headers = [command.compose?.to ?? [], command.compose?.cc ?? []]
+        for fields in headers where !fields.isEmpty {
+            guard let addresses = MailComposePrefill.completeAddresses(in: fields.joined(separator: ", ")),
+                  !addresses.isEmpty, addresses.allSatisfy({ allowlist.contains($0) }) else {
                 return "refused:recipient-not-allowlisted"
             }
         }
