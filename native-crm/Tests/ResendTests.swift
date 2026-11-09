@@ -446,6 +446,24 @@ import Foundation
                 try expect(store.leads[0].notes == "Newer owner notes" && store.leads[0].status == .won && store.leads[0].history.count == 1, "approved snapshot overwrote current CRM")
                 try expect(store.tasks[0].status == .done, "closed deal reminder reopened")
             }),
+            ("raw Unicode recipient lookalikes are refused before normalization and HTTP", {
+                for raw in ["Konnor@example.test", "connor@eKample.test", "éconnor@example.test"] {
+                    let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
+                    var edited = lead; edited.email = raw; _ = store.update(edited)
+                    let approved = store.prepareResendSend(leadID: lead.id, subject: subject, body: body)
+                    if let approved { _ = await store.sendResend(approved) }
+                    let calls = await http.captured()
+                    try expect(approved == nil && calls.isEmpty && store.workspace.resendDispatches.isEmpty,
+                               "raw recipient was normalized into another mailbox: \(raw)")
+                }
+                for raw in ["OWNER@EXAMPLE.TEST", "O'CONNOR@example.test"] {
+                    let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
+                    var edited = lead; edited.email = raw; _ = store.update(edited)
+                    guard let approved = store.prepareResendSend(leadID: lead.id, subject: subject, body: body) else { throw SmokeTestFailure.failed("complete ASCII recipient refused") }
+                    try expect(await store.sendResend(approved), "complete ASCII recipient could not send through synthetic transport")
+                    try expect((await http.captured()).count == 1 && approved.recipient == raw.lowercased(), "ASCII recipient changed or duplicate HTTP occurred")
+                }
+            }),
             ("header injection and multiple recipients are refused before HTTP", {
                 let http = FakeHTTP(); let (store, lead, root) = try fixture(http); defer { try? FileManager.default.removeItem(at: root) }
                 try expect(store.prepareResendSend(leadID: lead.id, subject: "Hello\r\nBcc: other@example.test", body: body) == nil, "header injection accepted")

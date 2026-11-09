@@ -2529,7 +2529,10 @@ final class AppStore: ObservableObject {
         resendPreview = nil
         guard pendingResendReceipt == nil else { resendFailure = "Save the pending Resend receipt in Settings before preparing another send."; return nil }
         guard let lead = leads.first(where: { $0.id == leadID }) else { resendFailure = "Save this lead before reviewing a send."; return nil }
-        let recipient = MailAddress.bare(lead.email)
+        guard let recipients = MailComposePrefill.completeAddresses(in: lead.email), recipients.count == 1 else {
+            resendFailure = "Use one complete supported recipient address before reviewing a send."; return nil
+        }
+        let recipient = recipients[0]
         if let issue = resendIssue(for: lead, recipient: recipient, subject: subject, body: body) { resendFailure = issue; return nil }
         // Includes historical manually logged sends, such as the original Gmail pilot message.
         guard !lead.history.contains(where: { $0.message == body }) else {

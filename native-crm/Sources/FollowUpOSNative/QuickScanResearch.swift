@@ -42,10 +42,8 @@ struct PublishedContactEvidence: Codable, Equatable, Sendable {
         if kind == .phone && PublishedPhoneRules.key(value) == nil { return false }
         guard let domain = record.businessDomain, let host = URL(string: evidence.url)?.host,
               HostMatch.belongs(host, to: domain), ProspectResearcher.isEvidenced(evidence, in: record.snapshots) else { return false }
+        if kind == .email { return ProspectResearcher.isPublishedEmail(value, evidence: evidence, in: record.snapshots) }
         if SiteExtractor.normalizePrintedEmail(evidence.excerpt).range(of: value, options: .caseInsensitive) != nil { return true }
-        if kind == .email, evidence.excerpt.lowercased().hasPrefix("mailto:") {
-            return MailAddress.bare(String(evidence.excerpt.dropFirst(7)).components(separatedBy: "?")[0]) == value
-        }
         return false
     }
 }
@@ -131,6 +129,11 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
         guard complete else { return (nil, "Website research is incomplete.") }
         guard researchVersion == QuickScanResearcher.version else { return (nil, "Recheck this website with the current research version before using its cold-outreach draft. Saved text is retained.") }
         guard hasAIUseEvidence, let citation = aiUse.first else { return (nil, "Actual AI use is not established from the checked pages.") }
+        guard let email, let key = PublishedEmailRules.key(email),
+              PublishedEmailRules.key(record.email ?? "") == key,
+              record.route?.kind == .email, PublishedEmailRules.key(record.route?.value ?? "") == key else {
+            return (nil, "Recheck the complete website-published email before using this cold-outreach draft. Saved text is retained.")
+        }
         guard record.status == .ready else { return (nil, "Qualification: " + record.reasons.joined(separator: "; ")) }
         let greeting = record.contact?.name.split(separator: " ").first.map(String.init) ?? ""
         var draft = OutreachDraftBuilder.build(for: record, config: config, language: "fr", messageID: "quickscan-\(record.id)-\(ISODates.string(checkedAt))")
@@ -162,7 +165,7 @@ struct QuickScanResearchResult: Codable, Equatable, Sendable {
 /// Runs after map discovery, through the same public-site transport and policy as the existing lead pipeline.
 /// The page budget, robots rules, host exclusions, pacing and cancellation remain enforced.
 struct QuickScanResearcher: Sendable {
-    static let version = 4
+    static let version = 5
     let config: ICPConfig
     let transport: GuardedLeadTransport
     let clock: any LeadClock
@@ -265,16 +268,14 @@ struct QuickScanResearcher: Sendable {
             let right = MailAddress.domain($1.1).map { HostMatch.belongs($0, to: domain) } == true
             return left && !right
         }
-        for (page, email) in emails {
-            guard MailAddress.domain(email) != nil, !email.contains(".."),
-                  email.range(of: #"^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$"#, options: .regularExpression) != nil,
-                  !["noreply", "no-reply", "donotreply"].contains(email.components(separatedBy: "@")[0]),
-                  seen.insert("email:" + email).inserted else { continue }
-            let line = page.text.components(separatedBy: .newlines).first { SiteExtractor.normalizePrintedEmail($0).range(of: email, options: .caseInsensitive) != nil }
-                ?? page.links.first { $0.lowercased().hasPrefix("mailto:") && MailAddress.bare(String($0.dropFirst(7)).components(separatedBy: "?")[0]) == email }
+        for (page, candidate) in emails {
+            guard let email = PublishedEmailRules.key(candidate),
+                  !["noreply", "no-reply", "donotreply"].contains(email.components(separatedBy: "@")[0]) else { continue }
+            let line = page.text.components(separatedBy: .newlines).first { PublishedEmailRules.addresses(in: $0).contains(email) }
+                ?? page.links.first { PublishedEmailRules.mailto($0) == email }
             let businessDomain = MailAddress.domain(email).map { HostMatch.belongs($0, to: domain) } == true
             let explicitlyAddressed = line?.range(of: #"(?i)(?:contact(?:ez)?[- ]?(?:us|nous)?|[ée]crivez[- ]nous|courriel|email|e-mail)\s*[:–-]"#, options: .regularExpression) != nil
-            if let line, businessDomain || explicitlyAddressed {
+            if let line, businessDomain || explicitlyAddressed, seen.insert("email:" + email).inserted {
                 out.append(PublishedContactEvidence(kind: .email, value: email, evidence: FactEvidence(url: page.url, excerpt: line)))
             }
         }

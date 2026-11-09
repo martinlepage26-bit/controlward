@@ -1,5 +1,33 @@
 import Foundation
 
+/// Complete published ASCII tokens only. Unsupported neighbouring text must never
+/// become a different mailbox; this is not a deliverability or ownership check.
+enum PublishedEmailRules {
+    private static let atom = #"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,63}"#
+
+    static func key(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.range(of: #"\A"# + atom + #"\z"#, options: .regularExpression) != nil,
+              !value.contains(".."), let local = value.split(separator: "@").first,
+              !local.hasPrefix("."), !local.hasSuffix(".") else { return nil }
+        return value.lowercased() // Only the already-validated ASCII address is normalized.
+    }
+
+    static func addresses(in text: String) -> [String] {
+        let printed = SiteExtractor.normalizePrintedEmail(text)
+        let pattern = #"(?<![^\s(<>,:])"# + atom + #"(?=$|[\s<>,;)\]]|[.!?](?=\s|$))"#
+        return SiteExtractor.matches(printed, pattern).compactMap(key)
+    }
+
+    static func mailto(_ link: String) -> String? {
+        guard link.utf8.count <= 4096, link.prefix(7).lowercased() == "mailto:" else { return nil }
+        let recipient = link.dropFirst(7).prefix { $0 != "?" && $0 != "#" }
+        // Decode one URI layer only; HTML entities were decoded when the href was read.
+        guard let decoded = String(recipient).removingPercentEncoding else { return nil }
+        return key(decoded)
+    }
+}
+
 /// A structural check, not a subscriber lookup or proof that a business owns a number.
 /// NANP format and fictional range: https://nanpa.com/about and
 /// https://www.nanpa.com/numbering/555-line-numbers (checked 2026-11-08).
@@ -63,11 +91,7 @@ enum SiteExtractor {
     static func read(html: String, url: URL, fetchedAt: Date) -> Page {
         let text = visibleText(html)
         let links = hrefs(html, base: url)
-        var emails = links.compactMap { $0.lowercased().hasPrefix("mailto:") ? MailAddress.bare(String($0.dropFirst(7)).components(separatedBy: "?")[0]) : nil }
-        emails += matches(text, "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").map { MailAddress.bare($0) }
-        // Printed spacing around a literal @ is formatting, not a guessed address pattern.
-        emails += matches(text, "[A-Za-z0-9._%+-]+[ \\t]+@[ \\t]*[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
-            .map { MailAddress.bare(normalizePrintedEmail($0)) }
+        let emails = links.compactMap(PublishedEmailRules.mailto) + PublishedEmailRules.addresses(in: text)
         var phones = links.compactMap { $0.lowercased().hasPrefix("tel:") ? String($0.dropFirst(4)).removingPercentEncoding : nil }
         phones += matches(text, "\\(?\\b[2-9][0-9]{2}\\)?[ .-][0-9]{3}[ .-][0-9]{4}\\b")
         return Page(url: url.absoluteString, fetchedAt: fetchedAt, text: text, bodyText: bodyText(html), claimText: claimText(html), links: links,
@@ -117,14 +141,22 @@ enum SiteExtractor {
         let named = ["&amp;": "&", "&nbsp;": " ", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&apos;": "'", "&#39;": "'",
                      "&eacute;": "é", "&egrave;": "è", "&ecirc;": "ê", "&agrave;": "à", "&acirc;": "â", "&ccedil;": "ç",
                      "&ocirc;": "ô", "&icirc;": "î", "&ucirc;": "û", "&ugrave;": "ù", "&Eacute;": "É", "&rsquo;": "’", "&ndash;": "–", "&mdash;": "—"]
-        var out = text
-        for (entity, value) in named { out = out.replacingOccurrences(of: entity, with: value) }
-        for match in matches(out, "&#(x?[0-9A-Fa-f]+);") {
-            let body = match.dropFirst(2).dropLast()
-            let code = body.hasPrefix("x") ? UInt32(body.dropFirst(), radix: 16) : UInt32(body)
-            if let code, let scalar = Unicode.Scalar(code) { out = out.replacingOccurrences(of: match, with: String(Character(scalar))) }
+        // A single bounded pass over the original input cannot recursively unescape
+        // generated entities or depend on dictionary iteration order.
+        guard let regex = try? NSRegularExpression(pattern: #"&(?:#[xX][0-9A-Fa-f]{1,8}|#[0-9]{1,10}|[A-Za-z][A-Za-z0-9]{1,31});"#) else { return text }
+        let source = text as NSString, out = NSMutableString(string: text)
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)).reversed() {
+            let entity = source.substring(with: match.range)
+            var decoded = named[entity]
+            if decoded == nil, entity.hasPrefix("&#") {
+                let body = entity.dropFirst(2).dropLast()
+                let hexadecimal = body.first == "x" || body.first == "X"
+                let code = hexadecimal ? UInt32(body.dropFirst(), radix: 16) : UInt32(body)
+                if let code, let scalar = Unicode.Scalar(code) { decoded = String(scalar) }
+            }
+            if let decoded { out.replaceCharacters(in: match.range, with: decoded) }
         }
-        return out
+        return out as String
     }
 
     static func normalizePrintedEmail(_ text: String) -> String {
@@ -132,7 +164,7 @@ enum SiteExtractor {
     }
 
     static func hrefs(_ html: String, base: URL) -> [String] {
-        let raw = captures(html, "href\\s*=\\s*[\"']([^\"']+)[\"']")
+        let raw = capturePairs(html, #"(?i:href)\s*=\s*(["'])(.+?)\1"#).map(\.1)
         return unique(raw.compactMap { value in
             let decoded = decodeEntities(value)
             if decoded.lowercased().hasPrefix("mailto:") || decoded.lowercased().hasPrefix("tel:") { return decoded }

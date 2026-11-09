@@ -26,6 +26,67 @@ enum QuickScanResearchTests {
     static func run() async -> Bool {
         let expect = PortableCheck.expect
         return await PortableCheck.suite("Quick Scan research", [
+            ("Published email tokens preserve complete ASCII addresses and reject Unicode neighbours", {
+                let samples: [(String, [String])] = [
+                    ("O'CONNOR@example.test", ["o'connor@example.test"]),
+                    ("!CONNOR@example.test", ["!connor@example.test"]),
+                    ("O'CONNOR @ example.test", ["o'connor@example.test"]),
+                    ("!CONNOR @ example.test", ["!connor@example.test"]),
+                    ("éconnor@example.test", []), ("用户connor@example.test", []),
+                    ("connor@example.testé", []), ("Konnor@example.test", []),
+                    ("connor@eKample.test", []),
+                ]
+                var failures: [String] = []
+                for (literal, expected) in samples {
+                    let page = SiteExtractor.read(html: "<p>Contact: \(literal)</p>", url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                    let contacts = QuickScanResearcher.contacts(in: [page], domain: "example.test").filter { $0.kind == .email }.map(\.value)
+                    if page.emails != expected || contacts != expected {
+                        failures.append("\(literal): extracted \(page.emails), supported \(contacts)")
+                    }
+                }
+                try expect(failures.isEmpty, failures.joined(separator: "; "))
+            }),
+            ("A saved email suffix cannot borrow proof from a longer published token", {
+                for literal in ["o'connor@example.test", "!connor@example.test", "éconnor@example.test", "connor@example.testé", "o'connor @ example.test"] {
+                    let line = "Contact: " + literal
+                    var record = ProspectRecord(id: "cw:email-proof", organisation: "Synthetic", segment: "clinic")
+                    record.businessDomain = "example.test"
+                    record.snapshots = [SiteSnapshot(url: "https://example.test/contact", fetchedAt: LeadKit.now, text: line)]
+                    for excerpt in [line, "connor@example.test"] {
+                        let proof = PublishedContactEvidence(kind: .email, value: "connor@example.test", evidence: FactEvidence(url: "https://example.test/contact", excerpt: excerpt))
+                        try expect(!proof.isSupported(in: record), "a suffix was labelled a published contact: \(literal), excerpt \(excerpt)")
+                    }
+                }
+            }),
+            ("Encoded and quoted mailto routes retain one complete source address", {
+                let html = #"<p>Contact: O&#39;CONNOR@example.test</p><a href="mailto:o%27connor@example.test?subject=Hello">Email</a><a href="mailto:o'connor@example.test">Email again</a>"#
+                let page = SiteExtractor.read(html: html, url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                try expect(page.emails == ["o'connor@example.test"], "numeric entity or mailto percent encoding changed the address: \(page.emails)")
+                let contacts = QuickScanResearcher.contacts(in: [page], domain: "example.test")
+                var record = ProspectRecord(id: "cw:encoded-email", organisation: "Synthetic", segment: "clinic")
+                record.businessDomain = "example.test"; record.snapshots = [SiteSnapshot(url: page.url, fetchedAt: LeadKit.now, text: page.text, links: page.links)]
+                try expect(contacts.count == 1 && contacts[0].isSupported(in: record), "encoded address lost exact source proof")
+                let onlyLink = SiteExtractor.read(html: #"<a href="mailto:o%27connor@example.test">Email</a>"#, url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                let linked = QuickScanResearcher.contacts(in: [onlyLink], domain: "example.test")
+                record.snapshots = [SiteSnapshot(url: onlyLink.url, fetchedAt: LeadKit.now, text: onlyLink.text, links: onlyLink.links)]
+                try expect(linked.first?.value == "o'connor@example.test" && linked.first?.isSupported(in: record) == true, "mailto-only apostrophe proof was lost")
+                let unsupported = SiteExtractor.read(html: #"<p>Contact: &#x212A;onnor@example.test</p><a href="mailto:%C3%A9connor@example.test">Email</a><a href="mailto:connor@example.test%C3%A9">Email</a>"#, url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                try expect(unsupported.emails.isEmpty, "encoded Unicode supplied an ASCII suffix")
+                try expect(SiteExtractor.decodeEntities("&#X27;") == "'" && SiteExtractor.decodeEntities("&amp;#39;") == "&#39;", "entity decoding was recursive or lost uppercase hexadecimal syntax")
+                let nested = SiteExtractor.read(html: "<p>Contact: o&amp;#39;connor@example.test</p>", url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                try expect(nested.emails.isEmpty, "an undecoded entity supplied a different address suffix")
+                let doubled = SiteExtractor.read(html: #"<a href="mailto:o%2527connor@example.test">Email</a>"#, url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                try expect(!doubled.emails.contains("o'connor@example.test"), "mailto percent decoding was recursive")
+            }),
+            ("Current research cannot draft from a cached suffix even when qualification says Ready", {
+                let (researcher, _, candidate) = try fixture()
+                var result = await researcher.research(candidate, segmentID: "clinic")
+                let literal = "Contact: éinfo@clinique-exemple.test"
+                result.record.snapshots[0].text += "\n" + literal
+                result.contacts = [PublishedContactEvidence(kind: .email, value: "info@clinique-exemple.test", evidence: FactEvidence(url: LeadKit.homePage, excerpt: literal))]
+                try expect(result.email == nil && result.record.status == .ready, "suffix contact was supported or fixture is not ready")
+                try expect(result.draft(config: researcher.config, suppression: SuppressionList(), now: researcher.clock.now) == nil, "unsupported cached route remained draft eligible")
+            }),
             ("Phone shape checks preserve literal formats and extensions without claiming assignment", {
                 for invalid in ["+1", "123", "+15145550100", "418-555-0199", "114-271-3824", "514-171-3824", "+0123456789", "5145713824;ext=abc"] {
                     try expect(PublishedPhoneRules.key(invalid) == nil, "invalid phone accepted: \(invalid)")
