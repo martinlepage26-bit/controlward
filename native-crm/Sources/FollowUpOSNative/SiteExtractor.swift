@@ -106,12 +106,16 @@ enum SiteExtractor {
     static func visibleText(_ html: String) -> String {
         var text = html
         for tag in ["script", "style", "noscript", "template", "svg"] {
-            text = text.replacingOccurrences(of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: " ", options: [.regularExpression, .caseInsensitive])
+            text = text.replacingOccurrences(of: "<\(tag)\\b[^>]*>[\\s\\S]*?</\(tag)>", with: "", options: [.regularExpression, .caseInsensitive])
         }
-        text = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "<(br|/p|/div|/li|/h[1-6]|/tr|/address|/section|/article|/footer|/header|p|div|li|h[1-6]|tr|address)\\b[^>]*>",
                                          with: "\n", options: [.regularExpression, .caseInsensitive])
-        text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        // Keep the existing spaces for remaining block/container tags, including table
+        // cells. Inline markup has no text separator: inserting one can invent an address.
+        text = text.replacingOccurrences(of: "</?(?:table|thead|tbody|tfoot|td|th|ul|ol|dl|dt|dd|main|aside|figure|figcaption|blockquote|pre|hr|form|fieldset|details|summary|section|article|footer|header|nav)\\b[^>]*>",
+                                         with: " ", options: [.regularExpression, .caseInsensitive])
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         text = decodeEntities(text)
         let lines = text.components(separatedBy: .newlines).map {
             $0.replacingOccurrences(of: "[ \\t\\x{00A0}]+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)

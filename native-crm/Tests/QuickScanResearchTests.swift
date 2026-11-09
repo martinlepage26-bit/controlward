@@ -26,6 +26,42 @@ enum QuickScanResearchTests {
     static func run() async -> Bool {
         let expect = PortableCheck.expect
         return await PortableCheck.suite("Quick Scan research", [
+            ("Inline formatting cannot split published email tokens or manufacture ASCII boundaries", {
+                let samples: [(String, [String])] = [
+                    ("<span>o'</span>connor@example.test", ["o'connor@example.test"]),
+                    ("<strong>!</strong>connor@example.test", ["!connor@example.test"]),
+                    ("o<span>&#39;</span>connor@example.test", ["o'connor@example.test"]),
+                    ("<span>O'</span><em>CONNOR</em>@EXAMPLE.TEST", ["o'connor@example.test"]),
+                    ("<span>é</span>connor@example.test", []), ("<span>用户</span>connor@example.test", []),
+                    ("con<span>é</span>nor@example.test", []), ("<span>K</span>onnor@example.test", []),
+                    ("connor@<span>é</span>example.test", []), ("connor@e<span>K</span>ample.test", []),
+                    ("connor@example.<span>é</span>test", []), ("connor@example.te<span>é</span>st", []),
+                    ("connor@example.test<span>é</span>", []),
+                    ("o'<!-- hidden -->connor@example.test", ["o'connor@example.test"]),
+                    ("é<script>ignored()</script>connor@example.test", []),
+                ]
+                var failures: [String] = []
+                for (html, expected) in samples {
+                    let page = SiteExtractor.read(html: "<p>Contact: \(html)</p>", url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                    let contacts = QuickScanResearcher.contacts(in: [page], domain: "example.test").filter { $0.kind == .email }.map(\.value)
+                    if page.emails != expected || contacts != expected { failures.append("\(html): extracted \(page.emails), supported \(contacts)") }
+                }
+                try expect(failures.isEmpty, failures.joined(separator: "; "))
+                try expect(SiteExtractor.visibleText("<div>One <span>bold</span> word</div><p>Two<br>Three</p>") == "One bold word\nTwo\nThree", "explicit block or br separation changed")
+                try expect(SiteExtractor.visibleText("<table><tr><td>One</td><td>Two</td></tr></table>") == "One Two", "existing table-cell separation was removed")
+            }),
+            ("A transformed snapshot line cannot bless a suffix manufactured by inline removal", {
+                for (html, wrong) in [("<span>o'</span>connor@example.test", "connor@example.test"),
+                                      ("<span>é</span>connor@example.test", "connor@example.test"),
+                                      ("connor@example.test<span>é</span>", "connor@example.test"),
+                                      ("connor@example.te<span>é</span>st", "connor@example.te")] {
+                    let page = SiteExtractor.read(html: "<p>Contact: \(html)</p>", url: URL(string: "https://example.test/contact")!, fetchedAt: LeadKit.now)
+                    var record = ProspectRecord(id: "cw:inline-proof", organisation: "Synthetic", segment: "clinic")
+                    record.businessDomain = "example.test"; record.snapshots = [SiteSnapshot(url: page.url, fetchedAt: LeadKit.now, text: page.text)]
+                    let proof = PublishedContactEvidence(kind: .email, value: wrong, evidence: FactEvidence(url: page.url, excerpt: page.text))
+                    try expect(!proof.isSupported(in: record), "transformed text manufactured proof for \(wrong): \(page.text)")
+                }
+            }),
             ("Published email tokens preserve complete ASCII addresses and reject Unicode neighbours", {
                 let samples: [(String, [String])] = [
                     ("O'CONNOR@example.test", ["o'connor@example.test"]),
