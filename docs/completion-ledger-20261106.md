@@ -1,8 +1,55 @@
-# ControlWard full product acceptance ledger — updated 2026-11-08
+# ControlWard full product acceptance ledger — updated 2026-11-09
 
 The objective is a usable lead generation, follow-up, CRM and operations application, with complete Mac workflows, reproducible release evidence and explicit external dependencies. A repair release or a green test suite does not establish full-product completion. Hosted task `task_7276b91dd7533ee0` remains in progress.
 
 Requirements were checked against `PRODUCT.md`, `docs/controlward.md`, `native-crm/README.md`, `native-crm/FEATURE-PARITY.md` and `docs/operator-workflow.md`. The October and November 5 reports are historical. [The historical209 audit](requirement-audit-20261107.md) records its checks and limits; the linked earlier Mac acceptance records remain evidence for unchanged workflows.
+
+## Current owner workflow — 9 November, 01:10 UTC
+
+The owner reported that external recipients were reviewed and allowed. The
+normal workspace saved that decision at **2026-11-09T01:06:06.076Z**, with a
+matching workspace generation and private mode 0600 sidecar. This resolves the
+missing normal-workspace recipient ruling described in the historical270
+checkpoint below. It does not confirm an individual message or certify legal
+compliance. Do not ask the owner to repeat this recipient-policy approval.
+
+The running 270 app freshly rechecked the existing **Side•Car** prospect at
+**01:09:58.903Z**. Its own website publishes the shared business mailbox
+`info@side-car.ca`, phone and an explicit statement of daily AI use. The native
+result found contact and AI evidence, reported no research issues and reused
+the same existing CRM lead. Its exact unsent 99 CAD draft, sent history and
+dispatch ledger were unchanged. Public contact details do not prove delivery,
+private mailbox ownership, buyer need or interest. This research is a dated
+witness; the normal freshness rules still require a new fetch before a later
+message preview when the evidence expires.
+
+A further native recheck completed at **04:59:34.355Z** on November9, again
+finding both evidence types with no issues, reusing the same lead and retaining
+the exact draft, history, linked records, date and all153 lead identities.
+
+A fresh native UI session then opened the normal workspace and the lead's
+**Review & send via Resend** preview. It displayed `info@side-car.ca`, sender
+`ml@pharos-ai.ca`, subject **Un premier bilan de vos usages d’IA — 99 $ CA** and
+the exact retained 891-character body. The preview and editor were cancelled;
+the saved draft, status, history, links and date remained exact. No message was
+sent. This closes the previously missing normal-workspace visual witness;
+the complete isolated recipient-policy UI sequence is recorded separately.
+
+The next owner action is **confirmation of the exact message** in that native
+flow. The recipient-policy grant is already recorded; additional recipients,
+campaigns and automatic follow-ups are not authorized.
+[The concrete outreach review](https://pharos-ai.ca/artifacts/controlward/next-outreach)
+retains the sourced prospect and proposed offer.
+
+The owner also reported a zero-result KAIROS refresh. The actual normal 270 jobs
+saved successful customer-account context/inbox reads through
+**2026-11-08T22:10:46Z**, with 0 new, 0 updated, 0 unchanged, 0 skipped, no error and
+healthy connector status. The saved context contains no enquiries or strategy;
+all six collection platforms are paused and the performance totals are zero.
+Authentication and the native empty read are verified. Nonempty mapping and
+fresh collection remain distinct external dependencies; another empty refresh
+is not required to prove the same read path.
+
 
 ## Installed270 checkpoint — 8 November, 20:19 UTC
 
@@ -36,8 +83,9 @@ snapshot. **The visual normal-workspace check remains unverified** because app
 control is unavailable and the owner has not reported that screen's result.
 
 Settings now includes a readable assessment draft and an explicit
-[recipient-policy decision](owner-outreach-ruling-20261108.md). The packaged
-policy remains closed and the normal owner decision is absent. In the running
+[recipient-policy decision](owner-outreach-ruling-20261108.md). At this20:19 checkpoint, the packaged policy remained closed and the normal
+owner decision was absent. The later owner ruling above supersedes that gap.
+In the running
 isolated review, a synthetic approval saved at19:58:35Z, the owner reported the
 restriction notice, and an owner-only decision saved at20:01:54Z. That sidecar
 is mode600. This verifies the saved approval/restriction endpoints; the complete
@@ -207,7 +255,7 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 | R06 | LeadGen file and PHAROS inbox intake | Actual209 file chooser/import/replay/restart;256 inbox17/17 and file5/5 pass. Native-to-real disposable Worker/D1 acceptance covers saved pull/ack, retractions, epochs, failure/retry and dedup. Production nonempty intake remains separate; no new pull was fabricated. [Durability contract](pharos-inbox-durability-20261107.md). |
 | R07 | Discovery, sourced contacts and explicit AI-use evidence |256 research26/26, agent12/12 and original-behavior regressions pass. Fresh normal-app checks of three retained prospects found published contacts and own-business AI-use claims; exact unsent work survived. Partial/fictitious phones and superseded positive findings cannot establish readiness. General web discovery remains agent-assisted. Publication does not authenticate internal AI use, delivery or buyer intent. [Freshness rules](discovery-contact-freshness-20261108.md). |
 | R08 | Explainable priority and truthful Overview |256 Overview33/33 and prospecting7/7 pass. Earlier228/233 native witnesses cover deduplicated research, readiness, separate fit/interest/contactability and saved sources;256 isolated restart retained its refreshed ready count. A score is not buying intent or revenue. |
-| R09 | Qualification, suppression, source age, conflicts and RBQ |270 retains the complete native pipeline/research regression gate; the dated256 pipeline94/94 and planted-red witnesses remain below their own scope. The packaged recipient policy remains closed;270 permits an explicit native owner ruling bound to workspace/generation/configuration and draft version. The normal ruling is absent. Isolated save/restriction endpoints are observed; the full visual sequence is pending. Research readiness supplies no ruling. |
+| R09 | Qualification, suppression, source age, conflicts and RBQ |270 retains the complete native pipeline/research regression gate; the dated256 pipeline94/94 and planted-red witnesses remain below their own scope. The packaged recipient policy remains closed;270 permits an explicit native owner ruling bound to workspace/generation/configuration and draft version. The normal owner ruling was later recorded at01:06:06Z on November9; its private sidecar and workspace binding are verified. Isolated save/restriction endpoints are observed; the complete isolated visual sequence remains unverified. Research readiness supplies no ruling. |
 | R10 | Confirmed idempotent conversion | Actual228 full preview/confirmation/replay creates one linked graph without invented person/value;250 prepared three real review graphs.256 CRM27/27 and preservation/restart verify their identities and exact owner fields. |
 | R11 | Stages, cadence, linked next action and totals | Actual203 stage/outcome/cadence and228 bidirectional lead/task dates;252 repeats both date directions with reviewed mail.256 CRM27/27 and reminder-control6/6 pass. Won value is owner-entered data. |
 | R12 | Grounded drafts, retention, Copy and reviewed outreach | Actual203 on-device/manual drafting and209 exact Copy→native paste retain their dated scope. Lead outreach uses reviewed Resend from ml@pharos-ai.ca.270 Resend27/27 pass, including a researched99CAD offer starting closed, explicit synthetic ruling, exact-message confirmation and synthetic provider receipt.248 owner-address acceptance/delivery and duplicate/restart proof are separate live evidence; no new message was sent. Gmail/default-mail lead fallback and manual Mark as sent remain removed. [Sender contract](resend-outreach.md). |
@@ -221,9 +269,9 @@ Build215 corrected LeadGen import and Lantern audit cards to say Local;228 retai
 | R20 | Activity search/export and capture receipts | Actual203 filtered private export contains exactly one conversion event; current receipt/metadata tests pass. Not every arbitrary field edit is audited. |
 | R21 | Security review and task dedup | Actual198 scan/task/re-scan preserves identity and links; native high-only/resolved/restart checks.256 security27/27 pass. No credential inspection is part of this acceptance. |
 | R22 | Private backup, reviewed restore and rollback | Actual209 invalid-identity refusal, retained error, valid retry, all compared collections and fractional data through restart.256 backup36/36 and recovery7/7 pass. Native backups exclude Keychain, WebKit and external registers. App rollback does not roll back owner data. [Backup contract](backup-validation-acceptance-20261107.md). |
-| R23 | PHAROS/GAP/Twenty/KAIROS integration boundaries |270 retains the full native/connected-PHAROS gate. Separate disposable backend acceptance remains Twenty12 assertions, KAIROS Discovery23/11GETs and GAP35/19GETs including official Envoy. Later normal261 KAIROS authenticated reads and PHAROS empty pull succeeded after the historical credential timeout; no enquiries/strategy or nonempty PHAROS intake was returned. Six collectors stayed paused. GAP DNS failure, Twenty setup, nonempty intake and production writes remain dependencies. Live reads are dated above; none is a new270 witness. |
+| R23 | PHAROS/GAP/Twenty/KAIROS integration boundaries |270 retains the full native/connected-PHAROS gate. Separate disposable backend acceptance remains Twenty12 assertions, KAIROS Discovery23/11GETs and GAP35/19GETs including official Envoy. Later normal261 KAIROS authenticated reads and PHAROS empty pull succeeded after the historical credential timeout. Normal270 then saved successful KAIROS context/inbox reads through22:10:46Z with zero results, no enquiries or strategy and six paused collectors. Nonempty PHAROS intake remains unobserved. GAP DNS failure, Twenty setup, nonempty intake and production writes retain their separate dependency scope. |
 | R24 | Failure handling, private storage and compatibility | Earlier256 save21/21, recovery7/7, backup36/36 and actual import/restore failure UI retain their scope.270 retains the full gate,261 bounded credential wait/cancellation and post-await connection checks, and adds recipient-decision failed-save/retry, mismatch, restore/reset and cross-instance regressions. Fresh owner bytes survived270 installation. Credentials remain outside workspace data. No Keychain or stored sign-in secret was inspected, and no access setting changed. An owner-provided Resend export was classified from its metadata and truncated token; no usable key was copied or connection changed. |
-| R25 | Guidance matches installed behavior and evidence | This documentation checkpoint records installed270, partial isolated native save/restriction evidence and normal-runtime/visual limits. It separates the recovered261/266 live reads from the historical credential timeout, retains all25 requirements and links the explicit recipient-decision workflow. Dated earlier UI journeys are not relabelled270. Published receipts identify app and documentation revisions. |
+| R25 | Guidance matches installed behavior and evidence | This documentation checkpoint records installed270, the later normal owner-recipient allow, fresh native Side•Car evidence and successful empty270 KAIROS reads. It preserves the isolated visual limits, separates earlier builds from current runtime, retains all25 requirements and links the exact-message workflow. Dated earlier UI journeys are not relabelled270. Published receipts identify app and documentation revisions. |
 
 ## Complete installed228 workflow — 7 November
 
@@ -264,9 +312,9 @@ or authorization to contact them.
 
 ## Remaining acceptance and boundaries
 
-- **Current270 native acceptance:** installation and exact fresh owner-workspace preservation pass. The installed normal270 process and matching owner-workspace generation were verified at20:17:57Z; its visual workspace check remains pending. The isolated approval and owner-only restriction were saved, with an owner-reported restriction notice. The complete visual checkbox/cancel/reopen sequence remains unverified because app control cannot initialize its native pipe. The normal recipient ruling is absent. No real assessment decision is inferred from the synthetic test or installation.
-- **Native credential access:** the earlier261 timeout remains a failure-handling witness. Later normal261 Gmail, KAIROS and PHAROS reads succeeded;266 repeated successful Gmail refreshes. Their actual observations are recorded above. These do not prove new270 account checks, nonempty intake or write acceptance. No Keychain or stored sign-in secret was inspected, and no access setting changed. The owner-provided Resend export was classified from metadata and a truncated token; no usable key was copied or connection changed.
-- **KAIROS data:** the verified live customer-account reads were empty; six collection platforms were paused and no strategy was recorded. Nonempty live mapping, fresh collection and strategy-informed targeting are not established by disposable fixtures. ControlWard does not activate collection or import an operator browser session.
+- **Current270 native acceptance:** installation and exact fresh owner-workspace preservation pass. The installed normal270 process and matching owner-workspace generation were verified at20:17:57Z; its visual workspace check remains pending. The isolated approval and owner-only restriction were saved, with an owner-reported restriction notice. The complete visual checkbox/cancel/reopen sequence remains unverified because app control cannot initialize its native pipe. The normal recipient ruling was subsequently recorded at01:06:06Z on November9, separately from these synthetic checks. The exact Side•Car message confirmation remains pending.
+- **Native credential access:** the earlier261 timeout remains a failure-handling witness. Later normal261 Gmail, KAIROS and PHAROS reads succeeded;266 repeated successful Gmail refreshes. Their actual observations are recorded above. Normal270 KAIROS context/inbox reads subsequently succeeded through22:10:46Z; these empty reads do not prove nonempty intake or write acceptance. No Keychain or stored sign-in secret was inspected, and no access setting changed. The owner-provided Resend export was classified from metadata and a truncated token; no usable key was copied or connection changed.
+- **KAIROS data:** the verified normal270 live customer-account reads were empty; six collection platforms were paused and no strategy was recorded. Nonempty live mapping, fresh collection and strategy-informed targeting are not established by disposable fixtures. ControlWard does not activate collection or import an operator browser session.
 - **Other configured destinations:** Twenty setup/service, current GAP authenticated import, nonempty production PHAROS intake/exchange and production Project Control capture writes remain separate from controlled backend acceptance.266 read174 projects from the existing register. Earlier anonymous403 checks do not contradict the later authenticated PHAROS/Project Control reads or identify a different active register. GAP's configured hostname failed DNS resolution at17:23Z, and Twenty remained Needs setup. No substitute endpoint, credential or production record is invented.
 - **Mail:** lead sending is Resend-only. The owner-address Resend acceptance/delivery checkpoint is verified on248. A real incoming prospect reply and its live reviewed follow-up are still unobserved. Ordinary native mailbox write capabilities retain fixture evidence and require separately scoped live acceptance; the retired Gmail/default-mail lead flow is not a completion requirement.
 - **Owner-deferred/outside distribution scope:** notification delivery remains expressly deferred.270 is ad-hoc signed and not notarized. No collection activation, new outreach, production deployment/migration or generated revenue is claimed. Won value is owner-entered CRM data, not a payment receipt.
