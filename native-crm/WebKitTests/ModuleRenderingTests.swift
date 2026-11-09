@@ -41,6 +41,28 @@ struct ModuleRenderingTests {
         try expect(refused)
     }
 
+    func archiveViewsRenderInNativeWebKit() async throws {
+        let controller = WorkspaceWebController(module: .projects, document: document, dataStore: .nonPersistent())
+        controller.webView.frame = NSRect(x: 0, y: 0, width: 1100, height: 800)
+        controller.start()
+        try await wait("typeof window.controlWard === 'object'", in: controller.webView)
+        let script = #"""
+        window.fetch = async function(){return {ok:true,json:async()=>({schema:1,stream_id:'synthetic',through:2,next:2,done:true,capture_started:'2026-11-09T00:00:00Z',coverage:'Synthetic retained baseline',rows:[
+        {seq:1,captured_at:'2026-11-09T00:00:00Z',entity:'projects',entity_id:'test-project',operation:'baseline',before_json:null,after_json:JSON.stringify({id:'test-project',title:'Native archive project'})},
+        {seq:2,captured_at:'2026-11-09T00:00:01Z',entity:'notes',entity_id:'test-note',operation:'insert',before_json:null,after_json:JSON.stringify({id:'test-note',project_id:'test-project',body:'Native evidence <script>untrusted</script>'})}
+        ]})};};
+        document.getElementById('navArchive').click();document.getElementById('archiveLoad').click();true;
+        """#
+        _ = try await controller.webView.evaluateJavaScript(script)
+        try await wait("document.getElementById('archiveStatus').textContent.includes('2 retained records')", in: controller.webView)
+        try expect((try await controller.webView.evaluateJavaScript("document.getElementById('archiveBody').textContent.includes('Native archive project')")) as? Bool == true)
+        _ = try await controller.webView.evaluateJavaScript("document.querySelector('[data-archive-tab=evidence]').click();true")
+        try expect((try await controller.webView.evaluateJavaScript("document.getElementById('archiveBody').textContent.includes('Native evidence') && !document.querySelector('#archiveBody script')")) as? Bool == true)
+        _ = try await controller.webView.evaluateJavaScript("document.querySelector('[data-archive-tab=graph]').click();document.querySelector('[data-archive-node]').dispatchEvent(new MouseEvent('click',{bubbles:true}));true")
+        try expect((try await controller.webView.evaluateJavaScript("document.querySelectorAll('#archiveBody svg circle').length===2 && !!document.querySelector('#archiveNode pre')")) as? Bool == true)
+        try expect(!(try await controller.projectSnapshot()).connected)
+    }
+
     func connectedCaptureIfRequested() async throws {
         guard let endpoint = ProcessInfo.processInfo.environment["CONTROLWARD_TEST_WORKER"] else { return }
         guard let base = URL(string: endpoint), base.host == "127.0.0.1", base.scheme == "http" else {
@@ -153,6 +175,7 @@ struct WebKitTestRunner {
             do {
                 let tests = ModuleRenderingTests()
                 try await tests.dashboardRendersAndPreservesEdits()
+            try await tests.archiveViewsRenderInNativeWebKit()
                 try await tests.storageIsIsolatedAndUnsafeNavigationIsDenied()
                 try await tests.projectOpensStayInTheirRegister()
                 try await tests.connectedCaptureIfRequested()

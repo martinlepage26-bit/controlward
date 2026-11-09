@@ -37,7 +37,7 @@ struct WorkspaceModuleView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(controller.module.title).font(.headline)
                     Text(controller.module == .projects
-                         ? "Projects, decisions and intake. Connect your shared register in Sync."
+                         ? "Projects, decisions and evidence. Open Living archive for Timeline, Evidence and Graph."
                          : "Hosted prototype · synthetic mail only. Live mailbox sync is not connected.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
