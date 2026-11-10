@@ -537,12 +537,12 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
 .hx-row[data-open] { cursor:pointer; }
 .hx-row[data-open]:hover td { background:var(--accent-wash); }
 #hxCount { margin:0 0 8px; }
-.archive-heading{display:flex;align-items:center;gap:16px}.archive-heading h1{margin:0}.archive-heading img{object-fit:cover;object-position:center;border-radius:8px;opacity:.9}.archive-tools,.archive-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.archive-tools input{flex:1;min-width:160px}.archive-tools select{max-width:100%}.archive-tabs button[aria-pressed=true]{border-color:#d7bd7a;color:#d7bd7a}.archive-entry{padding:16px 0;border-bottom:1px solid #677c7044;overflow-wrap:anywhere}.archive-entry summary{cursor:pointer;display:flex;flex-wrap:wrap;gap:12px}.archive-entry time{font-size:.8em;opacity:.65}.archive-entry pre,#archiveNode pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:420px;overflow:auto}.archive-entry h3{margin:6px 0}.archive-hash{font-family:monospace;font-size:11px}.archive-note{white-space:pre-wrap}.archive-graph{max-height:65vh;overflow:auto}.archive-graph svg{width:100%;min-width:320px}.archive-graph g{cursor:pointer}.archive-graph g:focus circle{stroke:white;stroke-width:4}#archiveStatus{font-size:13px}
+.archive-heading{display:flex;align-items:center;gap:16px}.archive-heading h1{margin:0}.archive-heading img{object-fit:cover;object-position:center;border-radius:8px;opacity:.9}.archive-tools,.archive-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.archive-tools input{flex:1;min-width:160px}.archive-tools select{max-width:100%}.archive-tabs button[aria-pressed=true]{border-color:#d7bd7a;color:#d7bd7a}.archive-entry{padding:16px 0;border-bottom:1px solid #677c7044;overflow-wrap:anywhere}.archive-entry summary{cursor:pointer;display:flex;flex-wrap:wrap;gap:12px}.archive-entry time{font-size:.8em;opacity:.65}.archive-entry pre,.archive-entry pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:420px;overflow:auto}.archive-entry h3{margin:6px 0}.archive-hash{font-family:monospace;font-size:11px}.archive-note{white-space:pre-wrap}.archive-graph{max-height:65vh;overflow:auto}.archive-graph svg{width:100%;min-width:320px}.archive-graph g{cursor:pointer}.archive-graph g:focus circle{stroke:white;stroke-width:4}#archiveStatus{font-size:13px}
 
 /* The same quiet observatory framing as the online archive. */
 #view-archive[data-tab=graph] .archive-heading{display:none}
 .archive-active #view-archive{background:#080c0d;color:#e3e4df;padding:18px;border:1px solid #bdc9c02e;border-radius:10px}
-.archive-heading{display:block}.archive-heading .kicker{color:#d2b47e;font:9px/1.4 monospace;letter-spacing:.15em;margin:0 0 7px}.archive-heading h1{font:400 30px/1.1 Georgia,serif;margin:0 0 10px}
+.archive-heading{display:none}.archive-heading .kicker{color:#d2b47e;font:9px/1.4 monospace;letter-spacing:.15em;margin:0 0 7px}.archive-heading h1{font:400 30px/1.1 Georgia,serif;margin:0 0 10px}
 .archive-tools{margin:10px 0;gap:8px;align-items:center}.archive-tools input,.archive-tools select,.archive-tools button,.archive-tabs button,.archive-graph-switch button{background:#111e20;border:1px solid #bdc9c03b;border-radius:7px;color:#e3e4df;font:12px/1.4 system-ui;padding:8px 10px;min-height:34px}.archive-tools select{width:auto;max-width:260px}.archive-tools input{min-width:140px}.archive-tabs{margin:12px 0;gap:7px}.archive-tabs button[aria-pressed=true],.archive-graph-switch button[aria-pressed=true]{color:#d2b47e;border-color:#d2b47e}.archive-graph-switch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}.archive-graph-switch span{margin-left:auto;font:10px monospace;color:#a9b4b4}#archiveStatus{margin:8px 0 3px;color:#a9b4b4}#archiveCoverage{display:block;font-size:10px;color:#a9b4b4}#archiveGraphFrame{display:block;width:100%;height:850px;border:0;border-radius:8px;background:#080c0d}#view-archive .archive-entry{padding:14px;border:1px solid #bdc9c02e;border-radius:8px;background:#111e2066;margin:10px 0}#view-archive .archive-entry summary{font-size:13px}
 @media(max-width:760px){#archiveGraphFrame{height:1080px}.archive-active #view-archive{padding:10px}.archive-heading h1{font-size:26px}.archive-graph-switch span{width:100%;margin-left:0}}
 
@@ -564,6 +564,8 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
 .archive-active #metrics{display:none}
 #archiveGraphFrame{height:max(560px,calc(100svh - 145px))}
 @media(max-width:600px){.archive-workspace-bar{gap:6px}.archive-workspace-bar .topbar{flex-basis:100%}.archive-workspace-bar .archive-tabs{width:100%}.archive-workspace-bar .archive-tabs button{flex:1}}
+.archive-graph-switch button[aria-pressed=true]:disabled{opacity:1}
+#view-archive[data-visual-mode=ledger] .archive-graph-switch{display:none}
 </style>
 </head>
 <body>
@@ -580,7 +582,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     <nav class="nav-meta" aria-label="Register tools">
       <button type="button" class="meta-btn" id="navHierarchy" data-view="tree" data-i18n="tree">Tree</button>
       <button type="button" class="meta-btn" id="navPapers" data-view="research" data-i18n="allPapers">All papers</button>
-      <button type="button" class="meta-btn" id="navTimeline" data-view="timeline" data-i18n="timeline">Timeline</button>
+      <button type="button" class="meta-btn" id="navTimeline" data-view="timeline" data-i18n="scheduleView">Schedule</button>
       <button type="button" class="meta-btn" id="navAnalytics" data-view="analytics" data-i18n="analytics">Analytics</button>
       <button type="button" class="meta-btn" id="navArchive" data-view="archive">Living archive</button>
       <button type="button" class="meta-btn" id="navActivity" data-view="activity" data-i18n="activity">Activity</button>
@@ -599,8 +601,6 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       <details class="utilities" id="utilityMenu"><summary data-i18n="tools">Tools</summary><div class="utility-panel">
       <button type="button" class="ghost" id="themeBtn" data-i18n="theme">Theme</button>
       <button type="button" class="ghost" id="langBtn" aria-label="Language">FR</button>
-      <button type="button" class="ghost" id="exportBtn" data-i18n="export">Export</button>
-      <button type="button" class="ghost" id="importBtn" data-i18n="import">Import</button>
       </div></details>
       <button type="button" class="primary" id="addBtn" data-i18n="newItem">New</button>
       <input type="file" id="fileIn" accept="application/json,.json" class="hidden">
@@ -729,8 +729,8 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
         </div>
       </section>
       <section id="view-archive" class="hidden">
-<div class="archive-workspace-bar" id="archiveWorkspaceBar"></div><div class="archive-heading"><p class="kicker">BRILLIANT · STRANGE · EXACT</p><h1>EmerContrAuld</h1></div>
-<div class="archive-tools"><button id="archiveLoad" class="btn" type="button">Load / refresh history</button><select id="archiveProject" aria-label="Filter archive by project"><option value="">All projects</option></select><input id="archiveQuery" type="search" aria-label="Search retained history and evidence" placeholder="Search history and evidence"></div>
+<div class="archive-workspace-bar" id="archiveWorkspaceBar"></div>
+<div class="archive-tools"><button id="archiveLoad" class="btn" type="button">Refresh archive</button><select id="archiveProject" aria-label="Filter archive by project"><option value="">All projects</option></select><input id="archiveQuery" type="search" aria-label="Search retained history and evidence" placeholder="Search history and evidence"></div>
 <p id="archiveStatus" role="status"></p><small id="archiveCoverage"></small>
 <div class="archive-tabs" role="group" aria-label="Archive view"><button class="btn" type="button" data-archive-tab="graph" aria-pressed="true">Graph</button><button class="btn" type="button" data-archive-tab="timeline" aria-pressed="false">Timeline</button><button class="btn" type="button" data-archive-tab="evidence" aria-pressed="false">Evidence</button></div><div id="archiveBody"></div></section>
 <section id="view-conn" class="hidden">
@@ -774,7 +774,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
           <p class="note">Changes since your last export: <b id="dirtyCount">0</b> · local snapshot: <b id="saveWord">checking…</b> · last write: <b id="saveTime">-</b></p>
           <textarea class="json" id="jsonOut" spellcheck="false" placeholder="Paste a backup here and press Load, or read the current state."></textarea>
           <div class="toolbar">
-            <button type="button" id="loadPaste" data-i18n="load">Load from the box above</button>
+            <button type="button" id="loadPaste" disabled data-i18n="load">Load from the box above</button>
             <button type="button" class="ghost" id="showJson" data-i18n="showState">Show current state</button>
           </div>
         </div>
@@ -877,7 +877,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       eventsShown:"{n} events for this record · the shared register returns at most the latest 300 events overall", revision:"Revision", created:"Created", updated:"Updated", origin:"Origin",
       thresholds:"Exception thresholds", candidateAgeLbl:"Candidate ageing (days)", deferralLimitLbl:"Deferral limit (count)", deadlineWindowLbl:"Deadline window (days)",
       thresholdsNote:"These govern the ageing-candidate and repeatedly-deferred breaches and the assistants' deadline window. Saved to the shared register when connected (PUT /api/settings); otherwise kept in this browser.",
-      tools:"Tools", appTitle:"Project Control", brandSub:"Register", today:"Today", searchHint:"Search or jump…", sync:"Sync", theme:"Atmosphere",
+      scheduleView:"Schedule", tools:"Tools", appTitle:"Project Control", brandSub:"Register", today:"Today", searchHint:"Search or jump…", sync:"Sync", theme:"Atmosphere",
       export:"Export", import:"Import", newItem:"New", activity:"Activity", log:"Diagnostic log", connections:"Connections", backup:"Backup",
       cards:"Cards", board:"Board", list:"List", homeLead:"Exceptions first, then this week.", quarantine:"Suggestions, not yet in the register",
       research:"Research", showBoard:"Show board", noPapers:"No papers in this workspace.", unsorted:"Unsorted", triageTitle:"Triage",
@@ -957,7 +957,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       stream:"Stream", subproject:"Subproject", where:"Where", nextShort:"Next", dueShort:"Due",
       noNext:"No next action", inPrep:"In preparation", papers:"Papers"
     },
-    fr: {
+    fr: { scheduleView:"Échéancier",
       timeline:"Chronologie", timelineTitle:"Dates prévues et changements observés", zWeek:"Semaine", zMonth:"Mois", zQuarter:"Trimestre", zYear:"Année", allWorkspaces:"Tous les espaces", clear:"Effacer",
       tlHelp:"Glissez sur le graphique pour sélectionner une plage · ← → pour déplacer · cliquez un repère pour ouvrir la fiche. Aucune barre n'est tracée : le registre n'a pas de dates de début, les durées seraient inventées.",
       lgDeadline:"échéance", lgReview:"révision", lgCreated:"créé", lgStatus:"changement de statut", lgRound:"soumission", lgDefer:"report", lgNote:"note", lgScheduled:"creux/doré = prévu (champ du registre)", lgObserved:"plein = observé (events.at)",
@@ -1713,6 +1713,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       var b = el("nav"+ (v==="activity"?"Activity":v==="log"?"Log":v==="conn"?"Conn":"Backup"));
       if (b) b.setAttribute("aria-current", ui.view===v ? "page" : "false");
     });
+    el("navArchive").setAttribute("aria-current",ui.view==="archive"?"page":"false");
     el("navHierarchy").setAttribute("aria-current",ui.view==="tree"?"page":"false");
     el("navTimeline").setAttribute("aria-current",ui.view==="timeline"?"page":"false");
     el("navAnalytics").setAttribute("aria-current",ui.view==="analytics"?"page":"false");
@@ -2569,7 +2570,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     var q = (el("cmdkInput").value||"").trim();
     var ql = q.toLowerCase();
     var items = [];
-    if (q) items.push({ kind:"add", title:q, label:tf("quickAdd",{q:q}), hint:t("newItem") });
+
     var projects = queue().filter(function(p){
       if (!ql) return true;
       var place = displayPlace(p);
@@ -2583,6 +2584,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       if (needsCheck(p)) hint = hint ? hint+" · "+t("needsCheck") : t("needsCheck");
       items.push({ kind:"project", project:p, label:p.title||t("untitled"), hint:hint });
     });
+    if (q) items.push({ kind:"add", title:q, label:tf("quickAdd",{q:q}), hint:t("newItem") });
     if (!ql) {
       items.push({ kind:"nav", view:"home", label:t("today"), hint:"" });
       WORKSPACES.forEach(function(w){ items.push({ kind:"nav", ws:w.id, label:w.name, hint:"" }); });
@@ -2706,7 +2708,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     el('sidebar').classList.toggle('open',open);
     el('navigationScrim').classList.toggle('hidden',!open);
     el('menuBtn').setAttribute('aria-expanded',String(open));
-    var frame=el('archiveGraphFrame');if(frame)frame.contentWindow.postMessage({type:'emerauld:navigation-state',open:open},'*');
+
     if(open&&compact)document.querySelector('.archive-nav-close').focus();
   }
   function closeNavigation(){setNavigation(false);}
@@ -2980,10 +2982,8 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     el("cfMergeVal").focus();
   });
   el("cfMergeSave").addEventListener("click", resolveMergeSave);
-  el("exportBtn").addEventListener("click", download);
   el("exportBtn2").addEventListener("click", download);
   function pick(){ el("fileIn").click(); }
-  el("importBtn").addEventListener("click", pick);
   el("importBtn2").addEventListener("click", pick);
   el("fileIn").addEventListener("change", function(e){
     var f = e.target.files[0]; if (!f) return;
@@ -2991,10 +2991,11 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     r.readAsText(f); e.target.value = "";
   });
   el("copyBtn").addEventListener("click", function(){
-    var text = serialize(); el("jsonOut").value = text;
-    if (navigator.clipboard) navigator.clipboard.writeText(text).then(function(){ alertBox(t("copied"), true); }, function(){ alertBox(t("clipBlocked")); });
+    var text = serialize(); el("jsonOut").value = text;el("loadPaste").disabled=false;
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(function(){ alertBox(t("copied"), true); }, function(){ alertBox(t("clipBlocked")); });else alertBox(t("clipBlocked"));
   });
-  el("showJson").addEventListener("click", function(){ el("jsonOut").value = serialize(); });
+  el("showJson").addEventListener("click", function(){ el("jsonOut").value = serialize();el("loadPaste").disabled=false; });
+  el("jsonOut").addEventListener("input",function(){el("loadPaste").disabled=!this.value.trim();});
   el("loadPaste").addEventListener("click", function(){ if (el("jsonOut").value.trim()) loadJSON(el("jsonOut").value); });
   ["wipIn","candidateAgeIn","deferralLimitIn","deadlineWindowIn"].forEach(function(id){
     el(id).addEventListener("change", function(){
@@ -3189,10 +3190,11 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     };
   });
   // The private archive is memory-only. Never add it to localStorage snapshots.
-  var archive = {rows:[],stream:null,epoch:-1,tab:'graph',project:'',q:'',limit:200,graphMode:'projects',visualMode:'eye',vaultGraph:null,graphError:'',focus:'',loadId:0,controller:null,loaded:false,busy:false,error:''};
-  function archiveReset(){ if(archive.controller)archive.controller.abort();archive.controller=null;archive.busy=false;archive.loadId++;archive.rows=[]; archive.loaded=false; archive.stream=null; archive.error=''; archive.vaultGraph=null;archive.focus=''; archive.epoch=ui.registerEpoch; }
+  var archive = {rows:[],stream:null,epoch:-1,tab:'graph',project:'',q:'',limit:200,graphMode:'projects',visualMode:'eye',vaultGraph:null,graphError:'',graphBusy:false,loadId:0,controller:null,loaded:false,busy:false,error:''};
+  function archiveReset(){ if(archive.controller)archive.controller.abort();archive.controller=null;archive.busy=false;archive.loadId++;archive.rows=[]; archive.loaded=false; archive.stream=null; archive.error=''; archive.vaultGraph=null;archive.graphBusy=false;archive.graphError=''; archive.epoch=ui.registerEpoch; }
   async function loadArchive(){
     if (archive.busy) return;
+    var previous=archive.loaded&&archive.epoch===ui.registerEpoch?{rows:archive.rows,stream:archive.stream,coverage:archive.coverage,started:archive.started,vaultGraph:archive.vaultGraph}:null;
     archiveReset(); archive.controller=new AbortController();var controller=archive.controller,ticket=archive.loadId,timer;archive.busy=true; renderArchive();
     var epoch=ui.registerEpoch, after=0,through=null,stream=null,rows=[];
     try {
@@ -3208,7 +3210,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
         el('archiveStatus').textContent='Loading retained history: '+rows.length+' records';
       }while(!page.done);
       archive.rows=rows;archive.stream=stream;archive.coverage=page.coverage;archive.started=page.capture_started;archive.loaded=true;
-    }catch(e){ if(!e.stale && ticket===archive.loadId)archive.error='History could not be loaded. Check the register connection and refresh.'; }
+    }catch(e){ if(!e.stale && ticket===archive.loadId){if(previous&&epoch===ui.registerEpoch){Object.assign(archive,previous);archive.loaded=true;}archive.error='Refresh failed. Check the connection and retry.';} }
     finally{clearTimeout(timer);if(ticket===archive.loadId){archive.busy=false;archive.controller=null;if(epoch!==ui.registerEpoch)archiveReset();renderArchive();}}
   }
   function archiveObjects(){
@@ -3224,65 +3226,67 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
   function renderArchive(){
     if(!el('archiveBody'))return;
     if(archive.epoch!==ui.registerEpoch)archiveReset();
-    el('archiveStatus').textContent=archive.busy?'Loading complete retained history…':archive.error||(!archive.loaded?'Connect your register, then load history.':archive.rows.length+' retained records · captured since '+archive.started);
+    el('archiveStatus').textContent=archive.busy?'Refreshing archive…':archive.error||(!archive.loaded?'Connect your register, then load history.':archive.rows.length+' retained records · captured since '+archive.started);
     el('archiveLoad').disabled=archive.busy;el('archiveCoverage').textContent=archive.loaded?archive.coverage:'';
-    var objects=archiveObjects(), projects=objects.filter(x=>x.entity==='projects');
+    var objects=archiveObjects(), projects=objects.filter(x=>x.entity==='projects'&&!isStructural(x.value)&&!isSuggestion(x.value));
     var select=el('archiveProject');select.innerHTML='<option value="">All projects and vault evidence</option>'+projects.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.value.title||x.id)+'</option>').join('');select.value=archive.project;
     document.querySelectorAll('[data-archive-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.archiveTab===archive.tab)));
-    el('view-archive').dataset.tab=archive.tab;
+    el('view-archive').dataset.tab=archive.tab;el('view-archive').dataset.visualMode=archive.visualMode;
     var body=el('archiveBody');
     if(!archive.loaded){body.textContent='The living archive retains source versions and committed changes. Loading history does not change your projects.';return;}
     if(archive.tab==='timeline'){
       var rows=archive.rows.filter(archiveMatches).slice().reverse();
-      body.innerHTML='<p>'+rows.length+' matching records. Showing up to '+archive.limit+'; narrow by project or search to find older records.</p>'+rows.slice(0,archive.limit).map(function(r){
+      body.innerHTML='<p>'+rows.length+' matching records. Showing '+Math.min(rows.length,archive.limit)+' records.</p>'+rows.slice(0,archive.limit).map(function(r){
         var a=JSON.parse(r.after_json||r.before_json||'{}'),sourceTime=r.operation==='baseline'?(a.at||a.updated||a.created||r.captured_at):(r.entity==='events'?a.at:r.captured_at),title=a.title||a.summary||a.body||a.what||a.entity_id||r.entity_id;
         return '<details class="archive-entry"><summary><time>'+esc(sourceTime||r.captured_at)+'</time><strong>'+esc(r.operation)+' · '+esc(r.entity)+'</strong><span>'+esc(String(title).slice(0,160))+'</span></summary><p>Source: Project Control · '+esc(r.entity_id)+' · record '+r.seq+'</p><pre>'+esc(JSON.stringify({before:r.before_json?JSON.parse(r.before_json):null,after:r.after_json?JSON.parse(r.after_json):null},null,2))+'</pre></details>';
-      }).join('');
+      }).join('')+(rows.length>archive.limit?'<button class="btn" data-archive-more>Show more history</button>':'');
     }else if(archive.tab==='evidence'){
       var sources=objects.filter(function(x){return ['notes','items','submission_rounds','archive_documents'].includes(x.entity)&&(!archive.project||x.value.project_id===archive.project)&&(!archive.q||JSON.stringify(x.value).toLowerCase().includes(archive.q.toLowerCase()));});
       body.innerHTML='<p>'+sources.length+' matching sources. Vault documents retain exact paths and content fingerprints; original bytes are preserved privately on CT920. Project links are explicit, never inferred from similar titles.</p>'+sources.slice(0,archive.limit).map(function(x){var a=x.value;
         return '<article class="archive-entry"><small>'+esc(x.entity)+' · '+esc(a.status||'retained')+'</small><h3>'+esc(a.title||a.venue||a.summary||a.kind||x.id)+'</h3>'+(a.body?'<p class="archive-note">'+esc(a.body)+'</p>':'')+(a.path?'<p>'+esc(a.path)+'</p><p class="archive-hash">SHA-256 '+esc(a.sha256)+'</p>':'')+archiveSafeLink(a.link,'Open source')+'<details><summary>Source record and citation</summary><pre>'+esc(JSON.stringify(a,null,2))+'</pre><p>pc:'+esc(x.entity)+':'+esc(x.id)+'@'+x.seq+'</p></details></article>';
-      }).join('');
+      }).join('')+(sources.length>archive.limit?'<button class="btn" data-archive-more>Show more sources</button>':'');
     }else{
       var nodes, vault=archive.graphMode==='vault';
       if(vault){
-        if(!archive.vaultGraph){body.innerHTML='<p>'+esc(archive.graphError||'Load the published vault graph to explore its approved document and topic relationships.')+'</p><button class="btn" data-archive-vault-load>Load vault graph</button><button class="btn" data-archive-project-graph>Project relationships</button>';return;}
+        if(!archive.vaultGraph){body.innerHTML='<p>'+esc(archive.graphError||'Load the published vault graph to explore its approved document and topic relationships.')+'</p><button class="btn" data-archive-vault-load '+(archive.graphBusy?'disabled':'')+'>Retry vault graph</button><button class="btn" data-archive-project-graph>Project relationships</button>';return;}
         nodes=archive.vaultGraph.nodes.map(x=>({entity:'vault',id:x.id,value:{title:x.label,type:x.type,community:x.community}}));
-        if(archive.focus){var nearby=new Set([archive.focus]);archive.vaultGraph.links.forEach(x=>{if(x.source===archive.focus)nearby.add(x.target);if(x.target===archive.focus)nearby.add(x.source);});nodes=nodes.filter(x=>nearby.has(x.id));}
-        else if(archive.q)nodes=nodes.filter(x=>(x.id+' '+x.value.title).toLowerCase().includes(archive.q.toLowerCase()));
+
       }else{
         nodes=objects.filter(x=>x.entity==='projects'||['notes','items','submission_rounds'].includes(x.entity));
-        if(archive.project)nodes=nodes.filter(x=>(x.entity==='projects'&&x.id===archive.project)||x.value.project_id===archive.project);
-        if(archive.q)nodes=nodes.filter(x=>JSON.stringify(x.value).toLowerCase().includes(archive.q.toLowerCase()));
+
       }
       var graphNodes=nodes.map(function(x){return {id:x.entity+':'+x.id,label:String(x.value.title||x.value.summary||x.entity),type:vault?(x.value.type==='topic'?'concept':x.value.type):(x.entity==='projects'?'concept':'document'),community:String(x.value.community||x.value.project_id||x.value.parent_id||x.id)};});
       var ids=new Set(graphNodes.map(x=>x.id)),links=[];
       if(vault){archive.vaultGraph.links.forEach(function(x){if(ids.has('vault:'+x.source)&&ids.has('vault:'+x.target))links.push({source:'vault:'+x.source,target:'vault:'+x.target,relation:x.relation});});}
       else nodes.forEach(function(x){var parent='projects:'+(x.value.project_id||x.value.parent_id),id=x.entity+':'+x.id;if(ids.has(parent)&&parent!==id)links.push({source:id,target:parent,relation:x.entity==='projects'?'part_of':'evidence_for'});});
-      body.innerHTML='<div class="archive-graph-switch"><button class="btn" data-archive-project-graph aria-pressed="'+(!vault)+'">Project relationships</button><button class="btn" data-archive-vault-load aria-pressed="'+vault+'">Vault graph</button><span>'+graphNodes.length.toLocaleString()+' nodes · '+links.length.toLocaleString()+' relationships</span></div><iframe id="archiveGraphFrame" title="EmerContrAuld interactive knowledge graph" src="graph-ui/index.html" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>';
+      body.innerHTML='<div class="archive-graph-switch"><button class="btn" data-archive-project-graph aria-pressed="'+(!vault)+'" '+(!vault?'disabled':'')+'>Project relationships</button><button class="btn" data-archive-vault-load aria-pressed="'+vault+'" '+(vault?'disabled':'')+'>Vault graph</button></div><iframe id="archiveGraphFrame" title="EmerContrAuld interactive knowledge graph" src="graph-ui/index.html" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>';
       var frame=el('archiveGraphFrame'),projection={view:archive.visualMode,nodes:graphNodes,links:links,projects:projects.map(function(x){return {id:x.id,title:x.value.title||x.id,status:x.value.status||'',next_action:x.value.next_action||'',deadline:x.value.deadline||''};})};
       frame.addEventListener('load',function(){if(frame.isConnected)frame.contentWindow.postMessage({type:'emerauld:graph',graph:projection},'*');});
       frame._graphProjection=projection;
 
     }
   }
-  window.addEventListener('message',function(event){var frame=el('archiveGraphFrame');if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:navigation'){toggleNavigation();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:view'&&['eye','network','ledger'].includes(event.data.view)){archive.visualMode=event.data.view;return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:close-navigation'){closeNavigation();el('menuBtn').focus();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:open-project'&&frame._graphProjection?.projects.some(p=>p.id===event.data.id)){if(window.controlWard.openProject(event.data.id))el('closeDrawer').focus();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:rendered'&&Number.isSafeInteger(event.data.nodes)){frame.dataset.ready='true';frame.dataset.nodeCount=String(event.data.nodes);return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:ready'&&frame._graphProjection)frame.contentWindow.postMessage({type:'emerauld:graph',graph:frame._graphProjection},'*');});
+  window.addEventListener('message',function(event){var frame=el('archiveGraphFrame');if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:view'&&['eye','network','ledger'].includes(event.data.view)){archive.visualMode=event.data.view;el('view-archive').dataset.visualMode=archive.visualMode;return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:open-project'&&frame._graphProjection?.projects.some(p=>p.id===event.data.id)){if(window.controlWard.openProject(event.data.id))el('closeDrawer').focus();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:rendered'&&Number.isSafeInteger(event.data.nodes)){frame.dataset.ready='true';frame.dataset.nodeCount=String(event.data.nodes);return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:ready'&&frame._graphProjection)frame.contentWindow.postMessage({type:'emerauld:graph',graph:frame._graphProjection},'*');});
   document.querySelector('.archive-nav-close').onclick=()=>{closeNavigation();el('menuBtn').focus();};
   el('archiveLoad').addEventListener('click',loadArchive);
-  el('archiveProject').addEventListener('change',function(){archive.project=this.value;renderArchive();});
-  el('archiveQuery').addEventListener('input',function(){archive.q=this.value;archive.focus='';archive.limit=200;renderArchive();});
-  document.querySelectorAll('[data-archive-tab]').forEach(b=>b.addEventListener('click',function(){archive.tab=this.dataset.archiveTab;renderArchive();}));
-  async function inspectArchiveNode(e){
-    if(e.target.closest('[data-archive-vault-load]')){archive.graphMode='vault';if(!archive.vaultGraph){try{archive.vaultGraph=await api('/api/archive/vault-graph');archive.graphError='';}catch(error){archive.graphError='Vault graph could not be loaded. Check the connection and retry.';}}renderArchive();return;}
+  el('archiveProject').addEventListener('change',function(){archive.project=this.value;archive.limit=200;renderArchive();});
+  el('archiveQuery').addEventListener('input',function(){archive.q=this.value;archive.limit=200;renderArchive();});
+  document.querySelectorAll('[data-archive-tab]').forEach(b=>b.addEventListener('click',function(){if(archive.tab===this.dataset.archiveTab)return;archive.tab=this.dataset.archiveTab;archive.limit=200;renderArchive();}));
+  async function handleArchiveAction(e){
+    if(e.target.closest('[data-archive-vault-load]')){
+      if(archive.graphBusy)return;archive.graphMode='vault';
+      if(!archive.vaultGraph){var epoch=ui.registerEpoch;archive.graphBusy=true;archive.graphError='Loading vault graph…';renderArchive();
+        try{var graph=await api('/api/archive/vault-graph');if(epoch!==ui.registerEpoch)return;archive.vaultGraph=graph;archive.graphError='';}
+        catch(error){if(epoch===ui.registerEpoch)archive.graphError='Vault graph could not be loaded. Retry or return to project relationships.';}
+        finally{if(epoch===ui.registerEpoch)archive.graphBusy=false;}
+      }renderArchive();return;
+    }
     if(e.target.closest('[data-archive-project-graph]')){archive.graphMode='projects';renderArchive();return;}
-    var focus=e.target.closest('[data-archive-focus]');if(focus){archive.focus=focus.dataset.archiveFocus;renderArchive();return;}
-    var n=e.target.closest('[data-archive-node]');if(!n)return;
-    var object=archiveObjects().find(x=>x.entity+':'+x.id===n.dataset.archiveNode);
-    if(!object&&archive.vaultGraph){var item=archive.vaultGraph.nodes.find(x=>'vault:'+x.id===n.dataset.archiveNode);if(item)object={entity:'vault',id:item.id,value:item};}
-    if(object)el('archiveNode').innerHTML='<h3>'+esc(object.value.title||object.value.label||object.entity)+'</h3><pre>'+esc(JSON.stringify(object.value,null,2))+'</pre>'+(object.entity==='vault'?'<button class="btn" data-archive-focus="'+esc(object.id)+'">Explore connections</button>':'');
+    if(e.target.closest('[data-archive-more]')){archive.limit+=200;renderArchive();}
+
   }
-  el('archiveBody').addEventListener('click',inspectArchiveNode);
-  el('archiveBody').addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){inspectArchiveNode(e);e.preventDefault();}});
+  el('archiveBody').addEventListener('click',handleArchiveAction);
+
 
 })();
 </script>

@@ -71,3 +71,10 @@ main{height:calc(100svh - 38px)}
 /* Keep the hero on the left, clear of the iris. */
 .intro-note{left:3.5%;right:auto;max-width:calc(100% - 40px);text-align:left}
 @media(max-width:760px){.intro-note{left:20px;right:20px;max-width:none}}
+
+/* The shared workspace owns navigation; Ledger has only project controls. */
+.ledger-view .relations,.ledger-view .composition{display:none}
+#detail{position:static;margin-top:12px;padding:10px 0 0;border:0;border-top:1px solid var(--line);background:none;max-height:180px;overflow:auto;min-height:0}
+#detail[hidden]{display:none}#detail h3{font:11px var(--sans);color:var(--gold);margin:0 0 8px}
+.analysis:has(#detail:not([hidden])){max-height:330px;overflow:auto}
+.ledger-pages[hidden]{display:none}button:disabled{opacity:.4;cursor:default}
