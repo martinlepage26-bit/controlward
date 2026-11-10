@@ -56,15 +56,16 @@ chmod 755 "${MACOS_DIR}/FollowUpOSNative"
 # Finder metadata on copied resources is not part of the signed application.
 # Remove only these two signing-incompatible attributes; preserve quarantine/provenance.
 /usr/bin/python3 - "${APP_BUNDLE}" <<'PYATTR'
-import os, sys
+import subprocess, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 for path in [root, *root.rglob("*")]:
     if path.is_symlink():
         continue
+    names = subprocess.check_output(["/usr/bin/xattr", str(path)], text=True).splitlines()
     for name in ("com.apple.FinderInfo", "com.apple.ResourceFork"):
-        if name in os.listxattr(path):
-            os.removexattr(path, name)
+        if name in names:
+            subprocess.run(["/usr/bin/xattr", "-d", name, str(path)], check=True)
 PYATTR
 
 # Hardened runtime and App Sandbox (F2). Signs with the Developer ID identity
