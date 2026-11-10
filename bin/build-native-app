@@ -53,6 +53,20 @@ fi
 cp -R "${RESOURCE_BUNDLE}" "${RESOURCES_DIR}/"
 chmod 755 "${MACOS_DIR}/FollowUpOSNative"
 
+# Finder metadata on copied resources is not part of the signed application.
+# Remove only these two signing-incompatible attributes; preserve quarantine/provenance.
+/usr/bin/python3 - "${APP_BUNDLE}" <<'PYATTR'
+import os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+for path in [root, *root.rglob("*")]:
+    if path.is_symlink():
+        continue
+    for name in ("com.apple.FinderInfo", "com.apple.ResourceFork"):
+        if name in os.listxattr(path):
+            os.removexattr(path, name)
+PYATTR
+
 # Hardened runtime and App Sandbox (F2). Signs with the Developer ID identity
 # when it is in the keychain (override with CONTEXTWARD_SIGN_IDENTITY),
 # otherwise falls back to an ad-hoc signature for local builds.

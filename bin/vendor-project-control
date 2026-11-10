@@ -2,6 +2,8 @@
 """Copy only the reviewed dashboard and its tracked assets; never private state."""
 import argparse
 import hashlib
+import html
+import re
 import json
 from pathlib import Path
 import shutil
@@ -27,7 +29,9 @@ else:
     def git(*values):
         return subprocess.check_output(["git", "-C", str(args.source), *values], text=True).strip()
     assert not git("status", "--porcelain", "--", *FILES), "Commit dashboard changes before vendoring"
-    manifest = {"repository": "martinlepage26-bit/project-control", "commit": git("rev-parse", "HEAD"), "files": {}}
+    display_name = html.unescape(re.search(r"<title>(.*?)</title>", (args.source / "project-control.html").read_text(), re.S).group(1)).strip()
+    assert 0 < len(display_name) <= 80, "Invalid display name"
+    manifest = {"display_name": display_name, "repository": "martinlepage26-bit/project-control", "commit": git("rev-parse", "HEAD"), "files": {}}
     for name in FILES:
         git("ls-files", "--error-unmatch", name)
         target = DEST / name

@@ -5,7 +5,17 @@ import Foundation
 enum WorkspaceModule: String, CaseIterable, Sendable {
     case projects, email
 
-    var title: String { self == .projects ? "Project Control" : "Email Aggregator" }
+    private static let projectDisplayName: String = {
+        guard Bundle.main.bundleURL.pathExtension == "app",
+              let resource = Bundle.main.url(forResource: "FollowUpOSNative_FollowUpOSNative", withExtension: "bundle"),
+              let bundle = Bundle(url: resource),
+              let url = bundle.url(forResource: "source", withExtension: "json", subdirectory: "ProjectControl"),
+              let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = object["display_name"] as? String, !name.isEmpty, name.count <= 80 else { return "EmerContrAuld" }
+        return name
+    }()
+    var title: String { self == .projects ? Self.projectDisplayName : "Email Aggregator" }
     var website: URL? {
         self == .email ? URL(string: "https://email-aggregator-ext-ol5f.bolt.host/") : nil
     }
