@@ -1,6 +1,6 @@
 # Customer data and build output never belong in git.
 /data/
-/.build/
+/.build
 /dist/
 /release/
 .DS_Store
