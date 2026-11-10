@@ -552,6 +552,18 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
 
 /* One navigation state across ECA and its workspace tools. */
 .eca-navigation .sidebar{display:none}.eca-navigation .main{max-width:none}.eca-navigation #menuBtn{display:inline-flex}.eca-navigation.archive-nav-open .sidebar{display:flex;position:fixed;left:0;top:0;width:280px;max-width:90vw;height:100vh;z-index:100;transform:none;visibility:visible;pointer-events:auto;box-shadow:10px 0 40px #0008}.eca-navigation.archive-nav-open .archive-nav-close{display:block;position:fixed;left:240px;top:10px;z-index:101;background:#102022;color:#e3e4df;border:1px solid #d2b47e;border-radius:6px;padding:6px}.eca-navigation #navigationScrim{z-index:99}#backToECA[hidden]{display:none}
+/* Controls belong to the archive workspace, not a second app header. */
+.archive-workspace-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid #bdc9c02e;padding:8px 0;margin-bottom:8px}
+.archive-workspace-bar .topbar{position:static;min-height:0;flex:1;padding:0;border:0;background:transparent;gap:8px;display:flex;flex-wrap:wrap}
+.archive-workspace-bar .mobile-brand,.archive-workspace-bar #saveState,.archive-workspace-bar #syncBtn,.archive-workspace-bar #utilityMenu,.archive-workspace-bar #addBtn{display:none}
+.archive-workspace-bar .archive-tabs{margin:0;flex-wrap:nowrap}
+.archive-workspace-bar .searchbtn{min-width:160px;max-width:320px;flex:1}
+.archive-workspace-bar #menuBtn{display:inline-flex}
+.archive-workspace-bar #archiveLoad{font-size:11px;padding:7px 9px;min-height:34px}
+#view-archive[data-tab=graph] #archiveStatus{display:block;font-size:11px}
+.archive-active #metrics{display:none}
+#archiveGraphFrame{height:max(560px,calc(100svh - 145px))}
+@media(max-width:600px){.archive-workspace-bar{gap:6px}.archive-workspace-bar .topbar{flex-basis:100%}.archive-workspace-bar .archive-tabs{width:100%}.archive-workspace-bar .archive-tabs button{flex:1}}
 </style>
 </head>
 <body>
@@ -578,7 +590,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     </nav>
   </aside>
   <div class="main" role="main">
-    <header class="topbar">
+    <div id="workspaceToolbarHome"></div><header class="topbar" id="workspaceToolbar">
       <div class="mobile-brand"><img class="mark emerauld-icon" alt="Emerauld" title="Emerauld Tablets are the Rule of Law"><b>EmerContrAuld</b></div>
       <button type="button" class="iconbtn" id="menuBtn" aria-label="Menu" aria-controls="sidebar" aria-expanded="false">☰</button>
       <button type="button" id="backToECA" class="ghost" hidden>← Back to ECA</button><button type="button" class="searchbtn" id="cmdkBtn"><span data-i18n="searchHint">Search or jump…</span><kbd>⌘K</kbd></button>
@@ -717,10 +729,10 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
         </div>
       </section>
       <section id="view-archive" class="hidden">
-<div class="archive-heading"><p class="kicker">BRILLIANT · STRANGE · EXACT</p><h1>EmerContrAuld</h1></div>
+<div class="archive-workspace-bar" id="archiveWorkspaceBar"></div><div class="archive-heading"><p class="kicker">BRILLIANT · STRANGE · EXACT</p><h1>EmerContrAuld</h1></div>
 <div class="archive-tools"><button id="archiveLoad" class="btn" type="button">Load / refresh history</button><select id="archiveProject" aria-label="Filter archive by project"><option value="">All projects</option></select><input id="archiveQuery" type="search" aria-label="Search retained history and evidence" placeholder="Search history and evidence"></div>
 <p id="archiveStatus" role="status"></p><small id="archiveCoverage"></small>
-<div class="archive-tabs" role="group" aria-label="Archive view"><button class="btn" type="button" data-archive-tab="timeline" aria-pressed="true">Timeline</button><button class="btn" type="button" data-archive-tab="evidence" aria-pressed="false">Evidence</button><button class="btn" type="button" data-archive-tab="graph" aria-pressed="false">Graph</button></div><div id="archiveBody"></div></section>
+<div class="archive-tabs" role="group" aria-label="Archive view"><button class="btn" type="button" data-archive-tab="graph" aria-pressed="true">Graph</button><button class="btn" type="button" data-archive-tab="timeline" aria-pressed="false">Timeline</button><button class="btn" type="button" data-archive-tab="evidence" aria-pressed="false">Evidence</button></div><div id="archiveBody"></div></section>
 <section id="view-conn" class="hidden">
         <p class="kicker" data-i18n="connections">Connections</p>
         <h1 data-i18n="connectTitle">Shared register</h1>
@@ -1052,7 +1064,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
   var S = { projects:[], incidents:[], notes:[], events:[], connections:[], baselines:[], items:[], rounds:[],
             settings:{ wip:0, candidateAgeDays:7, deferralLimit:3, deadlineWindowDays:30 } };
   var CFG = { url:"", token:"" };
-  var ui = { view:"home", workspace:"", subproject:"", stream:"", layout:"details", drawer:null, dirty:0,
+  var ui = { view:new URLSearchParams(location.search).get("view")==="home"?"home":"archive", workspace:"", subproject:"", stream:"", layout:"details", drawer:null, dirty:0,
              focusDrawer:false, connecting:false, triageSkip:0, inboxSkip:0, palette:[], cmdkIndex:0,
              registerEpoch:0, tlZoom:28, tlOffset:0, tlWs:"", tlBrush:null, anDrill:null, hx:{ q:"", conn:"", entity:"", op:"", since:"" }, hxExtra:[], hxVersion:0 };
   var LANG = "en";
@@ -2503,7 +2515,17 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     if(ui.view==="archive")document.body.classList.add("eca-navigation");
     el("backToECA").hidden=ui.view==="archive"||!document.body.classList.contains("eca-navigation");
     if (typeof archive!=="undefined" && archive.epoch!==ui.registerEpoch) archiveReset();
-    if (ui.view==="archive") renderArchive();
+    var inArchive=ui.view==="archive";
+    var toolbar=el("workspaceToolbar"), toolbarHost=inArchive?el("archiveWorkspaceBar"):el("workspaceToolbarHome");
+    if(toolbar.parentElement!==toolbarHost)toolbarHost.appendChild(toolbar);
+    if (inArchive) {
+      var tabs=document.querySelector('.archive-tabs');
+      if(tabs.parentElement!==toolbarHost)toolbarHost.appendChild(tabs);
+      if(el('archiveLoad').parentElement!==toolbarHost)toolbarHost.appendChild(el('archiveLoad'));
+      renderArchive();
+      if(mode==="connected" && !ui.connecting && ui.lastPull && !archive.loaded && !archive.busy && !archive.error)
+        queueMicrotask(function(){if(ui.view==="archive" && !archive.loaded && !archive.busy && !archive.error)loadArchive();});
+    }
     renderSidebar();
     renderMetrics();
     if (ui.view==="home") renderHome();
@@ -3084,7 +3106,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     if (risky && ui.dirty>0) { e.preventDefault(); e.returnValue = ""; }
   });
 
-  (function boot(){
+  queueMicrotask(function boot(){
     document.querySelector(".mobile-brand .emerauld-icon").src = document.querySelector(".brand .emerauld-icon").src;
     try { localStorage.setItem(SNAP_KEY+"-probe","1"); localStorage.removeItem(SNAP_KEY+"-probe"); storageOK = true; }
     catch(e){ storageOK = false; }
@@ -3165,9 +3187,9 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
           }).then(function(result){ return (controlWardSnapshot().register===captureRegister ? pull().catch(function(){}) : Promise.resolve()).then(function(){ return result; }); });
       }
     };
-  })();
+  });
   // The private archive is memory-only. Never add it to localStorage snapshots.
-  var archive = {rows:[],stream:null,epoch:-1,tab:'timeline',project:'',q:'',limit:200,graphMode:'projects',visualMode:'eye',vaultGraph:null,graphError:'',focus:'',loadId:0,controller:null,loaded:false,busy:false,error:''};
+  var archive = {rows:[],stream:null,epoch:-1,tab:'graph',project:'',q:'',limit:200,graphMode:'projects',visualMode:'eye',vaultGraph:null,graphError:'',focus:'',loadId:0,controller:null,loaded:false,busy:false,error:''};
   function archiveReset(){ if(archive.controller)archive.controller.abort();archive.controller=null;archive.busy=false;archive.loadId++;archive.rows=[]; archive.loaded=false; archive.stream=null; archive.error=''; archive.vaultGraph=null;archive.focus=''; archive.epoch=ui.registerEpoch; }
   async function loadArchive(){
     if (archive.busy) return;
