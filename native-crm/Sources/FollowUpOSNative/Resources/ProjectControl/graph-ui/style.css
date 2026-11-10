@@ -61,3 +61,5 @@ main{height:calc(100svh - 38px)}
 .view-switch button{font-size:23px;padding:4px;min-height:34px;border:1px solid transparent;border-radius:5px}
 .view-switch button.active{border-color:var(--gold);color:var(--gold)}
 @media(max-width:760px){main{height:auto}.view-switch{flex-direction:row;flex:none;border-bottom:0;border-right:1px solid var(--line);padding:0 12px 0 0;margin:0;gap:5px}.view-switch button{font-size:20px;min-width:28px}.intro-note h1{font-size:34px;margin:8px 0}}
+
+@media(min-width:761px){.eye-art{inset:0;background-position:center calc(50% + 7svh)}}
