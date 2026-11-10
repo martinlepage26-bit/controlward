@@ -22,7 +22,7 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
         self.document = document
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore ?? WKWebsiteDataStore(forIdentifier: module.dataStoreID)
-        // No script-message handlers, injected scripts or native credential bridge.
+        // No script-message handlers or access to native/provider credential stores.
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self
