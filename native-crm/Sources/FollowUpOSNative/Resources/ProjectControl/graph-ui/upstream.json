@@ -6,7 +6,8 @@
     "No child network connections; no credentials or raw source records",
     "Private project ledger projection and validated open-project action",
     "Compact rail toggles the parent workspace navigation",
-    "Compact viewport geometry"
+    "Compact viewport geometry",
+    "Synchronize menu dismissal and preserve Eye/Network/Ledger when returning from workspace tools"
   ],
   "files": {
     "index.html": "66cfbe71a897b490c671cb5c47a18eb8e4ff14b8b9ab02baa78fb18e935f1625",

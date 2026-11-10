@@ -549,6 +549,9 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
 
 .archive-active .sidebar{display:none}.archive-active .main{max-width:none}.archive-active #stage{padding:0 10px 10px}.archive-active.archive-nav-open .sidebar{display:flex;position:fixed;left:0;top:0;width:280px;max-width:90vw;height:100vh;z-index:100;transform:none;visibility:visible;pointer-events:auto;box-shadow:10px 0 40px #0008}.archive-nav-close{display:none}.archive-active.archive-nav-open .archive-nav-close{display:block;position:fixed;left:240px;top:10px;z-index:101;background:#102022;color:#e3e4df;border:1px solid #d2b47e;border-radius:6px;padding:6px}#view-archive[data-tab=graph] .archive-tools,#view-archive[data-tab=graph] #archiveStatus,#view-archive[data-tab=graph] #archiveCoverage{display:none}#archiveGraphFrame{height:max(560px,calc(100svh - 180px))}
 .archive-active #menuBtn{display:inline-flex}
+
+/* One navigation state across ECA and its workspace tools. */
+.eca-navigation .sidebar{display:none}.eca-navigation .main{max-width:none}.eca-navigation #menuBtn{display:inline-flex}.eca-navigation.archive-nav-open .sidebar{display:flex;position:fixed;left:0;top:0;width:280px;max-width:90vw;height:100vh;z-index:100;transform:none;visibility:visible;pointer-events:auto;box-shadow:10px 0 40px #0008}.eca-navigation.archive-nav-open .archive-nav-close{display:block;position:fixed;left:240px;top:10px;z-index:101;background:#102022;color:#e3e4df;border:1px solid #d2b47e;border-radius:6px;padding:6px}.eca-navigation #navigationScrim{z-index:99}#backToECA[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -578,7 +581,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     <header class="topbar">
       <div class="mobile-brand"><img class="mark emerauld-icon" alt="Emerauld" title="Emerauld Tablets are the Rule of Law"><b>EmerContrAuld</b></div>
       <button type="button" class="iconbtn" id="menuBtn" aria-label="Menu" aria-controls="sidebar" aria-expanded="false">☰</button>
-      <button type="button" class="searchbtn" id="cmdkBtn"><span data-i18n="searchHint">Search or jump…</span><kbd>⌘K</kbd></button>
+      <button type="button" id="backToECA" class="ghost" hidden>← Back to ECA</button><button type="button" class="searchbtn" id="cmdkBtn"><span data-i18n="searchHint">Search or jump…</span><kbd>⌘K</kbd></button>
       <span id="saveState" class="note"></span>
       <button type="button" class="ghost" id="syncBtn" data-i18n="sync">Sync</button>
       <details class="utilities" id="utilityMenu"><summary data-i18n="tools">Tools</summary><div class="utility-panel">
@@ -2496,7 +2499,9 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
   }
   function renderAll(){
     showView(ui.view);
-    document.body.classList.toggle("archive-active",ui.view==="archive");if(ui.view!=="archive")document.body.classList.remove("archive-nav-open");
+    document.body.classList.toggle("archive-active",ui.view==="archive");
+    if(ui.view==="archive")document.body.classList.add("eca-navigation");
+    el("backToECA").hidden=ui.view==="archive"||!document.body.classList.contains("eca-navigation");
     if (typeof archive!=="undefined" && archive.epoch!==ui.registerEpoch) archiveReset();
     if (ui.view==="archive") renderArchive();
     renderSidebar();
@@ -2673,23 +2678,25 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       el("utilityMenu").querySelector("summary").focus();
     }
   });
-  function closeNavigation(){
-    el("sidebar").classList.remove("open");
-    el("navigationScrim").classList.add("hidden");
-    el("menuBtn").setAttribute("aria-expanded", "false");
+  function setNavigation(open){
+    var compact=document.body.classList.contains('eca-navigation');
+    document.body.classList.toggle('archive-nav-open',open&&compact);
+    el('sidebar').classList.toggle('open',open);
+    el('navigationScrim').classList.toggle('hidden',!open);
+    el('menuBtn').setAttribute('aria-expanded',String(open));
+    var frame=el('archiveGraphFrame');if(frame)frame.contentWindow.postMessage({type:'emerauld:navigation-state',open:open},'*');
+    if(open&&compact)document.querySelector('.archive-nav-close').focus();
   }
-  el("menuBtn").addEventListener("click", function(){
-    if(ui.view==="archive"){document.body.classList.toggle("archive-nav-open");return;}
-    var opened = el("sidebar").classList.toggle("open");
-    el("navigationScrim").classList.toggle("hidden", !opened);
-    el("menuBtn").setAttribute("aria-expanded", opened ? "true" : "false");
+  function closeNavigation(){setNavigation(false);}
+  function toggleNavigation(){setNavigation(!document.body.classList.contains('archive-nav-open')&&!el('sidebar').classList.contains('open'));}
+  el('menuBtn').addEventListener('click',toggleNavigation);
+  el('backToECA').addEventListener('click',function(){closeNavigation();ui.view='archive';renderAll();});
+  el('navigationScrim').addEventListener('click',function(){closeNavigation();el('menuBtn').focus();});
+  el('sidebar').addEventListener('click',function(e){
+    if(e.target.closest('.navbtn, .meta-btn, [data-ws]:not([data-toggle]), [data-sub]'))closeNavigation();
   });
-  el("navigationScrim").addEventListener("click", function(){ closeNavigation(); el("menuBtn").focus(); });
-  el("sidebar").addEventListener("click", function(e){
-    if (e.target.closest(".navbtn, .meta-btn, [data-ws]:not([data-toggle]), [data-sub]")) closeNavigation();
-  });
-  document.addEventListener("keydown", function(e){
-    if (e.key === "Escape" && el("sidebar").classList.contains("open")) { closeNavigation(); el("menuBtn").focus(); }
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&(document.body.classList.contains('archive-nav-open')||el('sidebar').classList.contains('open'))){closeNavigation();el('menuBtn').focus();}
   });
   el("metrics").addEventListener("click",function(e){
     var button=e.target.closest("[data-exc]");if (!button) return;
@@ -3160,7 +3167,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     };
   })();
   // The private archive is memory-only. Never add it to localStorage snapshots.
-  var archive = {rows:[],stream:null,epoch:-1,tab:'timeline',project:'',q:'',limit:200,graphMode:'projects',vaultGraph:null,graphError:'',focus:'',loadId:0,controller:null,loaded:false,busy:false,error:''};
+  var archive = {rows:[],stream:null,epoch:-1,tab:'timeline',project:'',q:'',limit:200,graphMode:'projects',visualMode:'eye',vaultGraph:null,graphError:'',focus:'',loadId:0,controller:null,loaded:false,busy:false,error:''};
   function archiveReset(){ if(archive.controller)archive.controller.abort();archive.controller=null;archive.busy=false;archive.loadId++;archive.rows=[]; archive.loaded=false; archive.stream=null; archive.error=''; archive.vaultGraph=null;archive.focus=''; archive.epoch=ui.registerEpoch; }
   async function loadArchive(){
     if (archive.busy) return;
@@ -3231,14 +3238,14 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       if(vault){archive.vaultGraph.links.forEach(function(x){if(ids.has('vault:'+x.source)&&ids.has('vault:'+x.target))links.push({source:'vault:'+x.source,target:'vault:'+x.target,relation:x.relation});});}
       else nodes.forEach(function(x){var parent='projects:'+(x.value.project_id||x.value.parent_id),id=x.entity+':'+x.id;if(ids.has(parent)&&parent!==id)links.push({source:id,target:parent,relation:x.entity==='projects'?'part_of':'evidence_for'});});
       body.innerHTML='<div class="archive-graph-switch"><button class="btn" data-archive-project-graph aria-pressed="'+(!vault)+'">Project relationships</button><button class="btn" data-archive-vault-load aria-pressed="'+vault+'">Vault graph</button><span>'+graphNodes.length.toLocaleString()+' nodes · '+links.length.toLocaleString()+' relationships</span></div><iframe id="archiveGraphFrame" title="EmerContrAuld interactive knowledge graph" src="graph-ui/index.html" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>';
-      var frame=el('archiveGraphFrame'),projection={nodes:graphNodes,links:links,projects:projects.map(function(x){return {id:x.id,title:x.value.title||x.id,status:x.value.status||'',next_action:x.value.next_action||'',deadline:x.value.deadline||''};})};
+      var frame=el('archiveGraphFrame'),projection={view:archive.visualMode,nodes:graphNodes,links:links,projects:projects.map(function(x){return {id:x.id,title:x.value.title||x.id,status:x.value.status||'',next_action:x.value.next_action||'',deadline:x.value.deadline||''};})};
       frame.addEventListener('load',function(){if(frame.isConnected)frame.contentWindow.postMessage({type:'emerauld:graph',graph:projection},'*');});
       frame._graphProjection=projection;
 
     }
   }
-  window.addEventListener('message',function(event){var frame=el('archiveGraphFrame');if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:navigation'){document.body.classList.toggle('archive-nav-open');return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:open-project'&&frame._graphProjection?.projects.some(p=>p.id===event.data.id)){if(window.controlWard.openProject(event.data.id))el('closeDrawer').focus();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:rendered'&&Number.isSafeInteger(event.data.nodes)){frame.dataset.ready='true';frame.dataset.nodeCount=String(event.data.nodes);return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:ready'&&frame._graphProjection)frame.contentWindow.postMessage({type:'emerauld:graph',graph:frame._graphProjection},'*');});
-  document.querySelector('.archive-nav-close').onclick=()=>document.body.classList.remove('archive-nav-open');
+  window.addEventListener('message',function(event){var frame=el('archiveGraphFrame');if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:navigation'){toggleNavigation();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:view'&&['eye','network','ledger'].includes(event.data.view)){archive.visualMode=event.data.view;return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:close-navigation'){closeNavigation();el('menuBtn').focus();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:open-project'&&frame._graphProjection?.projects.some(p=>p.id===event.data.id)){if(window.controlWard.openProject(event.data.id))el('closeDrawer').focus();return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:rendered'&&Number.isSafeInteger(event.data.nodes)){frame.dataset.ready='true';frame.dataset.nodeCount=String(event.data.nodes);return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:ready'&&frame._graphProjection)frame.contentWindow.postMessage({type:'emerauld:graph',graph:frame._graphProjection},'*');});
+  document.querySelector('.archive-nav-close').onclick=()=>{closeNavigation();el('menuBtn').focus();};
   el('archiveLoad').addEventListener('click',loadArchive);
   el('archiveProject').addEventListener('change',function(){archive.project=this.value;renderArchive();});
   el('archiveQuery').addEventListener('input',function(){archive.q=this.value;archive.focus='';archive.limit=200;renderArchive();});
