@@ -17,7 +17,7 @@ enum WorkspaceModule: String, CaseIterable, Sendable {
     }()
     var title: String { self == .projects ? Self.projectDisplayName : "Email Aggregator" }
     var website: URL? {
-        self == .email ? URL(string: "https://email-aggregator-ext-ol5f.bolt.host/") : nil
+        self == .projects ? URL(string: "https://project-control.ml-c38.workers.dev/") : URL(string: "https://email-aggregator-ext-ol5f.bolt.host/")
     }
     var dataStoreID: UUID {
         // Separate persistent WebKit stores; neither shares CRM connector keys.
@@ -36,7 +36,10 @@ struct WorkspaceModulePolicy {
     func navigation(to url: URL, userInitiated: Bool, mainFrame: Bool, download: Bool = false) -> ModuleNavigation {
         guard url.user == nil, url.password == nil else { return .blocked }
         if !mainFrame {
-            // Only the reviewed, bundled observatory may render as a child frame.
+            if module == .projects, url.scheme == "https", url.host?.lowercased() == module.website?.host,
+               url.port == nil || url.port == 443, url.path == "/graph-ui/index.html",
+               url.query == nil, url.fragment == nil { return .embedded }
+            // Only the reviewed observatory may render as a child frame.
             if module == .projects, url.isFileURL, let projectDocument,
                url.standardizedFileURL.path == projectDocument.deletingLastPathComponent().appendingPathComponent("graph-ui/index.html").standardizedFileURL.path,
                url.query == nil, url.fragment == nil { return .embedded }
@@ -47,6 +50,8 @@ struct WorkspaceModulePolicy {
         if module == .projects, url.isFileURL, let projectDocument,
            url.standardizedFileURL.path == projectDocument.standardizedFileURL.path,
            url.query == nil { return .embedded }
+        if module == .projects, scheme == "https", url.host?.lowercased() == module.website?.host,
+           url.port == nil || url.port == 443 { return .embedded }
         if module == .email, scheme == "https", url.host?.lowercased() == module.website?.host,
            url.port == nil || url.port == 443 { return .embedded }
         if userInitiated, scheme == "https" || scheme == "http" { return .external }

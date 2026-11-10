@@ -11,9 +11,13 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
     @Published private(set) var loading = false
     @Published private(set) var failure: String?
     private var started = false
+    private let hostedProjects: Bool
+    private var inspectedLegacyConnection = false
+    private var pendingHostedConnection: [String: String]?
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
 
-    init(module: WorkspaceModule, document: URL? = nil, dataStore: WKWebsiteDataStore? = nil) {
+    init(module: WorkspaceModule, document: URL? = nil, dataStore: WKWebsiteDataStore? = nil, hostedProjects: Bool = false) {
+        self.hostedProjects = hostedProjects
         self.module = module
         self.document = document
         let configuration = WKWebViewConfiguration()
@@ -35,7 +39,9 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
     func reload() {
         failure = nil
         loading = true
-        if module == .projects, let document,
+        if hostedProjects, module == .projects, inspectedLegacyConnection, let url = module.website {
+            webView.load(URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
+        } else if module == .projects, let document,
            FileManager.default.fileExists(atPath: document.path) {
             webView.loadFileURL(document, allowingReadAccessTo: document.deletingLastPathComponent())
         } else if let url = module.website {
@@ -72,7 +78,53 @@ final class WorkspaceWebController: NSObject, ObservableObject, WKNavigationDele
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         loading = true; failure = nil
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { loading = false }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if hostedProjects, module == .projects, !inspectedLegacyConnection,
+           webView.url?.standardizedFileURL == document?.standardizedFileURL {
+            inspectedLegacyConnection = true
+            Task { await preserveConnectionAndOpenHostedProjects() }
+            return
+        }
+        if hostedProjects, module == .projects, let connection = pendingHostedConnection,
+           webView.url?.scheme == "https", webView.url?.host == module.website?.host {
+            pendingHostedConnection = nil
+            Task {
+                do {
+                    let installed = try await webView.callAsyncJavaScript("""
+                        let existing = {};
+                        try { existing = JSON.parse(localStorage.getItem('pc-config-v4') || '{}'); } catch {}
+                        if (existing.token) return false;
+                        localStorage.setItem('pc-config-v4', JSON.stringify(connection));
+                        return true;
+                        """, arguments: ["connection": connection], in: nil, contentWorld: .page)
+                    if installed as? Bool == true { webView.reload() } else { loading = false }
+                } catch {
+                    loading = false
+                    failure = "The hosted Projects page opened, but its connection could not be restored. The original saved connection remains available."
+                }
+            }
+            return
+        }
+        loading = false
+    }
+
+    private func preserveConnectionAndOpenHostedProjects() async {
+        // Keep the existing same-register connection in memory only. Never put
+        // authentication in a URL, log, file, script literal or native credential store.
+        do {
+            let value = try await webView.callAsyncJavaScript("""
+                let config = {};
+                try { config = JSON.parse(localStorage.getItem('pc-config-v4') || '{}'); } catch {}
+                try {
+                    if (new URL(config.url).origin !== destination || typeof config.token !== 'string' || !config.token || config.token.length > 4096) return null;
+                    return {url: destination, token: config.token};
+                } catch { return null; }
+                """, arguments: ["destination": "https://project-control.ml-c38.workers.dev"], in: nil, contentWorld: .page)
+            pendingHostedConnection = value as? [String: String]
+        } catch { pendingHostedConnection = nil }
+        guard let url = module.website else { loading = false; return }
+        webView.load(URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
+    }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loadFailed(error) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loadFailed(error) }
     private func loadFailed(_ error: Error) {

@@ -3089,6 +3089,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
       el("themeBtn").setAttribute("aria-pressed", atmosphere === "space" ? "true" : "false");
     } catch(e){}
     CFG = loadCfg();
+    if(location.origin==="https://project-control.ml-c38.workers.dev"&&!CFG.url)CFG.url=location.origin;
     // One-time connect link: project-control.html#connect&url=<worker>&token=<token>.
     // Fragment only, so the token never reaches a server. Saved, then wiped from the address bar.
     if (/^#connect(&|$)/.test(location.hash)) {

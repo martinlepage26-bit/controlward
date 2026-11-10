@@ -6,6 +6,11 @@ enum WorkspaceModuleTests {
         let projects = WorkspaceModulePolicy(module: .projects, projectDocument: document)
         let email = WorkspaceModulePolicy(module: .email, projectDocument: nil)
         let cases: [(String, Bool)] = [
+            ("Projects uses the exact hosted URL", WorkspaceModule.projects.website?.absoluteString == "https://project-control.ml-c38.workers.dev/"),
+            ("hosted Projects origin is embedded", projects.navigation(to: URL(string: "https://project-control.ml-c38.workers.dev/")!, userInitiated: false, mainFrame: true) == .embedded),
+            ("hosted graph child is embedded", projects.navigation(to: URL(string: "https://project-control.ml-c38.workers.dev/graph-ui/index.html")!, userInitiated: false, mainFrame: false) == .embedded),
+            ("other hosted child path remains refused", projects.navigation(to: URL(string: "https://project-control.ml-c38.workers.dev/api/state")!, userInitiated: false, mainFrame: false) == .blocked),
+            ("Projects lookalike is refused", projects.navigation(to: URL(string: "https://project-control.ml-c38.workers.dev.example.test/")!, userInitiated: false, mainFrame: true) == .blocked),
             ("bundled dashboard is embedded", projects.navigation(to: document, userInitiated: false, mainFrame: true) == .embedded),
             ("only bundled graph child is embedded", projects.navigation(to: URL(fileURLWithPath: "/app/ProjectControl/graph-ui/index.html"), userInitiated: false, mainFrame: false) == .embedded),
             ("other local child files remain refused", projects.navigation(to: URL(fileURLWithPath: "/app/ProjectControl/other.html"), userInitiated: false, mainFrame: false) == .blocked),

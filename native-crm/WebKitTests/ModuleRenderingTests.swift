@@ -64,6 +64,27 @@ struct ModuleRenderingTests {
         try expect(!(try await controller.projectSnapshot()).connected)
     }
 
+    func hostedProjectsMigrationIfRequested() async throws {
+        guard ProcessInfo.processInfo.environment["CONTROLWARD_TEST_HOSTED_PROJECTS"] == "1" else { return }
+        // Disposable WebKit storage; a deliberately invalid fixture credential
+        // only exercises read/authentication paths on the owning service.
+        let data = WKWebsiteDataStore.nonPersistent()
+        let legacy = WorkspaceWebController(module: .projects, document: document, dataStore: data)
+        legacy.start()
+        try await wait("typeof window.controlWard === 'object'", in: legacy.webView)
+        _ = try await legacy.webView.evaluateJavaScript("localStorage.setItem('pc-config-v4',JSON.stringify({url:'https://project-control.ml-c38.workers.dev',token:'synthetic-migration-fixture'}));true")
+        let hosted = WorkspaceWebController(module: .projects, document: document, dataStore: data, hostedProjects: true)
+        hosted.start()
+        for _ in 0..<300 {
+            if hosted.webView.url?.absoluteString == "https://project-control.ml-c38.workers.dev/",
+               let ready = try? await hosted.webView.evaluateJavaScript("typeof window.controlWard === 'object' && JSON.parse(localStorage.getItem('pc-config-v4')||'{}').token === 'synthetic-migration-fixture'"), ready as? Bool == true { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try expect(hosted.webView.url?.absoluteString == "https://project-control.ml-c38.workers.dev/")
+        try expect((try await hosted.webView.evaluateJavaScript("JSON.parse(localStorage.getItem('pc-config-v4')||'{}').token === 'synthetic-migration-fixture'")) as? Bool == true)
+        try expect((try await legacy.webView.evaluateJavaScript("JSON.parse(localStorage.getItem('pc-config-v4')||'{}').token === 'synthetic-migration-fixture'")) as? Bool == true)
+    }
+
     func connectedCaptureIfRequested() async throws {
         guard let endpoint = ProcessInfo.processInfo.environment["CONTROLWARD_TEST_WORKER"] else { return }
         guard let base = URL(string: endpoint), base.host == "127.0.0.1", base.scheme == "http" else {
@@ -180,6 +201,7 @@ struct WebKitTestRunner {
                 try await tests.storageIsIsolatedAndUnsafeNavigationIsDenied()
                 try await tests.projectOpensStayInTheirRegister()
                 try await tests.connectedCaptureIfRequested()
+                try await tests.hostedProjectsMigrationIfRequested()
                 print("WebKit integration tests: \(ModuleRenderingTests.checks) assertions passed")
                 exit(0)
             } catch { print("FAIL WebKit integration: \(error)"); exit(1) }

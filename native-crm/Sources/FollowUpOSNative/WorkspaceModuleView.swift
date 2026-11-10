@@ -21,7 +21,7 @@ final class WorkspaceModules: ObservableObject {
         let controller = WorkspaceWebController(module: module, document: document, dataStore: .nonPersistent())
 #else
         let controller = WorkspaceWebController(module: module, document: document,
-            dataStore: StorageLocation.isReview ? .nonPersistent() : nil)
+            dataStore: StorageLocation.isReview ? .nonPersistent() : nil, hostedProjects: module == .projects)
 #endif
         controllers[module] = controller
         return controller
