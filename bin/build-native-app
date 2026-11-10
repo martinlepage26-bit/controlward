@@ -4,12 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 PROJECT_ROOT="${SCRIPT_DIR:h}"
 PACKAGE_ROOT="${PROJECT_ROOT}/native-crm"
-APP_BUNDLE="${PACKAGE_ROOT}/dist/ControlWard.app"
+BUILD_ROOT="${CONTEXTWARD_BUILD_ROOT:-${PACKAGE_ROOT}/dist}"
+APP_BUNDLE="${BUILD_ROOT}/ControlWard.app"
 CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
-if [[ "${APP_BUNDLE}" != "${PROJECT_ROOT}/native-crm/dist/ControlWard.app" ]]; then
+if [[ "${BUILD_ROOT}" != /* || "${BUILD_ROOT}" == "/" || -L "${BUILD_ROOT}" || -L "${APP_BUNDLE}" ]]; then
   print -u2 "Refusing unexpected app-bundle target: ${APP_BUNDLE}"
   exit 1
 fi
