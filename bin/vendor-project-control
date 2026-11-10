@@ -11,7 +11,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "native-crm/Sources/FollowUpOSNative/Resources/ProjectControl"
-FILES = ("project-control.html", "assets/emerauld.png", "assets/space-souls.jpg", "assets/egyptian-eye.png")
+FILES = ('project-control.html', 'assets/emerauld.png', 'assets/space-souls.jpg', 'assets/egyptian-eye.png', 'graph-ui/app.js', 'graph-ui/assets/cormorant-garamond-400.ttf', 'graph-ui/assets/cormorant-garamond-500.ttf', 'graph-ui/assets/dm-sans-400.ttf', 'graph-ui/assets/dm-sans-500.ttf', 'graph-ui/assets/egyptian-eye-blue-v1.webp', 'graph-ui/assets/egyptian-eye-balanced-v2.webp', 'graph-ui/assets/eye-mark.svg', 'graph-ui/assets/jetbrains-mono-400.ttf', 'graph-ui/fonts.css', 'graph-ui/index.html', 'graph-ui/style.css', 'graph-ui/upstream.json')
 parser = argparse.ArgumentParser()
 parser.add_argument("source", nargs="?", type=Path)
 parser.add_argument("--check", action="store_true")

@@ -7,6 +7,10 @@ enum WorkspaceModuleTests {
         let email = WorkspaceModulePolicy(module: .email, projectDocument: nil)
         let cases: [(String, Bool)] = [
             ("bundled dashboard is embedded", projects.navigation(to: document, userInitiated: false, mainFrame: true) == .embedded),
+            ("only bundled graph child is embedded", projects.navigation(to: URL(fileURLWithPath: "/app/ProjectControl/graph-ui/index.html"), userInitiated: false, mainFrame: false) == .embedded),
+            ("other local child files remain refused", projects.navigation(to: URL(fileURLWithPath: "/app/ProjectControl/other.html"), userInitiated: false, mainFrame: false) == .blocked),
+            ("remote graph child is refused", projects.navigation(to: URL(string: "https://patents.govern-ai.ca/")!, userInitiated: false, mainFrame: false) == .blocked),
+            ("graph child query is refused", projects.navigation(to: URL(string: "file:///app/ProjectControl/graph-ui/index.html?token=synthetic")!, userInitiated: false, mainFrame: false) == .blocked),
             ("other local files are refused", projects.navigation(to: URL(fileURLWithPath: "/private/example.json"), userInitiated: true, mainFrame: true) == .blocked),
             ("dashboard query cannot import a token", projects.navigation(to: URL(string: "file:///app/ProjectControl/project-control.html?token=synthetic")!, userInitiated: true, mainFrame: true) == .blocked),
             ("email stays on its exact HTTPS origin", email.navigation(to: URL(string: "https://email-aggregator-ext-ol5f.bolt.host/inbox")!, userInitiated: false, mainFrame: true) == .embedded),

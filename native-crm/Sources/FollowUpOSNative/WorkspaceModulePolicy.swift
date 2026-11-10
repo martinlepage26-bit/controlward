@@ -34,7 +34,14 @@ struct WorkspaceModulePolicy {
     let projectDocument: URL?
 
     func navigation(to url: URL, userInitiated: Bool, mainFrame: Bool, download: Bool = false) -> ModuleNavigation {
-        guard mainFrame, url.user == nil, url.password == nil else { return .blocked }
+        guard url.user == nil, url.password == nil else { return .blocked }
+        if !mainFrame {
+            // Only the reviewed, bundled observatory may render as a child frame.
+            if module == .projects, url.isFileURL, let projectDocument,
+               url.standardizedFileURL.path == projectDocument.deletingLastPathComponent().appendingPathComponent("graph-ui/index.html").standardizedFileURL.path,
+               url.query == nil, url.fragment == nil { return .embedded }
+            return .blocked
+        }
         let scheme = url.scheme?.lowercased()
         if module == .projects, download, scheme == "blob" { return .download }
         if module == .projects, url.isFileURL, let projectDocument,

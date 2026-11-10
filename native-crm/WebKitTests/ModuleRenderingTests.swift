@@ -58,8 +58,9 @@ struct ModuleRenderingTests {
         try expect((try await controller.webView.evaluateJavaScript("document.getElementById('archiveBody').textContent.includes('Native archive project')")) as? Bool == true)
         _ = try await controller.webView.evaluateJavaScript("document.querySelector('[data-archive-tab=evidence]').click();true")
         try expect((try await controller.webView.evaluateJavaScript("document.getElementById('archiveBody').textContent.includes('Native evidence') && !document.querySelector('#archiveBody script')")) as? Bool == true)
-        _ = try await controller.webView.evaluateJavaScript("document.querySelector('[data-archive-tab=graph]').click();document.querySelector('[data-archive-node]').dispatchEvent(new MouseEvent('click',{bubbles:true}));true")
-        try expect((try await controller.webView.evaluateJavaScript("document.querySelectorAll('#archiveBody svg circle').length===2 && !!document.querySelector('#archiveNode pre')")) as? Bool == true)
+        _ = try await controller.webView.evaluateJavaScript("document.querySelector('[data-archive-tab=graph]').click();true")
+        try await wait("document.getElementById('archiveGraphFrame')?.dataset.ready === 'true'", in: controller.webView)
+        try expect((try await controller.webView.evaluateJavaScript("document.getElementById('archiveGraphFrame').dataset.nodeCount === '2'")) as? Bool == true)
         try expect(!(try await controller.projectSnapshot()).connected)
     }
 

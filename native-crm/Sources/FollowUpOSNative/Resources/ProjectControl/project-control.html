@@ -538,6 +538,14 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
 .hx-row[data-open]:hover td { background:var(--accent-wash); }
 #hxCount { margin:0 0 8px; }
 .archive-heading{display:flex;align-items:center;gap:16px}.archive-heading h1{margin:0}.archive-heading img{object-fit:cover;object-position:center;border-radius:8px;opacity:.9}.archive-tools,.archive-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.archive-tools input{flex:1;min-width:160px}.archive-tools select{max-width:100%}.archive-tabs button[aria-pressed=true]{border-color:#d7bd7a;color:#d7bd7a}.archive-entry{padding:16px 0;border-bottom:1px solid #677c7044;overflow-wrap:anywhere}.archive-entry summary{cursor:pointer;display:flex;flex-wrap:wrap;gap:12px}.archive-entry time{font-size:.8em;opacity:.65}.archive-entry pre,#archiveNode pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:420px;overflow:auto}.archive-entry h3{margin:6px 0}.archive-hash{font-family:monospace;font-size:11px}.archive-note{white-space:pre-wrap}.archive-graph{max-height:65vh;overflow:auto}.archive-graph svg{width:100%;min-width:320px}.archive-graph g{cursor:pointer}.archive-graph g:focus circle{stroke:white;stroke-width:4}#archiveStatus{font-size:13px}
+
+/* The same quiet observatory framing as the online archive. */
+#view-archive[data-tab=graph] .archive-heading{display:none}
+.archive-active #view-archive{background:#080c0d;color:#e3e4df;padding:18px;border:1px solid #bdc9c02e;border-radius:10px}
+.archive-heading{display:block}.archive-heading .kicker{color:#d2b47e;font:9px/1.4 monospace;letter-spacing:.15em;margin:0 0 7px}.archive-heading h1{font:400 30px/1.1 Georgia,serif;margin:0 0 10px}
+.archive-tools{margin:10px 0;gap:8px;align-items:center}.archive-tools input,.archive-tools select,.archive-tools button,.archive-tabs button,.archive-graph-switch button{background:#111e20;border:1px solid #bdc9c03b;border-radius:7px;color:#e3e4df;font:12px/1.4 system-ui;padding:8px 10px;min-height:34px}.archive-tools select{width:auto;max-width:260px}.archive-tools input{min-width:140px}.archive-tabs{margin:12px 0;gap:7px}.archive-tabs button[aria-pressed=true],.archive-graph-switch button[aria-pressed=true]{color:#d2b47e;border-color:#d2b47e}.archive-graph-switch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}.archive-graph-switch span{margin-left:auto;font:10px monospace;color:#a9b4b4}#archiveStatus{margin:8px 0 3px;color:#a9b4b4}#archiveCoverage{display:block;font-size:10px;color:#a9b4b4}#archiveGraphFrame{display:block;width:100%;height:850px;border:0;border-radius:8px;background:#080c0d}#view-archive .archive-entry{padding:14px;border:1px solid #bdc9c02e;border-radius:8px;background:#111e2066;margin:10px 0}#view-archive .archive-entry summary{font-size:13px}
+@media(max-width:760px){#archiveGraphFrame{height:1080px}.archive-active #view-archive{padding:10px}.archive-heading h1{font-size:26px}.archive-graph-switch span{width:100%;margin-left:0}}
+
 </style>
 </head>
 <body>
@@ -703,8 +711,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
         </div>
       </section>
       <section id="view-archive" class="hidden">
-<div class="archive-heading"><img src="assets/egyptian-eye.png" alt="" width="140" height="80"><div><p class="kicker">EmerContrAuld</p><h1>Living archive</h1></div></div>
-<p>Follow the work through its decisions, evidence and relationships.</p>
+<div class="archive-heading"><p class="kicker">BRILLIANT · STRANGE · EXACT</p><h1>EmerContrAuld</h1></div>
 <div class="archive-tools"><button id="archiveLoad" class="btn" type="button">Load / refresh history</button><select id="archiveProject" aria-label="Filter archive by project"><option value="">All projects</option></select><input id="archiveQuery" type="search" aria-label="Search retained history and evidence" placeholder="Search history and evidence"></div>
 <p id="archiveStatus" role="status"></p><small id="archiveCoverage"></small>
 <div class="archive-tabs" role="group" aria-label="Archive view"><button class="btn" type="button" data-archive-tab="timeline" aria-pressed="true">Timeline</button><button class="btn" type="button" data-archive-tab="evidence" aria-pressed="false">Evidence</button><button class="btn" type="button" data-archive-tab="graph" aria-pressed="false">Graph</button></div><div id="archiveBody"></div></section>
@@ -2486,6 +2493,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
   }
   function renderAll(){
     showView(ui.view);
+    document.body.classList.toggle("archive-active",ui.view==="archive");
     if (typeof archive!=="undefined" && archive.epoch!==ui.registerEpoch) archiveReset();
     if (ui.view==="archive") renderArchive();
     renderSidebar();
@@ -3187,6 +3195,7 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
     var objects=archiveObjects(), projects=objects.filter(x=>x.entity==='projects');
     var select=el('archiveProject');select.innerHTML='<option value="">All projects and vault evidence</option>'+projects.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.value.title||x.id)+'</option>').join('');select.value=archive.project;
     document.querySelectorAll('[data-archive-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.archiveTab===archive.tab)));
+    el('view-archive').dataset.tab=archive.tab;
     var body=el('archiveBody');
     if(!archive.loaded){body.textContent='The living archive retains source versions and committed changes. Loading history does not change your projects.';return;}
     if(archive.tab==='timeline'){
@@ -3212,16 +3221,18 @@ details.dsec .dsec-body { display:flex; flex-direction:column; gap:10px; padding
         if(archive.project)nodes=nodes.filter(x=>(x.entity==='projects'&&x.id===archive.project)||x.value.project_id===archive.project);
         if(archive.q)nodes=nodes.filter(x=>JSON.stringify(x.value).toLowerCase().includes(archive.q.toLowerCase()));
       }
-      var total=nodes.length;nodes=nodes.slice(0,120);var ids=new Set(nodes.map(x=>x.entity+':'+x.id));
-      var positions={};nodes.forEach(function(x,i){var a=2*Math.PI*i/Math.max(nodes.length,1);positions[x.entity+':'+x.id]={x:400+300*Math.cos(a),y:320+245*Math.sin(a)};});
-      var svg='<svg viewBox="0 0 800 640" role="img" aria-label="Project evidence relationships">';
-      if(vault){archive.vaultGraph.links.forEach(function(x){var a=positions['vault:'+x.source],b=positions['vault:'+x.target];if(a&&b)svg+='<line x1="'+a.x+'" y1="'+a.y+'" x2="'+b.x+'" y2="'+b.y+'" stroke="#78cfba" opacity=".3"/>';});}
-      else nodes.forEach(function(x){var parent='projects:'+(x.value.project_id||x.value.parent_id);if(ids.has(parent)){var a=positions[x.entity+':'+x.id],b=positions[parent];svg+='<line x1="'+a.x+'" y1="'+a.y+'" x2="'+b.x+'" y2="'+b.y+'" stroke="#a18a50" opacity=".6"/>';}});
+      var graphNodes=nodes.map(function(x){return {id:x.entity+':'+x.id,label:String(x.value.title||x.value.summary||x.entity),type:vault?(x.value.type==='topic'?'concept':x.value.type):(x.entity==='projects'?'concept':'document'),community:String(x.value.community||x.value.project_id||x.value.parent_id||x.id)};});
+      var ids=new Set(graphNodes.map(x=>x.id)),links=[];
+      if(vault){archive.vaultGraph.links.forEach(function(x){if(ids.has('vault:'+x.source)&&ids.has('vault:'+x.target))links.push({source:'vault:'+x.source,target:'vault:'+x.target,relation:x.relation});});}
+      else nodes.forEach(function(x){var parent='projects:'+(x.value.project_id||x.value.parent_id),id=x.entity+':'+x.id;if(ids.has(parent)&&parent!==id)links.push({source:id,target:parent,relation:x.entity==='projects'?'part_of':'evidence_for'});});
+      body.innerHTML='<div class="archive-graph-switch"><button class="btn" data-archive-project-graph aria-pressed="'+(!vault)+'">Project relationships</button><button class="btn" data-archive-vault-load aria-pressed="'+vault+'">Vault graph</button><span>'+graphNodes.length.toLocaleString()+' nodes · '+links.length.toLocaleString()+' relationships</span></div><iframe id="archiveGraphFrame" title="EmerContrAuld interactive knowledge graph" src="graph-ui/index.html" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>';
+      var frame=el('archiveGraphFrame'),projection={nodes:graphNodes,links:links};
+      frame.addEventListener('load',function(){if(frame.isConnected)frame.contentWindow.postMessage({type:'emerauld:graph',graph:projection},'*');});
+      frame._graphProjection=projection;
 
-      nodes.forEach(function(x){var p=positions[x.entity+':'+x.id];svg+='<g data-archive-node="'+esc(x.entity+':'+x.id)+'" tabindex="0" role="button" aria-label="'+esc(x.value.title||x.value.summary||x.entity)+'"><title>'+esc(x.value.title||x.value.summary||x.entity+': '+x.id)+'</title><rect x="'+(p.x-24)+'" y="'+(p.y-40)+'" width="48" height="64" fill="transparent" pointer-events="all"/><circle cx="'+p.x+'" cy="'+p.y+'" r="'+(x.entity==='projects'?9:5)+'" fill="'+(x.entity==='projects'?'#d7bd7a':'#78cfba')+'"/><text x="'+p.x+'" y="'+(p.y-14)+'" fill="currentColor" font-size="10" text-anchor="middle">'+esc(String(x.value.title||x.entity).slice(0,24))+'</text></g>';});
-      body.innerHTML='<div class="archive-tabs"><button class="btn" data-archive-project-graph>Project relationships</button><button class="btn" data-archive-vault-load>Vault graph</button></div><p>'+total+' matching nodes · '+nodes.length+' displayed. Select a project or search to focus. Select a node to inspect its source.</p><div class="archive-graph">'+svg+'</svg></div><div id="archiveNode"></div><p>'+archiveSafeLink('https://patents.govern-ai.ca/','Open the published vault graph')+' · The published graph contains its approved projection only.</p>';
     }
   }
+  window.addEventListener('message',function(event){var frame=el('archiveGraphFrame');if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:rendered'&&Number.isSafeInteger(event.data.nodes)){frame.dataset.ready='true';frame.dataset.nodeCount=String(event.data.nodes);return;}if(frame&&event.source===frame.contentWindow&&event.data?.type==='emerauld:ready'&&frame._graphProjection)frame.contentWindow.postMessage({type:'emerauld:graph',graph:frame._graphProjection},'*');});
   el('archiveLoad').addEventListener('click',loadArchive);
   el('archiveProject').addEventListener('change',function(){archive.project=this.value;renderArchive();});
   el('archiveQuery').addEventListener('input',function(){archive.q=this.value;archive.focus='';archive.limit=200;renderArchive();});
